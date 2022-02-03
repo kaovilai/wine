@@ -33,9 +33,9 @@ jobs:
         run: rm -rf wine64-build wine32-build
       - name: mkdir wine64-build wine32-build
         run: mkdir wine64-build wine32-build
-      - run: REPODIR=$(pwd)
+      - run: export REPODIR=$(pwd)
       - run: echo $REPODIR
-      - run: podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm centos:8 sh -c "echo 'I was here' > test.txt"
+      - run: podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm centos:8 sh -c "cd wine64-build && pwd"
       - run: podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm centos:8 sh -c pwd
       - run: podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm centos:8 sh -c ls
 #       - run: docker exec -it --volume $(pwd):/tmp/repodir
