@@ -36,9 +36,8 @@ jobs:
       - run: export REPODIR=$(pwd)
       - run: echo $REPODIR
       - run: podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm centos:8 sh -c "ls /usr/lib"
-      - run: podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm centos:8 sh -c "ls /usr/lib32"
       - run: podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm centos:8 sh -c "cd wine64-build && ../wine-source/configure --enable-win64 && make"
-      - run: podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm centos:8 sh -c "cd wine32-build && ../wine-source/configure --with-wine64=../wine64-build && make"
+      - run: podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm centos:8 sh -c "cd wine32-build && PKG_CONFIG_PATH=/usr/lib/pkgconfig ../wine-source/configure --with-wine64=../wine64-build && make"
       - run: podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm centos:8 sh -c ls
 #       - run: docker exec -it --volume $(pwd):/tmp/repodir
 
