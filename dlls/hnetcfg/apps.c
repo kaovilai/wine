@@ -116,6 +116,7 @@ static REFIID tid_id[] =
     &IID_INetFwProfile,
     &IID_IUPnPNAT,
     &IID_IStaticPortMappingCollection,
+    &IID_IStaticPortMapping,
 };
 
 HRESULT get_typeinfo( enum type_id tid, ITypeInfo **ret )
@@ -269,7 +270,7 @@ static HRESULT WINAPI fw_app_put_ProcessImageFileName(
     fw_app *This = impl_from_INetFwAuthorizedApplication( iface );
     UNIVERSAL_NAME_INFOW *info;
     DWORD sz, longsz;
-    WCHAR *path;
+    WCHAR *path, *new_path;
     DWORD res;
 
     FIXME("%p, %s\n", This, debugstr_w(image));
@@ -303,11 +304,12 @@ static HRESULT WINAPI fw_app_put_ProcessImageFileName(
     longsz = GetLongPathNameW(path, path, sz);
     if (longsz > sz)
     {
-        if (!(path = realloc(path, longsz * sizeof(WCHAR))))
+        if (!(new_path = realloc(path, longsz * sizeof(WCHAR))))
         {
             free(path);
             return E_OUTOFMEMORY;
         }
+        path = new_path;
         GetLongPathNameW(path, path, longsz);
     }
 

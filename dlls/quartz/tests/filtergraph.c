@@ -98,23 +98,30 @@ static void test_interfaces(void)
     IFilterGraph2 *graph = create_graph();
 
     check_interface(graph, &IID_IBasicAudio, TRUE);
+    check_interface(graph, &IID_IBasicVideo, TRUE);
     check_interface(graph, &IID_IBasicVideo2, TRUE);
+    check_interface(graph, &IID_IFilterGraph, TRUE);
     check_interface(graph, &IID_IFilterGraph2, TRUE);
     check_interface(graph, &IID_IFilterMapper, TRUE);
+    check_interface(graph, &IID_IFilterMapper2, TRUE);
     check_interface(graph, &IID_IFilterMapper3, TRUE);
+    check_interface(graph, &IID_IGraphBuilder, TRUE);
     check_interface(graph, &IID_IGraphConfig, TRUE);
     check_interface(graph, &IID_IGraphVersion, TRUE);
     check_interface(graph, &IID_IMediaControl, TRUE);
     check_interface(graph, &IID_IMediaEvent, TRUE);
-    check_interface(graph, &IID_IMediaFilter, TRUE);
+    check_interface(graph, &IID_IMediaEventEx, TRUE);
     check_interface(graph, &IID_IMediaEventSink, TRUE);
+    check_interface(graph, &IID_IMediaFilter, TRUE);
     check_interface(graph, &IID_IMediaPosition, TRUE);
     check_interface(graph, &IID_IMediaSeeking, TRUE);
     check_interface(graph, &IID_IObjectWithSite, TRUE);
     check_interface(graph, &IID_IVideoFrameStep, TRUE);
     check_interface(graph, &IID_IVideoWindow, TRUE);
+    check_interface(graph, &IID_IUnknown, TRUE);
 
     check_interface(graph, &IID_IBaseFilter, FALSE);
+    check_interface(graph, &IID_IDispatch, FALSE);
 
     IFilterGraph2_Release(graph);
 }
@@ -5663,6 +5670,40 @@ static void test_events(void)
     SysFreeString(status);
 }
 
+static void test_event_dispatch(void)
+{
+    IFilterGraph2 *graph = create_graph();
+    IMediaEventEx *event_ex;
+    ITypeInfo *typeinfo;
+    IMediaEvent *event;
+    TYPEATTR *typeattr;
+    unsigned int count;
+    HRESULT hr;
+    ULONG ref;
+
+    IFilterGraph2_QueryInterface(graph, &IID_IMediaEvent, (void **)&event);
+    IFilterGraph2_QueryInterface(graph, &IID_IMediaEventEx, (void **)&event_ex);
+    ok((void *)event == event_ex, "Interface pointers didn't match.\n");
+    IMediaEventEx_Release(event_ex);
+
+    hr = IMediaEvent_GetTypeInfoCount(event, &count);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(count == 1, "Got count %u.\n", count);
+
+    hr = IMediaEvent_GetTypeInfo(event, 0, 0, &typeinfo);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    hr = ITypeInfo_GetTypeAttr(typeinfo, &typeattr);
+    ok(hr == S_OK, "Got hr %#x.\n", hr);
+    ok(typeattr->typekind == TKIND_DISPATCH, "Got kind %u.\n", typeattr->typekind);
+    ok(IsEqualGUID(&typeattr->guid, &IID_IMediaEvent), "Got IID %s.\n", debugstr_guid(&typeattr->guid));
+    ITypeInfo_ReleaseTypeAttr(typeinfo, typeattr);
+    ITypeInfo_Release(typeinfo);
+
+    IMediaEvent_Release(event);
+    ref = IFilterGraph2_Release(graph);
+    ok(!ref, "Got outstanding refcount %d.\n", ref);
+}
+
 START_TEST(filtergraph)
 {
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
@@ -5690,6 +5731,7 @@ START_TEST(filtergraph)
     test_autoplug_uyvy();
     test_set_notify_flags();
     test_events();
+    test_event_dispatch();
 
     CoUninitialize();
     test_render_with_multithread();

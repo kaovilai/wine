@@ -66,6 +66,45 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
+/* Generic structure used by several messages */
+typedef struct
+{
+  DWORD dwReserved;
+  DWORD dwReserved2;
+  LPCITEMIDLIST pidl;
+  DWORD *lpdwUser;
+} SFVCBINFO;
+
+/* SFVCB_SELECTIONCHANGED structure */
+typedef struct
+{
+  UINT uOldState;
+  UINT uNewState;
+  LPCITEMIDLIST pidl;
+  DWORD *lpdwUser;
+} SFVSELECTSTATE;
+
+/* SFVCB_COPYHOOKCALLBACK structure */
+typedef struct
+{
+  HWND hwnd;
+  UINT wFunc;
+  UINT wFlags;
+  const char *pszSrcFile;
+  DWORD dwSrcAttribs;
+  const char *pszDestFile;
+  DWORD dwDestAttribs;
+} SFVCOPYHOOKINFO;
+
+/* SFVCB_GETDETAILSOF structure */
+typedef struct
+{
+    LPCITEMIDLIST pidl;
+    int fmt;
+    int cx;
+    STRRET lpText;
+} SFVCOLUMNINFO;
+
 typedef struct
 {   BOOL    bIsAscending;
     INT     nHeaderID;
@@ -3243,7 +3282,7 @@ static HRESULT WINAPI IShellFolderView_fnGetSelectedCount(
     if (FAILED(hr))
         return hr;
 
-    hr = IShellItemArray_GetCount(selection, count);
+    hr = IShellItemArray_GetCount(selection, (DWORD *)count);
     IShellItemArray_Release(selection);
     return hr;
 }

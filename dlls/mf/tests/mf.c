@@ -5743,19 +5743,15 @@ static void test_wma_decoder(void)
             &transform, &class_id))
         goto failed;
 
-    todo_wine
     check_interface(transform, &IID_IMediaObject, TRUE);
 
     /* check default media types */
 
     hr = IMFTransform_GetInputStreamInfo(transform, 0, &input_info);
-    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetInputStreamInfo returned %#x\n", hr);
     hr = IMFTransform_GetOutputStreamInfo(transform, 0, &output_info);
-    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetOutputStreamInfo returned %#x\n", hr);
     hr = IMFTransform_GetOutputAvailableType(transform, 0, 0, &media_type);
-    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetOutputAvailableType returned %#x\n", hr);
 
     i = -1;
@@ -5781,7 +5777,6 @@ static void test_wma_decoder(void)
     ok(hr == S_OK, "MFCreateMediaType returned %#x\n", hr);
     init_media_type(media_type, output_type_desc, -1);
     hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
-    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "SetOutputType returned %#x.\n", hr);
     ret = IMFMediaType_Release(media_type);
     ok(ret == 0, "Release returned %u\n", ret);
@@ -5791,31 +5786,25 @@ static void test_wma_decoder(void)
     hr = MFCreateMediaType(&media_type);
     ok(hr == S_OK, "MFCreateMediaType returned %#x\n", hr);
     hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
-    todo_wine
     ok(hr == MF_E_ATTRIBUTENOTFOUND, "SetInputType returned %#x.\n", hr);
     init_media_type(media_type, input_type_desc, 1);
     hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
-    todo_wine
     ok(hr == MF_E_ATTRIBUTENOTFOUND, "SetInputType returned %#x.\n", hr);
     init_media_type(media_type, input_type_desc, 2);
     for (i = 2; i < ARRAY_SIZE(input_type_desc) - 1; ++i)
     {
         hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
-        todo_wine
         ok(hr == MF_E_INVALIDMEDIATYPE, "SetInputType returned %#x.\n", hr);
         init_media_type(media_type, input_type_desc, i + 1);
     }
     hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
-    todo_wine
     ok(hr == S_OK, "SetInputType returned %#x.\n", hr);
     ret = IMFMediaType_Release(media_type);
     ok(ret == 0, "Release returned %u\n", ret);
 
     hr = IMFTransform_GetInputStreamInfo(transform, 0, &input_info);
-    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetInputStreamInfo returned %#x\n", hr);
     hr = IMFTransform_GetOutputStreamInfo(transform, 0, &output_info);
-    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetOutputStreamInfo returned %#x\n", hr);
 
     /* check new output media types */
@@ -5830,9 +5819,7 @@ static void test_wma_decoder(void)
         ok(ret == 0, "Release returned %u\n", ret);
         winetest_pop_context();
     }
-    todo_wine
     ok(hr == MF_E_NO_MORE_TYPES, "GetOutputAvailableType returned %#x\n", hr);
-    todo_wine
     ok(i == 2, "%u output media types\n", i);
 
     /* check required output media type attributes */
@@ -5840,50 +5827,37 @@ static void test_wma_decoder(void)
     hr = MFCreateMediaType(&media_type);
     ok(hr == S_OK, "MFCreateMediaType returned %#x\n", hr);
     hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
-    todo_wine
     ok(hr == MF_E_ATTRIBUTENOTFOUND, "SetOutputType returned %#x.\n", hr);
     init_media_type(media_type, output_type_desc, 1);
     hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
-    todo_wine
     ok(hr == MF_E_ATTRIBUTENOTFOUND, "SetOutputType returned %#x.\n", hr);
     init_media_type(media_type, output_type_desc, 2);
     for (i = 2; i < ARRAY_SIZE(output_type_desc) - 1; ++i)
     {
         hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
-        todo_wine
         ok(hr == MF_E_INVALIDMEDIATYPE, "SetOutputType returned %#x.\n", hr);
         init_media_type(media_type, output_type_desc, i + 1);
     }
     hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
-    todo_wine
     ok(hr == S_OK, "SetOutputType returned %#x.\n", hr);
     ret = IMFMediaType_Release(media_type);
     ok(ret == 0, "Release returned %u\n", ret);
 
     memset(&input_info, 0xcd, sizeof(input_info));
     hr = IMFTransform_GetInputStreamInfo(transform, 0, &input_info);
-    todo_wine
     ok(hr == S_OK, "GetInputStreamInfo returned %#x\n", hr);
-    todo_wine
     ok(input_info.hnsMaxLatency == 0, "got hnsMaxLatency %s\n", wine_dbgstr_longlong(input_info.hnsMaxLatency));
-    todo_wine
     ok(input_info.dwFlags == 0, "got dwFlags %#x\n", input_info.dwFlags);
-    todo_wine
     ok(input_info.cbSize == wma_block_size, "got cbSize %u\n", input_info.cbSize);
-    todo_wine
     ok(input_info.cbMaxLookahead == 0, "got cbMaxLookahead %#x\n", input_info.cbMaxLookahead);
-    todo_wine
     ok(input_info.cbAlignment == 1, "got cbAlignment %#x\n", input_info.cbAlignment);
 
     memset(&output_info, 0xcd, sizeof(output_info));
     hr = IMFTransform_GetOutputStreamInfo(transform, 0, &output_info);
-    todo_wine
     ok(hr == S_OK, "GetOutputStreamInfo returned %#x\n", hr);
-    todo_wine
     ok(output_info.dwFlags == 0, "got dwFlags %#x\n", output_info.dwFlags);
     todo_wine
     ok(output_info.cbSize == 0, "got cbSize %#x\n", output_info.cbSize);
-    todo_wine
     ok(output_info.cbAlignment == 1, "got cbAlignment %#x\n", output_info.cbAlignment);
 
     /* MF_MT_AUDIO_AVG_BYTES_PER_SECOND isn't required by SetInputType, but is needed for the transform to work */
@@ -5894,29 +5868,22 @@ static void test_wma_decoder(void)
     hr = IMFMediaType_SetUINT32(media_type, &MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 4003);
     ok(hr == S_OK, "SetUINT32 returned %#x\n", hr);
     hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
-    todo_wine
     ok(hr == S_OK, "SetInputType returned %#x.\n", hr);
 
     hr = IMFTransform_GetOutputStreamInfo(transform, 0, &output_info);
-    todo_wine
     ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "GetOutputStreamInfo returned %#x\n", hr);
 
     init_media_type(media_type, output_type_desc, -1);
     hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
-    todo_wine
     ok(hr == S_OK, "SetInputType returned %#x.\n", hr);
     ret = IMFMediaType_Release(media_type);
     ok(ret == 0, "Release returned %u\n", ret);
 
     memset(&output_info, 0xcd, sizeof(output_info));
     hr = IMFTransform_GetOutputStreamInfo(transform, 0, &output_info);
-    todo_wine
     ok(hr == S_OK, "GetOutputStreamInfo returned %#x\n", hr);
-    todo_wine
     ok(output_info.dwFlags == 0, "got dwFlags %#x\n", output_info.dwFlags);
-    todo_wine
     ok(output_info.cbSize == sizeof(wma_decoded_data), "got cbSize %#x\n", output_info.cbSize);
-    todo_wine
     ok(output_info.cbAlignment == 1, "got cbAlignment %#x\n", output_info.cbAlignment);
 
     ret = IMFTransform_Release(transform);

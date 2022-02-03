@@ -2778,21 +2778,15 @@ static ULONG WINAPI VMR9_SurfaceAllocator_Release(IVMRSurfaceAllocator9 *iface)
     return IVMRImagePresenter9_Release(&presenter->IVMRImagePresenter9_iface);
 }
 
-static HRESULT VMR9_SurfaceAllocator_SetAllocationSettings(struct default_presenter *This, VMR9AllocationInfo *allocinfo)
+static void adjust_surface_size(const D3DCAPS9 *caps, VMR9AllocationInfo *allocinfo)
 {
-    D3DCAPS9 caps;
     UINT width, height;
-    HRESULT hr;
 
+    /* There are no restrictions on the size of offscreen surfaces. */
     if (!(allocinfo->dwFlags & VMR9AllocFlag_TextureSurface))
-        /* Only needed for texture surfaces */
-        return S_OK;
+        return;
 
-    hr = IDirect3DDevice9_GetDeviceCaps(This->d3d9_dev, &caps);
-    if (FAILED(hr))
-        return hr;
-
-    if (!(caps.TextureCaps & D3DPTEXTURECAPS_POW2) || (caps.TextureCaps & D3DPTEXTURECAPS_SQUAREONLY))
+    if (!(caps->TextureCaps & D3DPTEXTURECAPS_POW2) || (caps->TextureCaps & D3DPTEXTURECAPS_SQUAREONLY))
     {
         width = allocinfo->dwWidth;
         height = allocinfo->dwHeight;
@@ -2808,7 +2802,7 @@ static HRESULT VMR9_SurfaceAllocator_SetAllocationSettings(struct default_presen
         FIXME("NPOW2 support missing, not using proper surfaces!\n");
     }
 
-    if (caps.TextureCaps & D3DPTEXTURECAPS_SQUAREONLY)
+    if (caps->TextureCaps & D3DPTEXTURECAPS_SQUAREONLY)
     {
         if (height > width)
             width = height;
@@ -2819,8 +2813,6 @@ static HRESULT VMR9_SurfaceAllocator_SetAllocationSettings(struct default_presen
 
     allocinfo->dwHeight = height;
     allocinfo->dwWidth = width;
-
-    return hr;
 }
 
 static UINT d3d9_adapter_from_hwnd(IDirect3D9 *d3d9, HWND hwnd, HMONITOR *mon_out)
@@ -2899,19 +2891,13 @@ static HRESULT WINAPI VMR9_SurfaceAllocator_InitializeDevice(IVMRSurfaceAllocato
     if (!(This->d3d9_surfaces = calloc(*numbuffers, sizeof(IDirect3DSurface9 *))))
         return E_OUTOFMEMORY;
 
-    hr = VMR9_SurfaceAllocator_SetAllocationSettings(This, info);
-    if (FAILED(hr))
-        ERR("Setting allocation settings failed: %08x\n", hr);
+    adjust_surface_size(&caps, info);
 
-    if (SUCCEEDED(hr))
-    {
-        hr = IVMRSurfaceAllocatorNotify9_AllocateSurfaceHelper(This->SurfaceAllocatorNotify, info, numbuffers, This->d3d9_surfaces);
-        if (FAILED(hr))
-            ERR("Allocating surfaces failed: %08x\n", hr);
-    }
-
+    hr = IVMRSurfaceAllocatorNotify9_AllocateSurfaceHelper(This->SurfaceAllocatorNotify,
+            info, numbuffers, This->d3d9_surfaces);
     if (FAILED(hr))
     {
+        ERR("Failed to allocate surfaces, hr %#x.\n", hr);
         IVMRSurfaceAllocator9_TerminateDevice(This->pVMR9->allocator, This->pVMR9->cookie);
         return hr;
     }
@@ -2987,8 +2973,6 @@ static IDirect3D9 *init_d3d9(HMODULE d3d9_handle)
 static HRESULT VMR9DefaultAllocatorPresenterImpl_create(struct quartz_vmr *parent, LPVOID * ppv)
 {
     struct default_presenter *object;
-    HRESULT hr = S_OK;
-    int i;
 
     if (!(object = calloc(1, sizeof(*object))))
         return E_OUTOFMEMORY;
@@ -2997,24 +2981,6 @@ static HRESULT VMR9DefaultAllocatorPresenterImpl_create(struct quartz_vmr *paren
     if (!object->d3d9_ptr)
     {
         WARN("Could not initialize d3d9.dll\n");
-        free(object);
-        return VFW_E_DDRAW_CAPS_NOT_SUITABLE;
-    }
-
-    i = 0;
-    do
-    {
-        D3DDISPLAYMODE mode;
-
-        hr = IDirect3D9_EnumAdapterModes(object->d3d9_ptr, i++, D3DFMT_X8R8G8B8, 0, &mode);
-	if (hr == D3DERR_INVALIDCALL) break; /* out of adapters */
-    } while (FAILED(hr));
-    if (FAILED(hr))
-        ERR("HR: %08x\n", hr);
-    if (hr == D3DERR_NOTAVAILABLE)
-    {
-        ERR("Format not supported\n");
-        IDirect3D9_Release(object->d3d9_ptr);
         free(object);
         return VFW_E_DDRAW_CAPS_NOT_SUITABLE;
     }
