@@ -37,7 +37,7 @@ jobs:
       - run: echo $REPODIR
       - run: |
           set +e
-          podman run --name centos8stream -d -t quay.io/centos/centos:stream8 /bin/sh
+          podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` -d -t quay.io/centos/centos:stream8 /bin/sh
 
           podman exec centos8stream  sh -c  "dnf --skip-broken --assumeyes config-manager --enable powertools -y"
           podman exec centos8stream  sh -c  "dnf --skip-broken --assumeyes update"
