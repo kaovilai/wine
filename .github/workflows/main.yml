@@ -82,12 +82,12 @@ jobs:
         continue-on-error: true
       - run: |
           set +e
-          podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm quay.io/centos/centos:stream8 sh -c "set +e && cd wine64-build && pwd && ../wine-source/configure --enable-win64 && make"
+          podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm quay.io/centos/centos:stream8 sh -c "set +e && cd wine64-build && pwd && ../configure --enable-win64 && make"
         shell: bash {0}
         continue-on-error: true
       - run: |
           set +e
-          podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm quay.io/centos/centos:stream8 sh -c "set +e && cd wine32-build && pwd && PKG_CONFIG_PATH=/usr/lib/pkgconfig ../wine-source/configure --with-wine64=../wine64-build && make"
+          podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` --rm quay.io/centos/centos:stream8 sh -c "set +e && cd wine32-build && pwd && PKG_CONFIG_PATH=/usr/lib/pkgconfig ../configure --with-wine64=../wine64-build && make"
         shell: bash {0}
         continue-on-error: true
       - run: |
