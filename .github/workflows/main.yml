@@ -36,7 +36,6 @@ jobs:
       - run: export REPODIR=$(pwd)
       - run: echo $REPODIR
       - run: |
-          set +e
           podman run --name centos8stream -v `pwd`:`pwd`:z -w `pwd` -d -t quay.io/centos/centos:stream8 /bin/sh
 
           podman exec centos8stream  sh -c  "dnf --skip-broken --assumeyes config-manager --enable powertools -y"
@@ -50,7 +49,6 @@ jobs:
           podman exec centos8stream  sh -c  "pwd"
           podman exec centos8stream  sh -c  "cd wine64-build && pwd && ../configure --enable-win64 && make"
           podman exec centos8stream  sh -c  "cd wine32-build && pwd && PKG_CONFIG_PATH=/usr/lib/pkgconfig ../configure --with-wine64=../wine64-build && make"
-          podman exec centos8stream  sh -c ls
 #       - run: docker exec -it --volume $(pwd):/tmp/repodir
 
       # Runs a set of commands using the runners shell
