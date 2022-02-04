@@ -52,7 +52,6 @@ jobs:
           podman exec centos8stream  sh -c  "cd wine32-build && pwd && PKG_CONFIG_PATH=/usr/lib/pkgconfig ../configure --with-wine64=../wine64-build && make"
           podman exec centos8stream  sh -c ls
         shell: bash {0}
-        continue-on-error: true
 #       - run: docker exec -it --volume $(pwd):/tmp/repodir
 
       # Runs a set of commands using the runners shell
