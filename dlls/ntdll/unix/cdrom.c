@@ -75,7 +75,7 @@
 # include <sys/scsiio.h>
 #endif
 
-#ifdef HAVE_IOKIT_IOKITLIB_H
+#ifdef __APPLE__
 # include <libkern/OSByteOrder.h>
 # include <sys/disk.h>
 # include <IOKit/IOKitLib.h>
@@ -117,7 +117,6 @@ typedef struct
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
-#define NONAMELESSUNION
 #include "windef.h"
 #include "winternl.h"
 #include "winioctl.h"
@@ -204,7 +203,7 @@ static const char *iocodex(DWORD code)
    for(i=0; i<ARRAY_SIZE(iocodextable); i++)
       if (code==iocodextable[i].code)
 	 return iocodextable[i].codex;
-   sprintf(buffer, "IOCTL_CODE_%x", (int)code);
+   snprintf(buffer, sizeof(buffer), "IOCTL_CODE_%x", (int)code);
    return buffer;
 }
 
@@ -367,7 +366,7 @@ static NTSTATUS get_parent_device( int fd, char *name, size_t len )
 
     CFDictionaryAddValue( dict, CFSTR("Removable"), kCFBooleanTrue );
 
-    service = IOServiceGetMatchingService( kIOMasterPortDefault, dict );
+    service = IOServiceGetMatchingService( 0, dict );
 
     /* now look for the parent that has the "Whole" attribute set to TRUE */
 
@@ -1456,8 +1455,8 @@ static NTSTATUS CDROM_RawRead(int fd, const RAW_READ_INFO* raw, void* buffer, DW
     dk_cd_read_t cdrd;
 #endif
 
-    TRACE("RAW_READ_INFO: DiskOffset=%i,%i SectorCount=%i TrackMode=%i\n buffer=%p len=%i sz=%p\n",
-          raw->DiskOffset.u.HighPart, raw->DiskOffset.u.LowPart, raw->SectorCount, raw->TrackMode, buffer, len, sz);
+    TRACE("RAW_READ_INFO: DiskOffset=%s SectorCount=%i TrackMode=%i\n buffer=%p len=%i sz=%p\n",
+          wine_dbgstr_longlong(raw->DiskOffset.QuadPart), (int)raw->SectorCount, (int)raw->TrackMode, buffer, (int)len, sz);
 
     if (len < raw->SectorCount * 2352) return STATUS_BUFFER_TOO_SMALL;
 
@@ -2814,27 +2813,23 @@ static NTSTATUS GetInquiryData(int fd, PSCSI_ADAPTER_BUS_INFO BufferOut, DWORD O
  *		cdrom_DeviceIoControl
  */
 NTSTATUS cdrom_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
-                                IO_STATUS_BLOCK *io, ULONG code, void *in_buffer,
-                                ULONG in_size, void *out_buffer, ULONG out_size )
+                                IO_STATUS_BLOCK *io, UINT code, void *in_buffer,
+                                UINT in_size, void *out_buffer, UINT out_size )
 {
     DWORD       sz = 0;
     NTSTATUS    status = STATUS_SUCCESS;
     int fd, needs_close, dev = 0;
+    unsigned int options;
 
     TRACE( "%p %s %p %d %p %d %p\n", device, iocodex(code), in_buffer, in_size, out_buffer, out_size, io );
 
-    io->Information = 0;
-
-    if ((status = server_get_unix_fd( device, 0, &fd, &needs_close, NULL, NULL )))
-    {
-        if (status == STATUS_BAD_DEVICE_TYPE) return status;  /* no associated fd */
-        goto error;
-    }
+    if ((status = server_get_unix_fd( device, 0, &fd, &needs_close, NULL, &options )))
+        return status;
 
     if ((status = CDROM_Open(fd, &dev)))
     {
         if (needs_close) close( fd );
-        goto error;
+        return status;
     }
 
 #ifdef __APPLE__
@@ -2848,16 +2843,13 @@ NTSTATUS cdrom_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc
          * Also for some reason it wants the fd to be closed before we even
          * open the parent if we're trying to eject the disk.
          */
-        if ((status = get_parent_device( fd, name, sizeof(name) ))) goto error;
+        if ((status = get_parent_device( fd, name, sizeof(name) ))) return status;
         if (code == IOCTL_STORAGE_EJECT_MEDIA)
             NtClose( device );
         if (needs_close) close( fd );
         TRACE("opening parent %s\n", name );
         if ((fd = open( name, O_RDONLY )) == -1)
-        {
-            status = errno_to_status( errno );
-            goto error;
-        }
+            return errno_to_status( errno );
         needs_close = 1;
     }
 #endif
@@ -3056,11 +3048,11 @@ NTSTATUS cdrom_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc
         else if (out_size < sz) status = STATUS_BUFFER_TOO_SMALL;
         else
         {
-            TRACE("before in 0x%08x out 0x%08x\n",(in_buffer)?*(PDVD_SESSION_ID)in_buffer:0,
-                  *(PDVD_SESSION_ID)out_buffer);
+            TRACE("before in 0x%08x out 0x%08x\n",(int)(in_buffer ? *(DVD_SESSION_ID *)in_buffer : 0),
+                  (int)*(DVD_SESSION_ID *)out_buffer);
             status = DVD_StartSession(fd, in_buffer, out_buffer);
-            TRACE("before in 0x%08x out 0x%08x\n",(in_buffer)?*(PDVD_SESSION_ID)in_buffer:0,
-                  *(PDVD_SESSION_ID)out_buffer);
+            TRACE("before in 0x%08x out 0x%08x\n",(int)(in_buffer ? *(DVD_SESSION_ID *)in_buffer : 0),
+                  (int)*(DVD_SESSION_ID *)out_buffer);
         }
         break;
     case IOCTL_DVD_END_SESSION:
@@ -3118,13 +3110,10 @@ NTSTATUS cdrom_DeviceIoControl( HANDLE device, HANDLE event, PIO_APC_ROUTINE apc
         break;
 
     default:
-        if (needs_close) close( fd );
-        return STATUS_NOT_SUPPORTED;
+        status = STATUS_NOT_SUPPORTED;
     }
     if (needs_close) close( fd );
- error:
-    io->u.Status = status;
-    io->Information = sz;
-    if (event) NtSetEvent(event, NULL);
+    if (!NT_ERROR(status))
+        file_complete_async( device, options, event, apc, apc_user, io, status, sz );
     return status;
 }

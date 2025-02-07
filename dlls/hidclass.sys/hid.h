@@ -22,6 +22,7 @@
 #include "winbase.h"
 #include "winternl.h"
 #include "winioctl.h"
+#include "winreg.h"
 #include "ddk/wdm.h"
 #include "hidusage.h"
 #include "ddk/hidport.h"
@@ -47,27 +48,30 @@ typedef struct _BASE_DEVICE_EXTENSION
             /* this must be the first member */
             HID_DEVICE_EXTENSION hid_ext;
 
-            DEVICE_OBJECT *child_pdo;
+            HID_DEVICE_ATTRIBUTES attrs;
+            HIDP_DEVICE_DESC device_desc;
+            WCHAR serial[256];
+
+            ULONG poll_interval;
+            KEVENT halt_event;
+            HANDLE thread;
+
+            DEVICE_OBJECT **child_pdos;
+            UINT child_count;
         } fdo;
 
         struct
         {
             DEVICE_OBJECT *parent_fdo;
 
+            HIDP_COLLECTION_DESC *collection_desc;
             HID_COLLECTION_INFORMATION information;
-            HIDP_DEVICE_DESC device_desc;
 
-            ULONG poll_interval;
-            HANDLE halt_event;
-            HANDLE thread;
             UINT32 rawinput_handle;
-
-            KSPIN_LOCK queues_lock;
-            struct list queues;
-
             UNICODE_STRING link_name;
 
             KSPIN_LOCK lock;
+            struct list queues;
             BOOL removed;
 
             BOOL is_mouse;
@@ -81,6 +85,7 @@ typedef struct _BASE_DEVICE_EXTENSION
      * for convenience. */
     WCHAR device_id[MAX_DEVICE_ID_LEN];
     WCHAR instance_id[MAX_DEVICE_ID_LEN];
+    WCHAR container_id[MAX_GUID_STRING_LEN];
     const GUID *class_guid;
 
     BOOL is_fdo;
@@ -117,15 +122,15 @@ typedef struct _minidriver
 } minidriver;
 
 void call_minidriver( ULONG code, DEVICE_OBJECT *device, void *in_buff, ULONG in_size,
-                      void *out_buff, ULONG out_size, IO_STATUS_BLOCK *io ) DECLSPEC_HIDDEN;
+                      void *out_buff, ULONG out_size, IO_STATUS_BLOCK *io );
 
 /* Internal device functions */
-void HID_StartDeviceThread(DEVICE_OBJECT *device) DECLSPEC_HIDDEN;
+DWORD CALLBACK hid_device_thread(void *args);
 void hid_queue_remove_pending_irps( struct hid_queue *queue );
 void hid_queue_destroy( struct hid_queue *queue );
 
-NTSTATUS WINAPI pdo_ioctl(DEVICE_OBJECT *device, IRP *irp) DECLSPEC_HIDDEN;
-NTSTATUS WINAPI pdo_read(DEVICE_OBJECT *device, IRP *irp) DECLSPEC_HIDDEN;
-NTSTATUS WINAPI pdo_write(DEVICE_OBJECT *device, IRP *irp) DECLSPEC_HIDDEN;
-NTSTATUS WINAPI pdo_create(DEVICE_OBJECT *device, IRP *irp) DECLSPEC_HIDDEN;
-NTSTATUS WINAPI pdo_close(DEVICE_OBJECT *device, IRP *irp) DECLSPEC_HIDDEN;
+NTSTATUS WINAPI pdo_ioctl( DEVICE_OBJECT *device, IRP *irp );
+NTSTATUS WINAPI pdo_read( DEVICE_OBJECT *device, IRP *irp );
+NTSTATUS WINAPI pdo_write( DEVICE_OBJECT *device, IRP *irp );
+NTSTATUS WINAPI pdo_create( DEVICE_OBJECT *device, IRP *irp );
+NTSTATUS WINAPI pdo_close( DEVICE_OBJECT *device, IRP *irp );

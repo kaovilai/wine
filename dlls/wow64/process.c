@@ -26,25 +26,13 @@
 #include "winbase.h"
 #include "winnt.h"
 #include "winternl.h"
+#include "ddk/ntddk.h"
 #include "wow64_private.h"
 #include "wine/asm.h"
 #include "wine/exception.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wow);
-
-
-static SIZE_T get_machine_context_size( USHORT machine )
-{
-    switch (machine)
-    {
-    case IMAGE_FILE_MACHINE_I386:  return sizeof(I386_CONTEXT);
-    case IMAGE_FILE_MACHINE_ARMNT: return sizeof(ARM_CONTEXT);
-    case IMAGE_FILE_MACHINE_AMD64: return sizeof(AMD64_CONTEXT);
-    case IMAGE_FILE_MACHINE_ARM64: return sizeof(ARM64_NT_CONTEXT);
-    default: return 0;
-    }
-}
 
 
 static BOOL is_process_wow64( HANDLE handle )
@@ -70,23 +58,6 @@ static BOOL is_process_id_wow64( const CLIENT_ID *id )
         NtClose( handle );
     }
     return ret;
-}
-
-
-static EXCEPTION_RECORD *exception_record_32to64( const EXCEPTION_RECORD32 *rec32 )
-{
-    EXCEPTION_RECORD *rec;
-    unsigned int i;
-
-    rec = Wow64AllocateTemp( sizeof(*rec) );
-    rec->ExceptionCode = rec32->ExceptionCode;
-    rec->ExceptionFlags = rec32->ExceptionFlags;
-    rec->ExceptionRecord = rec32->ExceptionRecord ? exception_record_32to64( ULongToPtr(rec32->ExceptionRecord) ) : NULL;
-    rec->ExceptionAddress = ULongToPtr( rec32->ExceptionAddress );
-    rec->NumberParameters = rec32->NumberParameters;
-    for (i = 0; i < EXCEPTION_MAXIMUM_PARAMETERS; i++)
-        rec->ExceptionInformation[i] = rec32->ExceptionInformation[i];
-    return rec;
 }
 
 
@@ -214,6 +185,8 @@ static PS_ATTRIBUTE_LIST *ps_attributes_32to64( PS_ATTRIBUTE_LIST **attr, const 
             }
             break;
         case PS_ATTRIBUTE_PARENT_PROCESS:
+        case PS_ATTRIBUTE_DEBUG_PORT:
+        case PS_ATTRIBUTE_TOKEN:
             ret->Attributes[i].Size     = sizeof(HANDLE);
             ret->Attributes[i].ValuePtr = LongToHandle( attr32->Attributes[i].Value );
             break;
@@ -279,7 +252,6 @@ static void put_ps_attributes( PS_ATTRIBUTE_LIST32 *attr32, const PS_ATTRIBUTE_L
     }
 }
 
-
 void put_vm_counters( VM_COUNTERS_EX32 *info32, const VM_COUNTERS_EX *info, ULONG size )
 {
     info32->PeakVirtualSize            = info->PeakVirtualSize;
@@ -295,150 +267,6 @@ void put_vm_counters( VM_COUNTERS_EX32 *info32, const VM_COUNTERS_EX *info, ULON
     info32->PeakPagefileUsage          = info->PeakPagefileUsage;
     if (size == sizeof(VM_COUNTERS_EX32)) info32->PrivateUsage = info->PrivateUsage;
 }
-
-
-static void call_user_exception_dispatcher( EXCEPTION_RECORD32 *rec, void *ctx32_ptr, void *ctx64_ptr )
-{
-    switch (current_machine)
-    {
-    case IMAGE_FILE_MACHINE_I386:
-        {
-            struct stack_layout
-            {
-                ULONG               rec_ptr;       /* first arg for KiUserExceptionDispatcher */
-                ULONG               context_ptr;   /* second arg for KiUserExceptionDispatcher */
-                EXCEPTION_RECORD32  rec;
-                I386_CONTEXT        context;
-            } *stack;
-            I386_CONTEXT *context, ctx = { CONTEXT_I386_ALL };
-            CONTEXT_EX *context_ex, *src_ex = NULL;
-            ULONG size, flags;
-
-            NtQueryInformationThread( GetCurrentThread(), ThreadWow64Context, &ctx, sizeof(ctx), NULL );
-
-            if (ctx32_ptr)
-            {
-                I386_CONTEXT *ctx32 = ctx32_ptr;
-
-                if ((ctx32->ContextFlags & CONTEXT_I386_XSTATE) == CONTEXT_I386_XSTATE)
-                    src_ex = (CONTEXT_EX *)(ctx32 + 1);
-            }
-            else if (native_machine == IMAGE_FILE_MACHINE_AMD64)
-            {
-                AMD64_CONTEXT *ctx64 = ctx64_ptr;
-
-                if ((ctx64->ContextFlags & CONTEXT_AMD64_FLOATING_POINT) == CONTEXT_AMD64_FLOATING_POINT)
-                    memcpy( ctx.ExtendedRegisters, &ctx64->FltSave, sizeof(ctx.ExtendedRegisters) );
-                if ((ctx64->ContextFlags & CONTEXT_AMD64_XSTATE) == CONTEXT_AMD64_XSTATE)
-                    src_ex = (CONTEXT_EX *)(ctx64 + 1);
-            }
-
-            flags = ctx.ContextFlags;
-            if (src_ex) flags |= CONTEXT_I386_XSTATE;
-            RtlGetExtendedContextLength( flags, &size );
-            size = ((size + 15) & ~15) + offsetof(struct stack_layout,context);
-
-            stack = (struct stack_layout *)(ULONG_PTR)(ctx.Esp - size);
-            stack->rec_ptr = PtrToUlong( &stack->rec );
-            stack->rec = *rec;
-            RtlInitializeExtendedContext( &stack->context, flags, &context_ex );
-            context = RtlLocateLegacyContext( context_ex, NULL );
-            *context = ctx;
-            context->ContextFlags = flags;
-            stack->context_ptr = PtrToUlong( context );
-
-            if (src_ex)
-            {
-                XSTATE *src_xs = (XSTATE *)((char *)src_ex + src_ex->XState.Offset);
-                XSTATE *dst_xs = (XSTATE *)((char *)context_ex + context_ex->XState.Offset);
-
-                dst_xs->Mask = src_xs->Mask & ~(ULONG64)3;
-                dst_xs->CompactionMask = src_xs->CompactionMask;
-                if ((dst_xs->Mask & 4) &&
-                    src_ex->XState.Length >= sizeof(XSTATE) &&
-                    context_ex->XState.Length >= sizeof(XSTATE))
-                    memcpy( &dst_xs->YmmContext, &src_xs->YmmContext, sizeof(dst_xs->YmmContext) );
-            }
-
-            ctx.Esp = PtrToUlong( stack );
-            ctx.Eip = pLdrSystemDllInitBlock->pKiUserExceptionDispatcher;
-            ctx.EFlags &= ~(0x100|0x400|0x40000);
-            NtSetInformationThread( GetCurrentThread(), ThreadWow64Context, &ctx, sizeof(ctx) );
-
-            TRACE( "exception %08x dispatcher %08x stack %08x eip %08x\n",
-                   rec->ExceptionCode, ctx.Eip, ctx.Esp, stack->context.Eip );
-        }
-        break;
-
-    case IMAGE_FILE_MACHINE_ARMNT:
-        {
-            struct stack_layout
-            {
-                ARM_CONTEXT        context;
-                EXCEPTION_RECORD32 rec;
-            } *stack;
-            ARM_CONTEXT ctx = { CONTEXT_ARM_ALL };
-
-            NtQueryInformationThread( GetCurrentThread(), ThreadWow64Context, &ctx, sizeof(ctx), NULL );
-            stack = (struct stack_layout *)(ULONG_PTR)(ctx.Sp & ~3) - 1;
-            stack->rec = *rec;
-            stack->context = ctx;
-
-            ctx.R0 = PtrToUlong( &stack->rec );     /* first arg for KiUserExceptionDispatcher */
-            ctx.R1 = PtrToUlong( &stack->context ); /* second arg for KiUserExceptionDispatcher */
-            ctx.Sp = PtrToUlong( stack );
-            ctx.Pc = pLdrSystemDllInitBlock->pKiUserExceptionDispatcher;
-            if (ctx.Pc & 1) ctx.Cpsr |= 0x20;
-            else ctx.Cpsr &= ~0x20;
-            NtSetInformationThread( GetCurrentThread(), ThreadWow64Context, &ctx, sizeof(ctx) );
-
-            TRACE( "exception %08x dispatcher %08x stack %08x pc %08x\n",
-                   rec->ExceptionCode, ctx.Pc, ctx.Sp, stack->context.Sp );
-        }
-        break;
-    }
-}
-
-
-/* based on RtlRaiseException: call NtRaiseException with context setup to return to caller */
-void WINAPI raise_exception( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_chance ) DECLSPEC_HIDDEN;
-#ifdef __x86_64__
-__ASM_GLOBAL_FUNC( raise_exception,
-                   "sub $0x28,%rsp\n\t"
-                   __ASM_SEH(".seh_stackalloc 0x28\n\t")
-                   __ASM_SEH(".seh_endprologue\n\t")
-                   __ASM_CFI(".cfi_adjust_cfa_offset 0x28\n\t")
-                   "movq %rcx,(%rsp)\n\t"
-                   "movq %rdx,%rcx\n\t"
-                   "call " __ASM_NAME("RtlCaptureContext") "\n\t"
-                   "leaq 0x30(%rsp),%rax\n\t"   /* orig stack pointer */
-                   "movq %rax,0x98(%rdx)\n\t"   /* context->Rsp */
-                   "movq (%rsp),%rcx\n\t"       /* original first parameter */
-                   "movq 0x28(%rsp),%rax\n\t"   /* return address */
-                   "movq %rax,0xf8(%rdx)\n\t"   /* context->Rip */
-                   "movq %rax,0x10(%rcx)\n\t"   /* rec->ExceptionAddress */
-                   "call " __ASM_NAME("NtRaiseException") )
-#elif defined(__aarch64__)
-__ASM_GLOBAL_FUNC( raise_exception,
-                   "stp x29, x30, [sp, #-32]!\n\t"
-                   __ASM_SEH(".seh_stackalloc 32\n\t")
-                   __ASM_SEH(".seh_save_fplr 0\n\t")
-                   __ASM_SEH(".seh_endprologue\n\t")
-                   __ASM_CFI(".cfi_def_cfa x29, 32\n\t")
-                   __ASM_CFI(".cfi_offset x30, -24\n\t")
-                   __ASM_CFI(".cfi_offset x29, -32\n\t")
-                   "mov x29, sp\n\t"
-                   "stp x0, x1, [sp, #16]\n\t"
-                   "mov x0, x1\n\t"
-                   "bl " __ASM_NAME("RtlCaptureContext") "\n\t"
-                   "ldp x0, x1, [sp, #16]\n\t"    /* orig parameters */
-                   "ldp x4, x5, [sp]\n\t"         /* frame pointer, return address */
-                   "stp x4, x5, [x1, #0xf0]\n\t"  /* context->Fp, Lr */
-                   "add x4, sp, #32\n\t"          /* orig stack pointer */
-                   "stp x4, x5, [x1, #0x100]\n\t" /* context->Sp, Pc */
-                   "str x5, [x0, #0x10]\n\t"      /* rec->ExceptionAddress */
-                   "bl " __ASM_NAME("NtRaiseException") )
-#endif
 
 
 /**********************************************************************
@@ -488,21 +316,6 @@ NTSTATUS WINAPI wow64_NtAssignProcessToJobObject( UINT *args )
 
 
 /**********************************************************************
- *           wow64_NtContinue
- */
-NTSTATUS WINAPI wow64_NtContinue( UINT *args )
-{
-    void *context = get_ptr( &args );
-    BOOLEAN alertable = get_ulong( &args );
-
-    NtSetInformationThread( GetCurrentThread(), ThreadWow64Context,
-                            context, get_machine_context_size( current_machine ));
-    if (alertable) NtTestAlert();
-    return STATUS_SUCCESS;
-}
-
-
-/**********************************************************************
  *           wow64_NtCreateThread
  */
 NTSTATUS WINAPI wow64_NtCreateThread( UINT *args )
@@ -516,7 +329,7 @@ NTSTATUS WINAPI wow64_NtCreateThread( UINT *args )
     void *initial_teb = get_ptr( &args );
     BOOLEAN suspended = get_ulong( &args );
 
-    FIXME( "%p %x %p %p %p %p %p %u: stub\n", handle_ptr, access, attr32, process,
+    FIXME( "%p %lx %p %p %p %p %p %u: stub\n", handle_ptr, access, attr32, process,
            id32, context, initial_teb, suspended );
     return STATUS_NOT_IMPLEMENTED;
 }
@@ -614,38 +427,11 @@ NTSTATUS WINAPI wow64_NtDebugActiveProcess( UINT *args )
 
 
 /**********************************************************************
- *           wow64_NtFlushInstructionCache
- */
-NTSTATUS WINAPI wow64_NtFlushInstructionCache( UINT *args )
-{
-    HANDLE process = get_handle( &args );
-    const void *addr = get_ptr( &args );
-    SIZE_T size = get_ulong( &args );
-
-    return NtFlushInstructionCache( process, addr, size );
-}
-
-
-/**********************************************************************
  *           wow64_NtFlushProcessWriteBuffers
  */
 NTSTATUS WINAPI wow64_NtFlushProcessWriteBuffers( UINT *args )
 {
-    NtFlushProcessWriteBuffers();
-    return STATUS_SUCCESS;
-}
-
-
-/**********************************************************************
- *           wow64_NtGetContextThread
- */
-NTSTATUS WINAPI wow64_NtGetContextThread( UINT *args )
-{
-    HANDLE handle = get_handle( &args );
-    WOW64_CONTEXT *context = get_ptr( &args );
-
-    return NtQueryInformationThread( handle, ThreadWow64Context, context,
-                                     get_machine_context_size( current_machine ), NULL );
+    return NtFlushProcessWriteBuffers();
 }
 
 
@@ -775,8 +561,30 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
     case ProcessDebugFlags:  /* ULONG */
     case ProcessExecuteFlags:  /* ULONG */
     case ProcessCookie:  /* ULONG */
+    case ProcessCycleTime:  /* PROCESS_CYCLE_TIME_INFORMATION */
         /* FIXME: check buffer alignment */
         return NtQueryInformationProcess( handle, class, ptr, len, retlen );
+
+    case ProcessQuotaLimits:  /* QUOTA_LIMITS */
+        if (len == sizeof(QUOTA_LIMITS32))
+        {
+            QUOTA_LIMITS info;
+            QUOTA_LIMITS32 *info32 = ptr;
+
+            if (!(status = NtQueryInformationProcess( handle, class, &info, sizeof(info), NULL )))
+            {
+                info32->PagedPoolLimit        = info.PagedPoolLimit;
+                info32->NonPagedPoolLimit     = info.NonPagedPoolLimit;
+                info32->MinimumWorkingSetSize = info.MinimumWorkingSetSize;
+                info32->MaximumWorkingSetSize = info.MaximumWorkingSetSize;
+                info32->PagefileLimit         = info.PagefileLimit;
+                info32->TimeLimit             = info.TimeLimit;
+                if (retlen) *retlen = len;
+            }
+            return status;
+        }
+        if (retlen) *retlen = sizeof(QUOTA_LIMITS32);
+        return STATUS_INFO_LENGTH_MISMATCH;
 
     case ProcessVmCounters:  /* VM_COUNTERS_EX */
         if (len == sizeof(VM_COUNTERS32) || len == sizeof(VM_COUNTERS_EX32))
@@ -807,10 +615,13 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
                 *(ULONG *)ptr = data;
                 if (retlen) *retlen = sizeof(ULONG);
             }
-            else if (status == STATUS_PORT_NOT_SET) *(ULONG *)ptr = 0;
+            else if (status == STATUS_PORT_NOT_SET)
+            {
+                *(ULONG *)ptr = 0;
+                if (retlen) *retlen = sizeof(ULONG);
+            }
             return status;
         }
-        if (retlen) *retlen = sizeof(ULONG);
         return STATUS_INFO_LENGTH_MISMATCH;
 
     case ProcessImageFileName:
@@ -847,6 +658,9 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
         if (retlen) *retlen = sizeof(SECTION_IMAGE_INFORMATION32);
         return STATUS_INFO_LENGTH_MISMATCH;
 
+    case ProcessWineLdtCopy:
+        return STATUS_NOT_IMPLEMENTED;
+
     default:
         FIXME( "unsupported class %u\n", class );
         return STATUS_INVALID_INFO_CLASS;
@@ -878,7 +692,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationThread( UINT *args )
         if (!status)
         {
             info32.ExitStatus = info.ExitStatus;
-            info32.TebBaseAddress = is_process_id_wow64( &info.ClientId ) ?
+            info32.TebBaseAddress = is_process_id_wow64( &info.ClientId ) && info.TebBaseAddress ?
                                     PtrToUlong(info.TebBaseAddress) + 0x2000 : 0;
             info32.ClientId.UniqueProcess = HandleToULong( info.ClientId.UniqueProcess );
             info32.ClientId.UniqueThread = HandleToULong( info.ClientId.UniqueThread );
@@ -895,8 +709,11 @@ NTSTATUS WINAPI wow64_NtQueryInformationThread( UINT *args )
     case ThreadEnableAlignmentFaultFixup:  /* set only */
     case ThreadAmILastThread:  /* ULONG */
     case ThreadIsIoPending:  /* ULONG */
+    case ThreadIsTerminated: /* ULONG */
     case ThreadHideFromDebugger:  /* BOOLEAN */
     case ThreadSuspendCount:  /* ULONG */
+    case ThreadPriorityBoost:   /* ULONG */
+    case ThreadIdealProcessorEx: /* PROCESSOR_NUMBER */
         /* FIXME: check buffer alignment */
         return NtQueryInformationThread( handle, class, ptr, len, retlen );
 
@@ -984,30 +801,19 @@ NTSTATUS WINAPI wow64_NtQueueApcThread( UINT *args )
 
 
 /**********************************************************************
- *           wow64_NtRaiseException
+ *           wow64_NtQueueApcThreadEx
  */
-NTSTATUS WINAPI wow64_NtRaiseException( UINT *args )
+NTSTATUS WINAPI wow64_NtQueueApcThreadEx( UINT *args )
 {
-    EXCEPTION_RECORD32 *rec32 = get_ptr( &args );
-    void *context32 = get_ptr( &args );
-    BOOL first_chance = get_ulong( &args );
+    HANDLE handle = get_handle( &args );
+    HANDLE reserve_handle = get_handle( &args );
+    ULONG func = get_ulong( &args );
+    ULONG arg1 = get_ulong( &args );
+    ULONG arg2 = get_ulong( &args );
+    ULONG arg3 = get_ulong( &args );
 
-    EXCEPTION_RECORD *rec = exception_record_32to64( rec32 );
-    CONTEXT context;
-
-    NtSetInformationThread( GetCurrentThread(), ThreadWow64Context,
-                            context32, get_machine_context_size( current_machine ));
-
-    __TRY
-    {
-        raise_exception( rec, &context, first_chance );
-    }
-    __EXCEPT_ALL
-    {
-        call_user_exception_dispatcher( rec32, context32, &context );
-    }
-    __ENDTRY
-    return STATUS_SUCCESS;
+    return NtQueueApcThreadEx( handle, reserve_handle, apc_32to64( func ),
+                             (ULONG_PTR)apc_param_32to64( func, arg1 ), arg2, arg3 );
 }
 
 
@@ -1047,19 +853,6 @@ NTSTATUS WINAPI wow64_NtResumeThread( UINT *args )
 
 
 /**********************************************************************
- *           wow64_NtSetContextThread
- */
-NTSTATUS WINAPI wow64_NtSetContextThread( UINT *args )
-{
-    HANDLE handle = get_handle( &args );
-    WOW64_CONTEXT *context = get_ptr( &args );
-
-    return NtSetInformationThread( handle, ThreadWow64Context,
-                                   context, get_machine_context_size( current_machine ));
-}
-
-
-/**********************************************************************
  *           wow64_NtSetInformationProcess
  */
 NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
@@ -1075,7 +868,24 @@ NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
     {
     case ProcessDefaultHardErrorMode:   /* ULONG */
     case ProcessPriorityClass:   /* PROCESS_PRIORITY_CLASS */
+    case ProcessExecuteFlags:   /* ULONG */
+    case ProcessPagePriority:   /* MEMORY_PRIORITY_INFORMATION */
+    case ProcessPowerThrottlingState:   /* PROCESS_POWER_THROTTLING_STATE */
+    case ProcessLeapSecondInformation:   /* PROCESS_LEAP_SECOND_INFO */
+    case ProcessWineGrantAdminToken:   /* NULL */
         return NtSetInformationProcess( handle, class, ptr, len );
+
+    case ProcessAccessToken: /* PROCESS_ACCESS_TOKEN */
+        if (len == sizeof(PROCESS_ACCESS_TOKEN32))
+        {
+            PROCESS_ACCESS_TOKEN32 *stack = ptr;
+            PROCESS_ACCESS_TOKEN info;
+
+            info.Thread = ULongToHandle( stack->Thread );
+            info.Token = ULongToHandle( stack->Token );
+            return NtSetInformationProcess( handle, class, &info, sizeof(info) );
+        }
+        else return STATUS_INFO_LENGTH_MISMATCH;
 
     case ProcessAffinityMask:   /* ULONG_PTR */
         if (len == sizeof(ULONG))
@@ -1085,11 +895,8 @@ NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
         }
         else return STATUS_INVALID_PARAMETER;
 
-    case ProcessExecuteFlags:   /* ULONG */
-        return STATUS_ACCESS_DENIED;
-
     case ProcessInstrumentationCallback:   /* PROCESS_INSTRUMENTATION_CALLBACK_INFORMATION */
-        if (len == sizeof(PROCESS_INSTRUMENTATION_CALLBACK_INFORMATION32))
+        if (len >= sizeof(ULONG))
         {
             FIXME( "ProcessInstrumentationCallback stub\n" );
             return STATUS_SUCCESS;
@@ -1118,12 +925,15 @@ NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
             PROCESS_STACK_ALLOCATION_INFORMATION info;
 
             info.ReserveSize = stack->ReserveSize;
-            info.ZeroBits = stack->ZeroBits ? stack->ZeroBits : 0x7fffffff;
+            info.ZeroBits = get_zero_bits( stack->ZeroBits );
             if (!(status = NtSetInformationProcess( handle, class, &info, sizeof(info) )))
                 stack->StackBase = PtrToUlong( info.StackBase );
             return status;
         }
         else return STATUS_INFO_LENGTH_MISMATCH;
+
+    case ProcessManageWritesToExecutableMemory: /* MANAGE_WRITES_TO_EXECUTABLE_MEMORY */
+        return STATUS_INVALID_INFO_CLASS;
 
     case ProcessWineMakeProcessSystem:   /* HANDLE* */
         if (len == sizeof(ULONG))
@@ -1158,6 +968,9 @@ NTSTATUS WINAPI wow64_NtSetInformationThread( UINT *args )
     case ThreadBasePriority:   /* ULONG */
     case ThreadHideFromDebugger:   /* void */
     case ThreadEnableAlignmentFaultFixup:   /* BOOLEAN */
+    case ThreadPowerThrottlingState:  /* THREAD_POWER_THROTTLING_STATE */
+    case ThreadIdealProcessor:   /* ULONG */
+    case ThreadPriorityBoost:   /* ULONG */
         return NtSetInformationThread( handle, class, ptr, len );
 
     case ThreadImpersonationToken:   /* HANDLE */
@@ -1178,6 +991,7 @@ NTSTATUS WINAPI wow64_NtSetInformationThread( UINT *args )
         else return STATUS_INVALID_PARAMETER;
 
     case ThreadWow64Context:  /* WOW64_CONTEXT* */
+    case ThreadManageWritesToExecutableMemory: /* MANAGE_WRITES_TO_EXECUTABLE_MEMORY */
         return STATUS_INVALID_INFO_CLASS;
 
     case ThreadGroupInformation:   /* GROUP_AFFINITY */
@@ -1191,6 +1005,7 @@ NTSTATUS WINAPI wow64_NtSetInformationThread( UINT *args )
         else return STATUS_INVALID_PARAMETER;
 
     case ThreadNameInformation:   /* THREAD_NAME_INFORMATION */
+    case ThreadWineNativeThreadName:
         if (len == sizeof(THREAD_NAME_INFORMATION32))
         {
             THREAD_NAME_INFORMATION32 *info32 = ptr;
@@ -1252,7 +1067,12 @@ NTSTATUS WINAPI wow64_NtTerminateProcess( UINT *args )
     HANDLE handle = get_handle( &args );
     LONG exit_code = get_ulong( &args );
 
-    return NtTerminateProcess( handle, exit_code );
+    NTSTATUS status;
+
+    if (!handle && pBTCpuProcessTerm) pBTCpuProcessTerm( handle, FALSE, 0 );
+    status = NtTerminateProcess( handle, exit_code );
+    if (!handle && pBTCpuProcessTerm) pBTCpuProcessTerm( handle, TRUE, status );
+    return status;
 }
 
 
@@ -1264,26 +1084,28 @@ NTSTATUS WINAPI wow64_NtTerminateThread( UINT *args )
     HANDLE handle = get_handle( &args );
     LONG exit_code = get_ulong( &args );
 
+    if (pBTCpuThreadTerm) pBTCpuThreadTerm( handle, exit_code );
+
     return NtTerminateThread( handle, exit_code );
 }
 
 
 /**********************************************************************
- *           Wow64PassExceptionToGuest  (wow64.@)
+ *           wow64_NtWow64QueryInformationProcess64
  */
-void WINAPI Wow64PassExceptionToGuest( EXCEPTION_POINTERS *ptrs )
+NTSTATUS WINAPI wow64_NtWow64QueryInformationProcess64( UINT *args )
 {
-    EXCEPTION_RECORD *rec = ptrs->ExceptionRecord;
-    EXCEPTION_RECORD32 rec32;
-    ULONG i;
+    HANDLE handle = get_handle( &args );
+    PROCESSINFOCLASS class = get_ulong( &args );
+    void *info = get_ptr( &args );
+    ULONG size = get_ulong( &args );
+    ULONG *ret_len = get_ptr( &args );
 
-    rec32.ExceptionCode    = rec->ExceptionCode;
-    rec32.ExceptionFlags   = rec->ExceptionFlags;
-    rec32.ExceptionRecord  = PtrToUlong( rec->ExceptionRecord );
-    rec32.ExceptionAddress = PtrToUlong( rec->ExceptionAddress );
-    rec32.NumberParameters = rec->NumberParameters;
-    for (i = 0; i < rec->NumberParameters; i++)
-        rec32.ExceptionInformation[i] = rec->ExceptionInformation[i];
-
-    call_user_exception_dispatcher( &rec32, NULL, ptrs->ContextRecord );
+    switch (class)
+    {
+    case ProcessBasicInformation:
+        return NtQueryInformationProcess( handle, class, info, size, ret_len );
+    default:
+        return STATUS_NOT_IMPLEMENTED;
+    }
 }

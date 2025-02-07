@@ -74,7 +74,7 @@ BOOL WINAPI ShimFlushCache( HWND hwnd, HINSTANCE instance, LPCSTR cmdline, int c
 
 HSDB WINAPI SdbInitDatabase(DWORD flags, LPCWSTR path)
 {
-    FIXME("stub: %08x %s\n", flags, debugstr_w(path));
+    FIXME("stub: %08lx %s\n", flags, debugstr_w(path));
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return NULL;
 }
@@ -88,7 +88,7 @@ PDB WINAPI SdbOpenDatabase(LPCWSTR path, PATH_TYPE type)
 
 TAGID WINAPI SdbGetFirstChild(PDB pdb, TAGID parent)
 {
-    FIXME("stub: %p %d\n", pdb, parent);
+    FIXME("stub: %p %ld\n", pdb, parent);
     return TAGID_NULL;
 }
 
@@ -99,6 +99,27 @@ void WINAPI SdbCloseDatabase(PDB pdb)
 
 void WINAPI SdbGetAppPatchDir(HSDB hsdb, WCHAR *path, DWORD size)
 {
-    FIXME("stub: %p %p %d\n", hsdb, path, size);
+    FIXME("stub: %p %p %ld\n", hsdb, path, size);
     if (size && path) *path = 0;
+}
+
+BOOL WINAPI SetPermLayerState( PCWSTR path, PCWSTR layers, DWORD flags, BOOL machine, BOOL state)
+{
+    FIXME("stub: %s %s %ld %d %d\n", debugstr_w(path), debugstr_w(layers), flags, machine, state);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return TRUE;
+}
+
+BOOL WINAPI SdbSetPermLayerKeys( PCWSTR path, PCWSTR layers, BOOL machine )
+{
+    FIXME("stub: %s %s %d\n", debugstr_w(path), debugstr_w(layers), machine);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return TRUE;
+}
+
+BOOL WINAPI SdbGetPermLayerKeys( PCWSTR path, PWSTR layers, PDWORD size, DWORD flags )
+{
+    FIXME("stub: %s %p %p %ld\n", debugstr_w(path), layers, size, flags);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return TRUE;
 }

@@ -72,8 +72,8 @@ static ULONG WINAPI folders_Release(ITaskFolderCollection *iface)
     {
         TRACE("destroying %p\n", iface);
         free_list(folders->list, folders->count);
-        heap_free(folders->path);
-        heap_free(folders);
+        free(folders->path);
+        free(folders);
     }
 
     return ref;
@@ -107,21 +107,21 @@ static HRESULT WINAPI folders_GetTypeInfoCount(ITaskFolderCollection *iface, UIN
 
 static HRESULT WINAPI folders_GetTypeInfo(ITaskFolderCollection *iface, UINT index, LCID lcid, ITypeInfo **info)
 {
-    FIXME("%p,%u,%u,%p: stub\n", iface, index, lcid, info);
+    FIXME("%p,%u,%lu,%p: stub\n", iface, index, lcid, info);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI folders_GetIDsOfNames(ITaskFolderCollection *iface, REFIID riid, LPOLESTR *names,
                                                 UINT count, LCID lcid, DISPID *dispid)
 {
-    FIXME("%p,%s,%p,%u,%u,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
+    FIXME("%p,%s,%p,%u,%lu,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI folders_Invoke(ITaskFolderCollection *iface, DISPID dispid, REFIID riid, LCID lcid, WORD flags,
                                          DISPPARAMS *params, VARIANT *result, EXCEPINFO *excepinfo, UINT *argerr)
 {
-    FIXME("%p,%d,%s,%04x,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
+    FIXME("%p,%ld,%s,%04lx,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
           params, result, excepinfo, argerr);
     return E_NOTIMPL;
 }
@@ -226,7 +226,7 @@ HRESULT TaskFolderCollection_create(const WCHAR *path, ITaskFolderCollection **o
     hr = SchRpcEnumFolders(path, 0, &start_index, 0, &count, &list);
     if (hr != S_OK) return hr;
 
-    folders = heap_alloc(sizeof(*folders));
+    folders = malloc(sizeof(*folders));
     if (!folders)
     {
         free_list(list, count);
@@ -235,9 +235,9 @@ HRESULT TaskFolderCollection_create(const WCHAR *path, ITaskFolderCollection **o
 
     folders->ITaskFolderCollection_iface.lpVtbl = &TaskFolderCollection_vtbl;
     folders->ref = 1;
-    if (!(folders->path = heap_strdupW(path)))
+    if (!(folders->path = wcsdup(path)))
     {
-        heap_free(folders);
+        free(folders);
         free_list(list, count);
         return E_OUTOFMEMORY;
     }
@@ -296,7 +296,7 @@ static ULONG WINAPI enumvar_Release(IEnumVARIANT *iface)
     {
         TRACE("destroying %p\n", iface);
         ITaskFolderCollection_Release(&enumvar->folders->ITaskFolderCollection_iface);
-        heap_free(enumvar);
+        free(enumvar);
     }
 
     return ref;
@@ -307,7 +307,7 @@ static HRESULT WINAPI enumvar_Next(IEnumVARIANT *iface, ULONG celt, VARIANT *var
     EnumVARIANT *enumvar = impl_from_IEnumVARIANT(iface);
     LONG i;
 
-    TRACE("%p,%u,%p,%p\n", iface, celt, var, fetched);
+    TRACE("%p,%lu,%p,%p\n", iface, celt, var, fetched);
 
     for (i = 0; i < celt && enumvar->pos < enumvar->folders->count; i++)
     {
@@ -336,7 +336,7 @@ static HRESULT WINAPI enumvar_Skip(IEnumVARIANT *iface, ULONG celt)
 {
     EnumVARIANT *enumvar = impl_from_IEnumVARIANT(iface);
 
-    TRACE("%p,%u\n", iface, celt);
+    TRACE("%p,%lu\n", iface, celt);
 
     enumvar->pos += celt;
 
@@ -384,7 +384,7 @@ static HRESULT NewEnum_create(TaskFolderCollection *folders, IUnknown **obj)
 {
     EnumVARIANT *enumvar;
 
-    enumvar = heap_alloc(sizeof(*enumvar));
+    enumvar = malloc(sizeof(*enumvar));
     if (!enumvar) return E_OUTOFMEMORY;
 
     enumvar->IEnumVARIANT_iface.lpVtbl = &EnumVARIANT_vtbl;

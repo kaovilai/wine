@@ -29,6 +29,367 @@
 
 #include "wine/test.h"
 
+struct test_fontenumerator
+{
+    IDWriteFontFileEnumerator IDWriteFontFileEnumerator_iface;
+    LONG refcount;
+
+    DWORD index;
+    IDWriteFontFile *file;
+};
+
+static inline struct test_fontenumerator *impl_from_IDWriteFontFileEnumerator(IDWriteFontFileEnumerator* iface)
+{
+    return CONTAINING_RECORD(iface, struct test_fontenumerator, IDWriteFontFileEnumerator_iface);
+}
+
+static HRESULT WINAPI singlefontfileenumerator_QueryInterface(IDWriteFontFileEnumerator *iface, REFIID riid, void **obj)
+{
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDWriteFontFileEnumerator))
+    {
+        *obj = iface;
+        IDWriteFontFileEnumerator_AddRef(iface);
+        return S_OK;
+    }
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI singlefontfileenumerator_AddRef(IDWriteFontFileEnumerator *iface)
+{
+    struct test_fontenumerator *enumerator = impl_from_IDWriteFontFileEnumerator(iface);
+    return InterlockedIncrement(&enumerator->refcount);
+}
+
+static ULONG WINAPI singlefontfileenumerator_Release(IDWriteFontFileEnumerator *iface)
+{
+    struct test_fontenumerator *enumerator = impl_from_IDWriteFontFileEnumerator(iface);
+    ULONG refcount = InterlockedDecrement(&enumerator->refcount);
+
+    if (!refcount)
+    {
+        IDWriteFontFile_Release(enumerator->file);
+        free(enumerator);
+    }
+
+    return refcount;
+}
+
+static HRESULT WINAPI singlefontfileenumerator_GetCurrentFontFile(IDWriteFontFileEnumerator *iface,
+        IDWriteFontFile **file)
+{
+    struct test_fontenumerator *enumerator = impl_from_IDWriteFontFileEnumerator(iface);
+
+    IDWriteFontFile_AddRef((*file = enumerator->file));
+
+    return S_OK;
+}
+
+static HRESULT WINAPI singlefontfileenumerator_MoveNext(IDWriteFontFileEnumerator *iface, BOOL *current)
+{
+    struct test_fontenumerator *enumerator = impl_from_IDWriteFontFileEnumerator(iface);
+
+    if (enumerator->index > 1)
+    {
+        *current = FALSE;
+        return S_OK;
+    }
+
+    enumerator->index++;
+    *current = TRUE;
+    return S_OK;
+}
+
+static const struct IDWriteFontFileEnumeratorVtbl singlefontfileenumeratorvtbl =
+{
+    singlefontfileenumerator_QueryInterface,
+    singlefontfileenumerator_AddRef,
+    singlefontfileenumerator_Release,
+    singlefontfileenumerator_MoveNext,
+    singlefontfileenumerator_GetCurrentFontFile
+};
+
+static HRESULT create_enumerator(IDWriteFontFile *file, IDWriteFontFileEnumerator **ret)
+{
+    struct test_fontenumerator *enumerator;
+
+    if (!(enumerator = calloc(1, sizeof(*enumerator))))
+        return E_OUTOFMEMORY;
+
+    enumerator->IDWriteFontFileEnumerator_iface.lpVtbl = &singlefontfileenumeratorvtbl;
+    enumerator->refcount = 1;
+    enumerator->index = 0;
+    enumerator->file = file;
+    IDWriteFontFile_AddRef(file);
+
+    *ret = &enumerator->IDWriteFontFileEnumerator_iface;
+    return S_OK;
+}
+
+struct test_fontdatastream
+{
+    IDWriteFontFileStream IDWriteFontFileStream_iface;
+    LONG refcount;
+
+    void *data;
+    DWORD size;
+};
+
+static inline struct test_fontdatastream *impl_from_IDWriteFontFileStream(IDWriteFontFileStream* iface)
+{
+    return CONTAINING_RECORD(iface, struct test_fontdatastream, IDWriteFontFileStream_iface);
+}
+
+static HRESULT WINAPI fontdatastream_QueryInterface(IDWriteFontFileStream *iface, REFIID riid, void **obj)
+{
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDWriteFontFileStream))
+    {
+        *obj = iface;
+        IDWriteFontFileStream_AddRef(iface);
+        return S_OK;
+    }
+    *obj = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI fontdatastream_AddRef(IDWriteFontFileStream *iface)
+{
+    struct test_fontdatastream *stream = impl_from_IDWriteFontFileStream(iface);
+    return InterlockedIncrement(&stream->refcount);
+}
+
+static ULONG WINAPI fontdatastream_Release(IDWriteFontFileStream *iface)
+{
+    struct test_fontdatastream *stream = impl_from_IDWriteFontFileStream(iface);
+    ULONG refcount = InterlockedDecrement(&stream->refcount);
+
+    if (!refcount)
+        free(stream);
+
+    return refcount;
+}
+
+static HRESULT WINAPI fontdatastream_ReadFileFragment(IDWriteFontFileStream *iface, void const **fragment_start,
+        UINT64 offset, UINT64 fragment_size, void **fragment_context)
+{
+    struct test_fontdatastream *stream = impl_from_IDWriteFontFileStream(iface);
+
+    *fragment_context = NULL;
+
+    if (offset + fragment_size > stream->size)
+    {
+        *fragment_start = NULL;
+        return E_FAIL;
+    }
+    else
+    {
+        *fragment_start = (BYTE *)stream->data + offset;
+        return S_OK;
+    }
+}
+
+static void WINAPI fontdatastream_ReleaseFileFragment(IDWriteFontFileStream *iface, void *fragment_context)
+{
+}
+
+static HRESULT WINAPI fontdatastream_GetFileSize(IDWriteFontFileStream *iface, UINT64 *size)
+{
+    struct test_fontdatastream *stream = impl_from_IDWriteFontFileStream(iface);
+    *size = stream->size;
+    return S_OK;
+}
+
+static HRESULT WINAPI fontdatastream_GetLastWriteTime(IDWriteFontFileStream *iface, UINT64 *last_writetime)
+{
+    return E_NOTIMPL;
+}
+
+static const IDWriteFontFileStreamVtbl fontdatastreamvtbl =
+{
+    fontdatastream_QueryInterface,
+    fontdatastream_AddRef,
+    fontdatastream_Release,
+    fontdatastream_ReadFileFragment,
+    fontdatastream_ReleaseFileFragment,
+    fontdatastream_GetFileSize,
+    fontdatastream_GetLastWriteTime
+};
+
+static HRESULT create_fontdatastream(LPVOID data, UINT size, IDWriteFontFileStream** iface)
+{
+    struct test_fontdatastream *object;
+
+    if (!(object = calloc(1, sizeof(*object))))
+        return E_OUTOFMEMORY;
+
+    object->IDWriteFontFileStream_iface.lpVtbl = &fontdatastreamvtbl;
+    object->refcount = 1;
+    object->data = data;
+    object->size = size;
+
+    *iface = &object->IDWriteFontFileStream_iface;
+
+    return S_OK;
+}
+
+struct resource_file_loader
+{
+    IDWriteFontFileLoader IDWriteFontFileLoader_iface;
+    LONG refcount;
+};
+
+static inline struct resource_file_loader *impl_from_IDWriteFontFileLoader(IDWriteFontFileLoader *iface)
+{
+    return CONTAINING_RECORD(iface, struct resource_file_loader, IDWriteFontFileLoader_iface);
+}
+
+static HRESULT WINAPI resourcefontfileloader_QueryInterface(IDWriteFontFileLoader *iface, REFIID riid, void **obj)
+{
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDWriteFontFileLoader))
+    {
+        *obj = iface;
+        return S_OK;
+    }
+    *obj = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI resourcefontfileloader_AddRef(IDWriteFontFileLoader *iface)
+{
+    struct resource_file_loader *loader = impl_from_IDWriteFontFileLoader(iface);
+    return InterlockedIncrement(&loader->refcount);
+}
+
+static ULONG WINAPI resourcefontfileloader_Release(IDWriteFontFileLoader *iface)
+{
+    struct resource_file_loader *loader = impl_from_IDWriteFontFileLoader(iface);
+    ULONG refcount = InterlockedDecrement(&loader->refcount);
+
+    if (!refcount)
+        free(loader);
+
+    return refcount;
+}
+
+static HRESULT WINAPI resourcefontfileloader_CreateStreamFromKey(IDWriteFontFileLoader *iface, const void *ref_key,
+        UINT32 key_size, IDWriteFontFileStream **stream)
+{
+    LPVOID data;
+    DWORD size;
+    HGLOBAL mem;
+
+    mem = LoadResource(GetModuleHandleA(NULL), *(HRSRC*)ref_key);
+    ok(mem != NULL, "Failed to lock font resource\n");
+    if (mem)
+    {
+        size = SizeofResource(GetModuleHandleA(NULL), *(HRSRC*)ref_key);
+        data = LockResource(mem);
+        return create_fontdatastream(data, size, stream);
+    }
+    return E_FAIL;
+}
+
+static const struct IDWriteFontFileLoaderVtbl resourcefontfileloadervtbl =
+{
+    resourcefontfileloader_QueryInterface,
+    resourcefontfileloader_AddRef,
+    resourcefontfileloader_Release,
+    resourcefontfileloader_CreateStreamFromKey
+};
+
+static IDWriteFontFileLoader *create_resource_file_loader(void)
+{
+    struct resource_file_loader *object;
+
+    object = calloc(1, sizeof(*object));
+
+    object->IDWriteFontFileLoader_iface.lpVtbl = &resourcefontfileloadervtbl;
+    object->refcount = 1;
+
+    return &object->IDWriteFontFileLoader_iface;
+}
+
+struct resource_collection_loader
+{
+    IDWriteFontCollectionLoader IDWriteFontCollectionLoader_iface;
+    LONG refcount;
+    IDWriteFontFileLoader *loader;
+};
+
+static inline struct resource_collection_loader *impl_from_IDWriteFontFileCollectionLoader(IDWriteFontCollectionLoader* iface)
+{
+    return CONTAINING_RECORD(iface, struct resource_collection_loader, IDWriteFontCollectionLoader_iface);
+}
+
+static HRESULT WINAPI resourcecollectionloader_QueryInterface(IDWriteFontCollectionLoader *iface, REFIID riid, void **obj)
+{
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDWriteFontCollectionLoader))
+    {
+        *obj = iface;
+        IDWriteFontCollectionLoader_AddRef(iface);
+        return S_OK;
+    }
+
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI resourcecollectionloader_AddRef(IDWriteFontCollectionLoader *iface)
+{
+    struct resource_collection_loader *loader = impl_from_IDWriteFontFileCollectionLoader(iface);
+    return InterlockedIncrement(&loader->refcount);
+}
+
+static ULONG WINAPI resourcecollectionloader_Release(IDWriteFontCollectionLoader *iface)
+{
+    struct resource_collection_loader *loader = impl_from_IDWriteFontFileCollectionLoader(iface);
+    ULONG refcount = InterlockedDecrement(&loader->refcount);
+
+    if (!refcount)
+    {
+        IDWriteFontFileLoader_Release(loader->loader);
+        free(loader);
+    }
+
+    return refcount;
+}
+
+static HRESULT WINAPI resourcecollectionloader_CreateEnumeratorFromKey(IDWriteFontCollectionLoader *iface,
+        IDWriteFactory *factory, const void *key, UINT32 key_size, IDWriteFontFileEnumerator **enumerator)
+{
+    struct resource_collection_loader *loader = impl_from_IDWriteFontFileCollectionLoader(iface);
+    IDWriteFontFile *font_file;
+    HRESULT hr;
+
+    hr = IDWriteFactory_CreateCustomFontFileReference(factory, key, key_size, loader->loader, &font_file);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = create_enumerator(font_file, enumerator);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    IDWriteFontFile_Release(font_file);
+    return hr;
+}
+
+static const struct IDWriteFontCollectionLoaderVtbl resourcecollectionloadervtbl =
+{
+    resourcecollectionloader_QueryInterface,
+    resourcecollectionloader_AddRef,
+    resourcecollectionloader_Release,
+    resourcecollectionloader_CreateEnumeratorFromKey
+};
+
+static IDWriteFontCollectionLoader *create_resource_collection_loader(IDWriteFontFileLoader *loader)
+{
+    struct resource_collection_loader *object;
+
+    object = calloc(1, sizeof(*object));
+    object->IDWriteFontCollectionLoader_iface.lpVtbl = &resourcecollectionloadervtbl;
+    object->refcount = 1;
+    object->loader = loader;
+    IDWriteFontFileLoader_AddRef(object->loader);
+
+    return &object->IDWriteFontCollectionLoader_iface;
+}
+
 struct testanalysissink
 {
     IDWriteTextAnalysisSink IDWriteTextAnalysisSink_iface;
@@ -216,10 +577,10 @@ static void get_script_analysis(const WCHAR *str, UINT32 len, DWRITE_SCRIPT_ANAL
 
     factory = create_factory();
     hr = IDWriteFactory_CreateTextAnalyzer(factory, &analyzer);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextAnalyzer_AnalyzeScript(analyzer, &analysissource, 0, len, &analysissink.IDWriteTextAnalysisSink_iface);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     *sa = analysissink.sa;
     IDWriteFactory_Release(factory);
@@ -237,16 +598,16 @@ static IDWriteFontFace *get_fontface_from_format(IDWriteTextFormat *format)
     HRESULT hr;
 
     hr = IDWriteTextFormat_GetFontCollection(format, &collection);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_GetFontFamilyName(format, nameW, ARRAY_SIZE(nameW));
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFontCollection_FindFamilyName(collection, nameW, &index, &exists);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFontCollection_GetFontFamily(collection, index, &family);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     IDWriteFontCollection_Release(collection);
 
     hr = IDWriteFontFamily_GetFirstMatchingFont(family,
@@ -254,10 +615,10 @@ static IDWriteFontFace *get_fontface_from_format(IDWriteTextFormat *format)
         IDWriteTextFormat_GetFontStretch(format),
         IDWriteTextFormat_GetFontStyle(format),
         &font);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFont_CreateFontFace(font, &fontface);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     IDWriteFont_Release(font);
     IDWriteFontFamily_Release(family);
@@ -271,7 +632,7 @@ static void _expect_ref(IUnknown* obj, ULONG ref, int line)
     ULONG rc;
     IUnknown_AddRef(obj);
     rc = IUnknown_Release(obj);
-    ok_(__FILE__,line)(rc == ref, "expected refcount %d, got %d\n", ref, rc);
+    ok_(__FILE__,line)(rc == ref, "expected refcount %ld, got %ld\n", ref, rc);
 }
 
 enum drawcall_modifiers_kind {
@@ -716,6 +1077,20 @@ static const IDWriteTextRendererVtbl testrenderervtbl = {
 static IDWriteTextRenderer testrenderer = { &testrenderervtbl };
 
 /* test IDWriteInlineObject */
+struct test_inline_obj
+{
+    IDWriteInlineObject IDWriteInlineObject_iface;
+    LONG refcount;
+
+    DWRITE_INLINE_OBJECT_METRICS metrics;
+    DWRITE_OVERHANG_METRICS overhangs;
+};
+
+static inline struct test_inline_obj *impl_from_IDWriteInlineObject(IDWriteInlineObject *iface)
+{
+    return CONTAINING_RECORD(iface, struct test_inline_obj, IDWriteInlineObject_iface);
+}
+
 static HRESULT WINAPI testinlineobj_QI(IDWriteInlineObject *iface, REFIID riid, void **obj)
 {
     if (IsEqualIID(riid, &IID_IDWriteInlineObject) || IsEqualIID(riid, &IID_IUnknown)) {
@@ -730,12 +1105,19 @@ static HRESULT WINAPI testinlineobj_QI(IDWriteInlineObject *iface, REFIID riid, 
 
 static ULONG WINAPI testinlineobj_AddRef(IDWriteInlineObject *iface)
 {
-    return 2;
+    struct test_inline_obj *obj = impl_from_IDWriteInlineObject(iface);
+    return InterlockedIncrement(&obj->refcount);
 }
 
 static ULONG WINAPI testinlineobj_Release(IDWriteInlineObject *iface)
 {
-    return 1;
+    struct test_inline_obj *obj = impl_from_IDWriteInlineObject(iface);
+    ULONG refcount = InterlockedDecrement(&obj->refcount);
+
+    if (!refcount)
+        free(obj);
+
+    return refcount;
 }
 
 static HRESULT WINAPI testinlineobj_Draw(IDWriteInlineObject *iface,
@@ -772,7 +1154,7 @@ static HRESULT WINAPI testinlineobj2_GetBreakConditions(IDWriteInlineObject *ifa
     return S_OK;
 }
 
-static IDWriteInlineObjectVtbl testinlineobjvtbl = {
+static const IDWriteInlineObjectVtbl testinlineobjvtbl = {
     testinlineobj_QI,
     testinlineobj_AddRef,
     testinlineobj_Release,
@@ -782,7 +1164,8 @@ static IDWriteInlineObjectVtbl testinlineobjvtbl = {
     testinlineobj_GetBreakConditions
 };
 
-static IDWriteInlineObjectVtbl testinlineobjvtbl2 = {
+static const IDWriteInlineObjectVtbl testinlineobjvtbl2 =
+{
     testinlineobj_QI,
     testinlineobj_AddRef,
     testinlineobj_Release,
@@ -792,20 +1175,14 @@ static IDWriteInlineObjectVtbl testinlineobjvtbl2 = {
     testinlineobj2_GetBreakConditions
 };
 
-static IDWriteInlineObject testinlineobj = { &testinlineobjvtbl };
-static IDWriteInlineObject testinlineobj2 = { &testinlineobjvtbl };
-static IDWriteInlineObject testinlineobj3 = { &testinlineobjvtbl2 };
-
-struct test_inline_obj
+static struct test_inline_obj *create_test_inline_object(const IDWriteInlineObjectVtbl *vtable)
 {
-    IDWriteInlineObject IDWriteInlineObject_iface;
-    DWRITE_INLINE_OBJECT_METRICS metrics;
-    DWRITE_OVERHANG_METRICS overhangs;
-};
+    struct test_inline_obj *object = calloc(1, sizeof(*object));
 
-static inline struct test_inline_obj *impl_from_IDWriteInlineObject(IDWriteInlineObject *iface)
-{
-    return CONTAINING_RECORD(iface, struct test_inline_obj, IDWriteInlineObject_iface);
+    object->IDWriteInlineObject_iface.lpVtbl = vtable;
+    object->refcount = 1;
+
+    return object;
 }
 
 static HRESULT WINAPI testinlineobj3_GetMetrics(IDWriteInlineObject *iface, DWRITE_INLINE_OBJECT_METRICS *metrics)
@@ -832,14 +1209,6 @@ static const IDWriteInlineObjectVtbl testinlineobjvtbl3 = {
     testinlineobj3_GetOverhangMetrics,
     testinlineobj_GetBreakConditions,
 };
-
-static void test_inline_obj_init(struct test_inline_obj *obj, const DWRITE_INLINE_OBJECT_METRICS *metrics,
-        const DWRITE_OVERHANG_METRICS *overhangs)
-{
-    obj->IDWriteInlineObject_iface.lpVtbl = &testinlineobjvtbl3;
-    obj->metrics = *metrics;
-    obj->overhangs = *overhangs;
-}
 
 struct test_effect
 {
@@ -913,60 +1282,60 @@ static void test_CreateTextLayout(void)
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateTextLayout(factory, NULL, 0, NULL, 0.0f, 0.0f, &layout);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, NULL, 0.0f, 0.0f, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, NULL, 1.0f, 0.0f, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, NULL, 0.0f, 1.0f, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, NULL, 1000.0f, 1000.0f, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create format, hr %#lx.\n", hr);
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateTextLayout(factory, NULL, 0, format, 100.0f, 100.0f, &layout);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     layout = (void *)0xdeadbeef;
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, format, -100.0f, 100.0f, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "Unexpected pointer %p.\n", layout);
 
     layout = (void *)0xdeadbeef;
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, format, 100.0f, -100.0f, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "Unexpected pointer %p.\n", layout);
 
     layout = (void *)0xdeadbeef;
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, format, -100.0f, -100.0f, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "Unexpected pointer %p.\n", layout);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 0, format, 0.0f, 0.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     IDWriteTextLayout_Release(layout);
 
     EXPECT_REF(format, 1);
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     EXPECT_REF(format, 1);
 
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextLayout2, (void**)&layout2);
@@ -976,33 +1345,33 @@ static void test_CreateTextLayout(void)
         IDWriteTextFormat *format;
 
         hr = IDWriteTextLayout2_QueryInterface(layout2, &IID_IDWriteTextLayout1, (void**)&layout1);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         IDWriteTextLayout1_Release(layout1);
 
         EXPECT_REF(layout2, 2);
         hr = IDWriteTextLayout2_QueryInterface(layout2, &IID_IDWriteTextFormat1, (void**)&format1);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         EXPECT_REF(layout2, 3);
 
         hr = IDWriteTextLayout2_QueryInterface(layout2, &IID_IDWriteTextFormat, (void**)&format);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         ok(format == (IDWriteTextFormat*)format1, "got %p, %p\n", format, format1);
         ok(format != (IDWriteTextFormat*)layout2, "got %p, %p\n", format, layout2);
         EXPECT_REF(layout2, 4);
 
         hr = IDWriteTextFormat_QueryInterface(format, &IID_IDWriteTextLayout1, (void**)&layout1);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         IDWriteTextLayout1_Release(layout1);
 
         IDWriteTextFormat1_Release(format1);
         IDWriteTextFormat_Release(format);
 
         hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextFormat1, (void**)&format1);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         EXPECT_REF(layout2, 3);
 
         hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextFormat, (void**)&format);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         ok(format == (IDWriteTextFormat*)format1, "got %p, %p\n", format, format1);
         EXPECT_REF(layout2, 4);
 
@@ -1015,7 +1384,7 @@ static void test_CreateTextLayout(void)
     if (layout2 && SUCCEEDED(IDWriteTextLayout2_QueryInterface(layout2, &IID_IDWriteTextLayout4, (void **)&layout4)))
     {
         hr = IDWriteTextLayout4_QueryInterface(layout4, &IID_IDWriteTextFormat3, (void **)&format3);
-        ok(hr == S_OK, "Failed to get text format, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to get text format, hr %#lx.\n", hr);
         IDWriteTextFormat3_Release(format3);
     }
     else
@@ -1051,65 +1420,65 @@ static void test_CreateGdiCompatibleTextLayout(void)
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, NULL, 0, NULL, 0.0f, 0.0f, 0.0f, NULL, FALSE, &layout);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, NULL, 0.0f, 0.0f, 0.0f, NULL,
             FALSE, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, NULL, 1.0f, 0.0f, 0.0f, NULL,
             FALSE, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, NULL, 1.0f, 0.0f, 1.0f, NULL,
             FALSE, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, NULL, 1000.0f, 1000.0f, 1.0f, NULL,
             FALSE, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     /* create with text format */
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
     EXPECT_REF(format, 1);
 
     layout = (void*)0xdeadbeef;
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, NULL, 0, format, 100.0f, 100.0f, 1.0f, NULL, FALSE, &layout);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "got %p\n", layout);
 
     layout = (void *)0xdeadbeef;
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, format, -100.0f, 100.0f, 1.0f,
             NULL, FALSE, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "Unexpected pointer %p.\n", layout);
 
     layout = (void *)0xdeadbeef;
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, format, 100.0f, -100.0f, 1.0f,
             NULL, FALSE, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "Unexpected pointer %p.\n", layout);
 
     layout = (void *)0xdeadbeef;
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, format, -100.0f, -100.0f, 1.0f,
             NULL, FALSE, &layout);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(layout == NULL, "Unexpected pointer %p.\n", layout);
 
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, format, 100.0f, 100.0f, 1.0f, NULL,
             FALSE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     EXPECT_REF(format, 1);
     EXPECT_REF(layout, 1);
 
@@ -1122,7 +1491,7 @@ static void test_CreateGdiCompatibleTextLayout(void)
     /* zero length string is okay */
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 0, format, 100.0f, 100.0f, 1.0f, NULL,
             FALSE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     dimension = IDWriteTextLayout_GetMaxWidth(layout);
     ok(dimension == 100.0, "got %f\n", dimension);
@@ -1135,12 +1504,12 @@ static void test_CreateGdiCompatibleTextLayout(void)
     /* negative, zero ppdip */
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 1, format, 100.0f, 100.0f, -1.0f, NULL,
             FALSE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     IDWriteTextLayout_Release(layout);
 
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 1, format, 100.0f, 100.0f, 0.0f, NULL,
             FALSE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     IDWriteTextLayout_Release(layout);
 
     /* transforms */
@@ -1148,7 +1517,7 @@ static void test_CreateGdiCompatibleTextLayout(void)
     {
         hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 1, format, 100.0f, 100.0f, 1.0f,
                 &layoutcreate_transforms[i], FALSE, &layout);
-        ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
         IDWriteTextLayout_Release(layout);
     }
 
@@ -1177,45 +1546,49 @@ static void test_CreateTextFormat(void)
     /* zero/negative font size */
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 0.0f, L"en-us", &format);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, -10.0f, L"en-us", &format);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     /* invalid font properties */
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, 1000, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_FONT_STYLE_ITALIC + 1, DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_ITALIC,
             10, 10.0f, L"en-us", &format);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
+
+    hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_ITALIC,
+            DWRITE_FONT_STRETCH_UNDEFINED, 10.0f, L"en-us", &format);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     /* empty family name */
     hr = IDWriteFactory_CreateTextFormat(factory, L"", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
     IDWriteTextFormat_Release(format);
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     if (0) /* crashes on native */
         hr = IDWriteTextFormat_GetFontCollection(format, NULL);
 
     collection = NULL;
     hr = IDWriteTextFormat_GetFontCollection(format, &collection);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(collection != NULL, "got %p\n", collection);
 
     hr = IDWriteFactory_GetSystemFontCollection(factory, &syscoll, FALSE);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(collection == syscoll, "got %p, was %p\n", syscoll, collection);
     IDWriteFontCollection_Release(syscoll);
     IDWriteFontCollection_Release(collection);
@@ -1237,7 +1610,7 @@ static void test_CreateTextFormat(void)
     ok(flow == DWRITE_FLOW_DIRECTION_TOP_TO_BOTTOM, "got %d\n", flow);
 
     hr = IDWriteTextFormat_GetLineSpacing(format, &method, &spacing, &baseline);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(spacing == 0.0, "got %f\n", spacing);
     ok(baseline == 0.0, "got %f\n", baseline);
     ok(method == DWRITE_LINE_SPACING_METHOD_DEFAULT, "got %d\n", method);
@@ -1247,7 +1620,7 @@ static void test_CreateTextFormat(void)
     trimming.delimiterCount = 10;
     trimmingsign = (void*)0xdeadbeef;
     hr = IDWriteTextFormat_GetTrimming(format, &trimming, &trimmingsign);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(trimming.granularity == DWRITE_TRIMMING_GRANULARITY_NONE, "got %d\n", trimming.granularity);
     ok(trimming.delimiter == 0, "got %d\n", trimming.delimiter);
     ok(trimming.delimiterCount == 0, "got %d\n", trimming.delimiterCount);
@@ -1255,39 +1628,39 @@ static void test_CreateTextFormat(void)
 
     /* setters */
     hr = IDWriteTextFormat_SetTextAlignment(format, DWRITE_TEXT_ALIGNMENT_LEADING);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetTextAlignment(format, DWRITE_TEXT_ALIGNMENT_JUSTIFIED+1);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetParagraphAlignment(format, DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetParagraphAlignment(format, DWRITE_PARAGRAPH_ALIGNMENT_CENTER+1);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetWordWrapping(format, DWRITE_WORD_WRAPPING_WRAP);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetWordWrapping(format, DWRITE_WORD_WRAPPING_CHARACTER+1);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetReadingDirection(format, DWRITE_READING_DIRECTION_LEFT_TO_RIGHT);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetFlowDirection(format, DWRITE_FLOW_DIRECTION_TOP_TO_BOTTOM);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
 
     hr = IDWriteTextFormat_SetTrimming(format, &trimming, NULL);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* invalid granularity */
     trimming.granularity = 10;
     trimming.delimiter = 0;
     trimming.delimiterCount = 0;
     hr = IDWriteTextFormat_SetTrimming(format, &trimming, NULL);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     IDWriteTextFormat_Release(format);
     IDWriteFactory_Release(factory);
@@ -1306,28 +1679,28 @@ static void test_GetLocaleName(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"ru", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 0, format, 100.0f, 100.0f, 1.0f, NULL,
             FALSE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextFormat, (void**)&format2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     len = IDWriteTextFormat_GetLocaleNameLength(format2);
     ok(len == 2, "got %u\n", len);
     len = IDWriteTextFormat_GetLocaleNameLength(format);
     ok(len == 2, "got %u\n", len);
     hr = IDWriteTextFormat_GetLocaleName(format2, buff, len);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "got 0x%08x\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
     hr = IDWriteTextFormat_GetLocaleName(format2, buff, len+1);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!lstrcmpW(buff, L"ru"), "Unexpected locale name %s.\n", wine_dbgstr_w(buff));
     hr = IDWriteTextFormat_GetLocaleName(format, buff, len);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "got 0x%08x\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
     hr = IDWriteTextFormat_GetLocaleName(format, buff, len+1);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!lstrcmpW(buff, L"ru"), "Unexpected locale name %s.\n", wine_dbgstr_w(buff));
 
     IDWriteTextLayout_Release(layout);
@@ -1356,20 +1729,20 @@ static void test_CreateEllipsisTrimmingSign(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-GB", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     sign = (void *)0xdeadbeef;
     hr = IDWriteFactory_CreateEllipsisTrimmingSign(factory, NULL, &sign);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(!sign, "Unexpected pointer %p.\n", sign);
 
     EXPECT_REF(format, 1);
     hr = IDWriteFactory_CreateEllipsisTrimmingSign(factory, format, &sign);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     EXPECT_REF(format, 1);
 
     hr = IDWriteInlineObject_QueryInterface(sign, &IID_IDWriteTextLayout, (void**)&unk);
-    ok(hr == E_NOINTERFACE, "got 0x%08x\n", hr);
+    ok(hr == E_NOINTERFACE, "Unexpected hr %#lx.\n", hr);
 
 if (0) {/* crashes on native */
     hr = IDWriteInlineObject_GetBreakConditions(sign, NULL, NULL);
@@ -1380,7 +1753,7 @@ if (0) {/* crashes on native */
     metrics.baseline = 123.0;
     metrics.supportsSideways = TRUE;
     hr = IDWriteInlineObject_GetMetrics(sign, &metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(metrics.width > 0.0, "got %.2f\n", metrics.width);
     ok(metrics.height == 0.0, "got %.2f\n", metrics.height);
     ok(metrics.baseline == 0.0, "got %.2f\n", metrics.baseline);
@@ -1388,14 +1761,14 @@ if (0) {/* crashes on native */
 
     before = after = DWRITE_BREAK_CONDITION_CAN_BREAK;
     hr = IDWriteInlineObject_GetBreakConditions(sign, &before, &after);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(before == DWRITE_BREAK_CONDITION_NEUTRAL, "got %d\n", before);
     ok(after == DWRITE_BREAK_CONDITION_NEUTRAL, "got %d\n", after);
 
     /* Draw tests */
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteInlineObject_Draw(sign, NULL, &testrenderer, 0.0, 0.0, FALSE, FALSE, NULL);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, drawellipsis_seq, "ellipsis sign draw test", FALSE);
 
     effect = create_test_effect();
@@ -1403,7 +1776,7 @@ if (0) {/* crashes on native */
     EXPECT_REF(effect, 1);
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteInlineObject_Draw(sign, NULL, &testrenderer, 0.0f, 0.0f, FALSE, FALSE, effect);
-    ok(hr == S_OK, "Failed to draw trimming sign, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to draw trimming sign, hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, drawellipsis_seq, "ellipsis sign draw with effect test", FALSE);
     EXPECT_REF(effect, 1);
 
@@ -1411,39 +1784,39 @@ if (0) {/* crashes on native */
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteInlineObject_Draw(sign, NULL, &testrenderer, 0.0f, 0.0f, FALSE, FALSE, (void *)0xdeadbeef);
-    ok(hr == S_OK, "Failed to draw trimming sign, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to draw trimming sign, hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, drawellipsis_seq, "ellipsis sign draw with effect test", FALSE);
 
     memset(&ctxt, 0, sizeof(ctxt));
     hr = IDWriteInlineObject_Draw(sign, &ctxt, &testrenderer, 123.0f, 456.0f, FALSE, FALSE, NULL);
-    ok(hr == S_OK, "Failed to draw trimming sign, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to draw trimming sign, hr %#lx.\n", hr);
     ok(ctxt.originX == 123.0f && ctxt.originY == 456.0f, "Unexpected drawing origin\n");
 
     IDWriteInlineObject_Release(sign);
 
     /* Centered format */
     hr = IDWriteTextFormat_SetTextAlignment(format, DWRITE_TEXT_ALIGNMENT_CENTER);
-    ok(hr == S_OK, "Failed to set text alignment, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to set text alignment, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateEllipsisTrimmingSign(factory, format, &sign);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     memset(&ctxt, 0, sizeof(ctxt));
     hr = IDWriteInlineObject_Draw(sign, &ctxt, &testrenderer, 123.0f, 456.0f, FALSE, FALSE, NULL);
-    ok(hr == S_OK, "Failed to draw trimming sign, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to draw trimming sign, hr %#lx.\n", hr);
     ok(ctxt.originX == 123.0f && ctxt.originY == 456.0f, "Unexpected drawing origin\n");
 
     IDWriteInlineObject_Release(sign);
 
     /* non-orthogonal flow/reading combination */
     hr = IDWriteTextFormat_SetReadingDirection(format, DWRITE_READING_DIRECTION_LEFT_TO_RIGHT);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetFlowDirection(format, DWRITE_FLOW_DIRECTION_LEFT_TO_RIGHT);
-    ok(hr == S_OK || broken(hr == E_INVALIDARG) /* vista, win7 */, "got 0x%08x\n", hr);
+    ok(hr == S_OK || broken(hr == E_INVALIDARG) /* vista, win7 */, "Unexpected hr %#lx.\n", hr);
     if (hr == S_OK) {
         hr = IDWriteFactory_CreateEllipsisTrimmingSign(factory, format, &sign);
-        ok(hr == DWRITE_E_FLOWDIRECTIONCONFLICTS, "got 0x%08x\n", hr);
+        ok(hr == DWRITE_E_FLOWDIRECTIONCONFLICTS, "Unexpected hr %#lx.\n", hr);
     }
 
     IDWriteTextFormat_Release(format);
@@ -1464,31 +1837,31 @@ static void test_fontweight(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0, L"ru", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, format, 100.0f, 100.0f, 1.0f, NULL,
             FALSE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextFormat, (void**)&fmt2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     weight = IDWriteTextFormat_GetFontWeight(fmt2);
     ok(weight == DWRITE_FONT_WEIGHT_BOLD, "got %u\n", weight);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetFontWeight(layout, 0, &weight, &range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 0 && range.length == ~0u, "got %u, %u\n", range.startPosition, range.length);
 
     range.startPosition = 0;
     range.length = 6;
     hr = IDWriteTextLayout_SetFontWeight(layout, DWRITE_FONT_WEIGHT_NORMAL, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetFontWeight(layout, 0, &weight, &range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 0 && range.length == 6, "got %u, %u\n", range.startPosition, range.length);
 
     /* IDWriteTextFormat methods output doesn't reflect layout changes */
@@ -1498,32 +1871,32 @@ static void test_fontweight(void)
     range.length = 0;
     weight = DWRITE_FONT_WEIGHT_BOLD;
     hr = IDWriteTextLayout_GetFontWeight(layout, 0, &weight, &range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(weight == DWRITE_FONT_WEIGHT_NORMAL, "got %d\n", weight);
     ok(range.length == 6, "got %d\n", range.length);
 
     range.startPosition = 0;
     range.length = 6;
     hr = IDWriteTextLayout_SetFontWeight(layout, 1000, range);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     size = IDWriteTextLayout_GetMaxWidth(layout);
     ok(size == 100.0, "got %.2f\n", size);
 
     hr = IDWriteTextLayout_SetMaxWidth(layout, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     size = IDWriteTextLayout_GetMaxWidth(layout);
     ok(size == 0.0, "got %.2f\n", size);
 
     hr = IDWriteTextLayout_SetMaxWidth(layout, -1.0);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     size = IDWriteTextLayout_GetMaxWidth(layout);
     ok(size == 0.0, "got %.2f\n", size);
 
     hr = IDWriteTextLayout_SetMaxWidth(layout, 100.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     size = IDWriteTextLayout_GetMaxWidth(layout);
     ok(size == 100.0, "got %.2f\n", size);
@@ -1532,19 +1905,19 @@ static void test_fontweight(void)
     ok(size == 100.0, "got %.2f\n", size);
 
     hr = IDWriteTextLayout_SetMaxHeight(layout, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     size = IDWriteTextLayout_GetMaxHeight(layout);
     ok(size == 0.0, "got %.2f\n", size);
 
     hr = IDWriteTextLayout_SetMaxHeight(layout, -1.0);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     size = IDWriteTextLayout_GetMaxHeight(layout);
     ok(size == 0.0, "got %.2f\n", size);
 
     hr = IDWriteTextLayout_SetMaxHeight(layout, 100.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     size = IDWriteTextLayout_GetMaxHeight(layout);
     ok(size == 100.0, "got %.2f\n", size);
@@ -1568,42 +1941,42 @@ static void test_SetInlineObject(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"ru", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, format, 100.0f, 100.0f, 1.0f, NULL,
             FALSE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateEllipsisTrimmingSign(factory, format, &inlineobj);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateEllipsisTrimmingSign(factory, format, &inlineobj2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     EXPECT_REF(inlineobj, 1);
     EXPECT_REF(inlineobj2, 1);
 
     inlinetest = (void*)0x1;
     hr = IDWriteTextLayout_GetInlineObject(layout, 0, &inlinetest, NULL);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(inlinetest == NULL, "got %p\n", inlinetest);
 
     range.startPosition = 0;
     range.length = 2;
     hr = IDWriteTextLayout_SetInlineObject(layout, inlineobj, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     EXPECT_REF(inlineobj, 2);
 
     inlinetest = (void*)0x1;
     hr = IDWriteTextLayout_GetInlineObject(layout, 2, &inlinetest, NULL);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(inlinetest == NULL, "got %p\n", inlinetest);
 
     inlinetest = NULL;
     r2.startPosition = r2.length = 100;
     hr = IDWriteTextLayout_GetInlineObject(layout, 0, &inlinetest, &r2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(inlinetest == inlineobj, "got %p\n", inlinetest);
     ok(r2.startPosition == 0 && r2.length == 2, "got %d, %d\n", r2.startPosition, r2.length);
     IDWriteInlineObject_Release(inlinetest);
@@ -1614,7 +1987,7 @@ static void test_SetInlineObject(void)
     inlinetest = NULL;
     r2.startPosition = r2.length = 100;
     hr = IDWriteTextLayout_GetInlineObject(layout, 1, &inlinetest, &r2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(inlinetest == inlineobj, "got %p\n", inlinetest);
     ok(r2.startPosition == 0 && r2.length == 2, "got %d, %d\n", r2.startPosition, r2.length);
     IDWriteInlineObject_Release(inlinetest);
@@ -1624,12 +1997,12 @@ static void test_SetInlineObject(void)
     range.startPosition = 1;
     range.length = 1;
     hr = IDWriteTextLayout_SetInlineObject(layout, inlineobj2, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     inlinetest = NULL;
     r2.startPosition = r2.length = 100;
     hr = IDWriteTextLayout_GetInlineObject(layout, 1, &inlinetest, &r2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(inlinetest == inlineobj2, "got %p\n", inlinetest);
     ok(r2.startPosition == 1 && r2.length == 1, "got %d, %d\n", r2.startPosition, r2.length);
     IDWriteInlineObject_Release(inlinetest);
@@ -1640,7 +2013,7 @@ static void test_SetInlineObject(void)
     inlinetest = NULL;
     r2.startPosition = r2.length = 100;
     hr = IDWriteTextLayout_GetInlineObject(layout, 0, &inlinetest, &r2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(inlinetest == inlineobj, "got %p\n", inlinetest);
     ok(r2.startPosition == 0 && r2.length == 1, "got %d, %d\n", r2.startPosition, r2.length);
     IDWriteInlineObject_Release(inlinetest);
@@ -1650,11 +2023,11 @@ static void test_SetInlineObject(void)
     range.startPosition = 1;
     range.length = 1;
     hr = IDWriteTextLayout_SetInlineObject(layout, inlineobj, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     r2.startPosition = r2.length = 100;
     hr = IDWriteTextLayout_GetInlineObject(layout, 0, &inlinetest, &r2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(inlinetest == inlineobj, "got %p\n", inlinetest);
     ok(r2.startPosition == 0 && r2.length == 2, "got %d, %d\n", r2.startPosition, r2.length);
     IDWriteInlineObject_Release(inlinetest);
@@ -1664,13 +2037,13 @@ static void test_SetInlineObject(void)
     range.startPosition = 1;
     range.length = 2;
     hr = IDWriteTextLayout_SetInlineObject(layout, inlineobj, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     EXPECT_REF(inlineobj, 2);
 
     r2.startPosition = r2.length = 100;
     hr = IDWriteTextLayout_GetInlineObject(layout, 0, &inlinetest, &r2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(inlinetest == inlineobj, "got %p\n", inlinetest);
     ok(r2.startPosition == 0 && r2.length == 3, "got %d, %d\n", r2.startPosition, r2.length);
     IDWriteInlineObject_Release(inlinetest);
@@ -1776,100 +2149,100 @@ static void test_Draw(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"ru", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, format, 100.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateEllipsisTrimmingSign(factory, format, &inlineobj);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 5;
     range.length = 1;
     hr = IDWriteTextLayout_SetStrikethrough(layout, TRUE, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 1;
     range.length = 1;
     hr = IDWriteTextLayout_SetInlineObject(layout, inlineobj, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 4;
     range.length = 1;
     hr = IDWriteTextLayout_SetDrawingEffect(layout, (IUnknown*)inlineobj, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = 1;
     hr = IDWriteTextLayout_SetUnderline(layout, TRUE, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_seq, "draw test", FALSE);
     IDWriteTextLayout_Release(layout);
 
     /* with reduced width DrawGlyphRun() is called for every line */
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, format, 5.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_seq2, "draw test 2", TRUE);
     hr = IDWriteTextLayout_GetMetrics(layout, &tm);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     todo_wine
     ok(tm.lineCount == 6, "got %u\n", tm.lineCount);
     IDWriteTextLayout_Release(layout);
 
     /* string with control characters */
     hr = IDWriteFactory_CreateTextLayout(factory, str2W, 4, format, 500.0, 100.0, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_seq3, "draw test 3", FALSE);
     IDWriteTextLayout_Release(layout);
 
     /* strikethrough splits ranges from renderer point of view, but doesn't break
        shaping */
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, format, 500.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     flush_sequence(sequences, RENDERER_ID);
 
     range.startPosition = 0;
     range.length = 3;
     hr = IDWriteTextLayout_SetStrikethrough(layout, TRUE, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_seq4, "draw test 4", FALSE);
     IDWriteTextLayout_Release(layout);
 
     /* Strike through somewhere in the middle */
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, format, 500.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     flush_sequence(sequences, RENDERER_ID);
 
     range.startPosition = 2;
     range.length = 2;
     hr = IDWriteTextLayout_SetStrikethrough(layout, TRUE, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_seq5, "draw test 5", FALSE);
     IDWriteTextLayout_Release(layout);
 
     /* empty string */
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 0, format, 500.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, empty_seq, "draw test 6", FALSE);
     IDWriteTextLayout_Release(layout);
 
@@ -1879,26 +2252,26 @@ static void test_Draw(void)
     /* different parameter combinations with gdi-compatible layout */
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, format, 100.0f, 100.0f, 1.0f, NULL,
             TRUE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_single_run_seq, "draw test 7", FALSE);
 
     /* text alignment keeps pixel-aligned origin */
     hr = IDWriteTextLayout_GetMetrics(layout, &tm);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(tm.width == floorf(tm.width), "got %f\n", tm.width);
 
     hr = IDWriteTextLayout_SetMaxWidth(layout, tm.width + 3.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     hr = IDWriteTextLayout_SetTextAlignment(layout, DWRITE_TEXT_ALIGNMENT_CENTER);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     ctxt.originX = ctxt.originY = 0.0;
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_single_run_seq, "draw test 7", FALSE);
     ok(ctxt.originX != 0.0 && ctxt.originX == floorf(ctxt.originX), "got %f\n", ctxt.originX);
 
@@ -1909,10 +2282,10 @@ static void test_Draw(void)
 
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, format, 100.0f, 100.0f, 1.0f, NULL,
             FALSE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_single_run_seq, "draw test 8", FALSE);
     IDWriteTextLayout_Release(layout);
 
@@ -1923,10 +2296,10 @@ static void test_Draw(void)
     m.m12 = m.m21 = m.dx = m.dy = 0.0;
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, format, 100.0f, 100.0f, 1.0f, &m,
             TRUE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_single_run_seq, "draw test 9", FALSE);
     IDWriteTextLayout_Release(layout);
 
@@ -1937,10 +2310,10 @@ static void test_Draw(void)
     m.m12 = m.m21 = m.dx = m.dy = 0.0;
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"string", 6, format, 100.0f, 100.0f, 1.0f, &m,
             FALSE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_single_run_seq, "draw test 10", FALSE);
     IDWriteTextLayout_Release(layout);
 
@@ -1948,18 +2321,18 @@ static void test_Draw(void)
 
     /* text that triggers bidi run reordering */
     hr = IDWriteFactory_CreateTextLayout(factory, str3W, lstrlenW(str3W), format, 1000.0f, 100.0f, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     ctxt.gdicompat = FALSE;
     ctxt.use_gdi_natural = FALSE;
     ctxt.snapping_disabled = TRUE;
 
     hr = IDWriteTextLayout_SetReadingDirection(layout, DWRITE_READING_DIRECTION_LEFT_TO_RIGHT);
-    ok(hr == S_OK, "Failed to set reading direction, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to set reading direction, hr %#lx.\n", hr);
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0f, 0.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_ltr_reordered_run_seq, "draw test 11", FALSE);
 
     IDWriteTextLayout_Release(layout);
@@ -1979,12 +2352,12 @@ static void test_typography(void)
     factory = create_factory();
 
     hr = IDWriteFactory_CreateTypography(factory, &typography);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     feature.nameTag = DWRITE_FONT_FEATURE_TAG_KERNING;
     feature.parameter = 1;
     hr = IDWriteTypography_AddFontFeature(typography, feature);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = IDWriteTypography_GetFontFeatureCount(typography);
     ok(count == 1, "got %u\n", count);
@@ -1993,38 +2366,38 @@ static void test_typography(void)
     feature.nameTag = DWRITE_FONT_FEATURE_TAG_KERNING;
     feature.parameter = 0;
     hr = IDWriteTypography_AddFontFeature(typography, feature);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = IDWriteTypography_GetFontFeatureCount(typography);
     ok(count == 2, "got %u\n", count);
 
     memset(&feature, 0xcc, sizeof(feature));
     hr = IDWriteTypography_GetFontFeature(typography, 0, &feature);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(feature.nameTag == DWRITE_FONT_FEATURE_TAG_KERNING, "got tag %x\n", feature.nameTag);
     ok(feature.parameter == 1, "got %u\n", feature.parameter);
 
     memset(&feature, 0xcc, sizeof(feature));
     hr = IDWriteTypography_GetFontFeature(typography, 1, &feature);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(feature.nameTag == DWRITE_FONT_FEATURE_TAG_KERNING, "got tag %x\n", feature.nameTag);
     ok(feature.parameter == 0, "got %u\n", feature.parameter);
 
     hr = IDWriteTypography_GetFontFeature(typography, 2, &feature);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     /* duplicated with same parameter value */
     feature.nameTag = DWRITE_FONT_FEATURE_TAG_KERNING;
     feature.parameter = 0;
     hr = IDWriteTypography_AddFontFeature(typography, feature);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = IDWriteTypography_GetFontFeatureCount(typography);
     ok(count == 3, "got %u\n", count);
 
     memset(&feature, 0xcc, sizeof(feature));
     hr = IDWriteTypography_GetFontFeature(typography, 2, &feature);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(feature.nameTag == DWRITE_FONT_FEATURE_TAG_KERNING, "got tag %x\n", feature.nameTag);
     ok(feature.parameter == 0, "got %u\n", feature.parameter);
 
@@ -2043,6 +2416,8 @@ static void test_GetClusterMetrics(void)
         'g',0x0085,'h',0x2028,'i',0x2029,0xad,0xa,0};
     static const WCHAR str3W[] = {0x2066,')',')',0x661,'(',0x627,')',0};
     static const WCHAR str2W[] = {0x202a,0x202c,'a',0};
+
+    struct test_inline_obj *testinlineobj, *testinlineobj2, *testinlineobj3;
     DWRITE_INLINE_OBJECT_METRICS inline_metrics;
     DWRITE_CLUSTER_METRICS metrics[22];
     DWRITE_TEXT_METRICS text_metrics;
@@ -2058,31 +2433,38 @@ static void test_GetClusterMetrics(void)
     FLOAT width;
     HRESULT hr;
 
+    testinlineobj = create_test_inline_object(&testinlineobjvtbl);
+    ok(!!testinlineobj, "Failed to create test inline object.\n");
+    testinlineobj2 = create_test_inline_object(&testinlineobjvtbl);
+    ok(!!testinlineobj2, "Failed to create test inline object.\n");
+    testinlineobj3 = create_test_inline_object(&testinlineobjvtbl2);
+    ok(!!testinlineobj3, "Failed to create test inline object.\n");
+
     factory = create_factory();
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, str3W, 7, format, 1000.0, 1000.0, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     hr = IDWriteTextLayout_GetClusterMetrics(layout, NULL, 0, &count);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "got 0x%08x\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
     ok(count == 7, "got %u\n", count);
     IDWriteTextLayout_Release(layout);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_GetClusterMetrics(layout, NULL, 0, &count);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "got 0x%08x\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
     ok(count == 4, "got %u\n", count);
 
     /* check every cluster width */
     count = 0;
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, ARRAY_SIZE(metrics), &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 4, "got %u\n", count);
     for (i = 0; i < count; i++) {
         ok(metrics[i].width > 0.0, "%u: got width %.2f\n", i, metrics[i].width);
@@ -2098,7 +2480,7 @@ static void test_GetClusterMetrics(void)
         leading = trailing = min_advance = 2.0;
         hr = IDWriteTextLayout1_GetCharacterSpacing(layout1, 500, &leading, &trailing,
             &min_advance, &r);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         ok(leading == 0.0 && trailing == 0.0 && min_advance == 0.0,
             "got %.2f, %.2f, %.2f\n", leading, trailing, min_advance);
         ok(r.startPosition == 0 && r.length == ~0u, "got %u, %u\n", r.startPosition, r.length);
@@ -2106,18 +2488,18 @@ static void test_GetClusterMetrics(void)
         leading = trailing = min_advance = 2.0;
         hr = IDWriteTextLayout1_GetCharacterSpacing(layout1, 0, &leading, &trailing,
             &min_advance, NULL);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         ok(leading == 0.0 && trailing == 0.0 && min_advance == 0.0,
             "got %.2f, %.2f, %.2f\n", leading, trailing, min_advance);
 
         r.startPosition = 0;
         r.length = 4;
         hr = IDWriteTextLayout1_SetCharacterSpacing(layout1, 10.0, 15.0, 0.0, r);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         count = 0;
         hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics2, ARRAY_SIZE(metrics2), &count);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         ok(count == 4, "got %u\n", count);
         for (i = 0; i < count; ++i)
         {
@@ -2130,13 +2512,13 @@ static void test_GetClusterMetrics(void)
         r.startPosition = 0;
         r.length = 4;
         hr = IDWriteTextLayout1_SetCharacterSpacing(layout1, 0.0, 0.0, 0.0, r);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         /* negative advance limit */
         r.startPosition = 0;
         r.length = 4;
         hr = IDWriteTextLayout1_SetCharacterSpacing(layout1, 0.0, 0.0, -10.0, r);
-        ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+        ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
         IDWriteTextLayout1_Release(layout1);
     }
@@ -2144,28 +2526,28 @@ static void test_GetClusterMetrics(void)
         win_skip("IDWriteTextLayout1 is not supported, cluster spacing test skipped.\n");
 
     hr = IDWriteFactory_CreateEllipsisTrimmingSign(factory, format, &trimm);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = 2;
     hr = IDWriteTextLayout_SetInlineObject(layout, trimm, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* inline object takes a separate cluster, replaced codepoints number doesn't matter */
     count = 0;
     hr = IDWriteTextLayout_GetClusterMetrics(layout, NULL, 0, &count);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "got 0x%08x\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
     ok(count == 3, "got %u\n", count);
 
     count = 0;
     memset(&metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 1, &count);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "got 0x%08x\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
     ok(count == 3, "got %u\n", count);
     ok(metrics[0].length == 2, "got %u\n", metrics[0].length);
 
     hr = IDWriteInlineObject_GetMetrics(trimm, &inline_metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(inline_metrics.width > 0.0 && inline_metrics.width == metrics[0].width, "got %.2f, expected %.2f\n",
         inline_metrics.width, metrics[0].width);
 
@@ -2173,13 +2555,13 @@ static void test_GetClusterMetrics(void)
 
     /* text with non-visual control codes */
     hr = IDWriteFactory_CreateTextLayout(factory, str2W, 3, format, 1000.0, 1000.0, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* bidi control codes take a separate cluster */
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 3, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 3, "got %u\n", count);
 
     ok(metrics[0].width == 0.0, "got %.2f\n", metrics[0].width);
@@ -2210,17 +2592,17 @@ static void test_GetClusterMetrics(void)
 
     /* single inline object that fails to report its metrics */
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = 4;
-    hr = IDWriteTextLayout_SetInlineObject(layout, &testinlineobj, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    hr = IDWriteTextLayout_SetInlineObject(layout, &testinlineobj->IDWriteInlineObject_iface, range);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 3, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
 
     /* object sets a width to 123.0, but returns failure from GetMetrics() */
@@ -2235,13 +2617,13 @@ static void test_GetClusterMetrics(void)
     /* now set two inline object for [0,1] and [2,3], both fail to report break conditions */
     range.startPosition = 2;
     range.length = 2;
-    hr = IDWriteTextLayout_SetInlineObject(layout, &testinlineobj2, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    hr = IDWriteTextLayout_SetInlineObject(layout, &testinlineobj2->IDWriteInlineObject_iface, range);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 3, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 2, "got %u\n", count);
 
     ok(metrics[0].width == 0.0, "got %.2f\n", metrics[0].width);
@@ -2264,23 +2646,23 @@ static void test_GetClusterMetrics(void)
 
     /* zero length string */
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 0, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     count = 1;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 3, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 0, "got %u\n", count);
     IDWriteTextLayout_Release(layout);
 
     /* Whitespace */
     hr = IDWriteFactory_CreateTextLayout(factory, L"a ", 2, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 2, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 2, "got %u\n", count);
     ok(metrics[0].isWhitespace == 0, "got %d\n", metrics[0].isWhitespace);
     ok(metrics[0].canWrapLineAfter == 0, "got %d\n", metrics[0].canWrapLineAfter);
@@ -2290,17 +2672,16 @@ static void test_GetClusterMetrics(void)
 
     /* Layout is fully covered by inline object with after condition DWRITE_BREAK_CONDITION_MAY_NOT_BREAK. */
     hr = IDWriteFactory_CreateTextLayout(factory, L"a ", 2, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     range.startPosition = 0;
-    range.length = ~0u;
-    hr = IDWriteTextLayout_SetInlineObject(layout, &testinlineobj3, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    hr = IDWriteTextLayout_SetInlineObject(layout, &testinlineobj3->IDWriteInlineObject_iface, range);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 2, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
     ok(metrics[0].canWrapLineAfter == 1, "got %d\n", metrics[0].canWrapLineAfter);
 
@@ -2308,12 +2689,12 @@ static void test_GetClusterMetrics(void)
 
     /* compare natural cluster width with gdi layout */
     hr = IDWriteFactory_CreateTextLayout(factory, L"a ", 1, format, 100.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 1, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
     ok(metrics[0].width != floorf(metrics[0].width), "got %f\n", metrics[0].width);
 
@@ -2321,12 +2702,12 @@ static void test_GetClusterMetrics(void)
 
     hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"a ", 1, format, 100.0f, 100.0f, 1.0f, NULL,
             FALSE, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 1, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
     ok(metrics[0].width == floorf(metrics[0].width), "got %f\n", metrics[0].width);
 
@@ -2334,12 +2715,12 @@ static void test_GetClusterMetrics(void)
 
     /* isNewline tests */
     hr = IDWriteFactory_CreateTextLayout(factory, str5W, lstrlenW(str5W), format, 100.0f, 200.0f, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, ARRAY_SIZE(metrics), &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 22, "got %u\n", count);
 
     ok(metrics[1].isNewline == 1, "got %d\n", metrics[1].isNewline);
@@ -2383,12 +2764,12 @@ static void test_GetClusterMetrics(void)
     /* Test whitespace resolution from linebreaking classes BK, ZW, and SP */
     hr = IDWriteFactory_CreateTextLayout(factory, str_white_spaceW, ARRAY_SIZE(str_white_spaceW), format,
         100.0f, 200.0f, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 20, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 6, "got %u\n", count);
 
     ok(metrics[0].isWhitespace == 1, "got %d\n", metrics[0].isWhitespace);
@@ -2402,16 +2783,16 @@ static void test_GetClusterMetrics(void)
 
     /* Trigger line trimming. */
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 100.0f, 200.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 4, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 4, "got %u\n", count);
 
     hr = IDWriteTextLayout_GetMetrics(layout, &text_metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     width = metrics[0].width + inline_metrics.width;
     ok(width < text_metrics.width, "unexpected trimming sign width\n");
@@ -2421,19 +2802,19 @@ static void test_GetClusterMetrics(void)
     trimming_options.delimiter = 0;
     trimming_options.delimiterCount = 0;
     hr = IDWriteTextLayout_SetTrimming(layout, &trimming_options, trimm);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetMaxWidth(layout, width);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 4, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 4, "got %u\n", count);
 
     hr = IDWriteTextLayout_GetLineMetrics(layout, &line, 1, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
     ok(line.length == 4, "got %u\n", line.length);
     ok(line.isTrimmed, "got %d\n", line.isTrimmed);
@@ -2442,15 +2823,15 @@ static void test_GetClusterMetrics(void)
 
     /* NO_WRAP, check cluster wrapping attribute. */
     hr = IDWriteTextFormat_SetWordWrapping(format, DWRITE_WORD_WRAPPING_NO_WRAP);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"a b", 3, format, 1000.0f, 200.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 3, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 3, "got %u\n", count);
 
     ok(metrics[0].canWrapLineAfter == 0, "got %d\n", metrics[0].canWrapLineAfter);
@@ -2461,42 +2842,45 @@ static void test_GetClusterMetrics(void)
 
     /* Single cluster layout, trigger trimming. */
     hr = IDWriteFactory_CreateTextLayout(factory, L"a b", 1, format, 1000.0f, 200.0f, &layout);
-    ok(hr == S_OK, "Failed to create layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create layout, hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 1, &count);
-    ok(hr == S_OK, "Failed to get cluster metrics, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to get cluster metrics, hr %#lx.\n", hr);
     ok(count == 1, "Unexpected cluster count %u.\n", count);
 
     hr = IDWriteTextLayout_SetMaxWidth(layout, metrics[0].width / 2.0f);
-    ok(hr == S_OK, "Failed to set layout width, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to set layout width, hr %#lx.\n", hr);
 
     trimming_options.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
     trimming_options.delimiter = 0;
     trimming_options.delimiterCount = 0;
     hr = IDWriteTextLayout_SetTrimming(layout, &trimming_options, trimm);
-    ok(hr == S_OK, "Failed to set trimming options, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to set trimming options, hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, 1, &count);
-    ok(hr == S_OK, "Failed to get cluster metrics, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to get cluster metrics, hr %#lx.\n", hr);
     ok(count == 1, "Unexpected cluster count %u.\n", count);
 
     hr = IDWriteTextLayout_GetLineMetrics(layout, &line, 1, &count);
-    ok(hr == S_OK, "Failed to get line metrics, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to get line metrics, hr %#lx.\n", hr);
     ok(count == 1, "Unexpected line count %u.\n", count);
     ok(line.length == 1, "Unexpected line length %u.\n", line.length);
     ok(line.isTrimmed, "Unexpected trimming flag %x.\n", line.isTrimmed);
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, NULL, &testrenderer, 0.0f, 0.0f);
-    ok(hr == S_OK, "Draw() failed, hr %#x.\n", hr);
+    ok(hr == S_OK, "Draw() failed, hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draw_trimmed_seq, "Trimmed draw test", FALSE);
 
     IDWriteTextLayout_Release(layout);
 
+    IDWriteInlineObject_Release(&testinlineobj->IDWriteInlineObject_iface);
+    IDWriteInlineObject_Release(&testinlineobj2->IDWriteInlineObject_iface);
+    IDWriteInlineObject_Release(&testinlineobj3->IDWriteInlineObject_iface);
     IDWriteInlineObject_Release(trimm);
     IDWriteTextFormat_Release(format);
     IDWriteFactory_Release(factory);
@@ -2516,24 +2900,24 @@ static void test_SetLocaleName(void)
     /* create format with mixed case locale name, get it back */
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"eN-uS", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_GetLocaleName(format, buffW, ARRAY_SIZE(buffW));
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!lstrcmpW(buffW, L"en-us"), "Unexpected locale name %s.\n", wine_dbgstr_w(buffW));
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextFormat, (void**)&format2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_GetLocaleName(format2, buffW, ARRAY_SIZE(buffW));
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!lstrcmpW(buffW, L"en-us"), "Unexpected locale name %s.\n", wine_dbgstr_w(buffW));
 
     hr = IDWriteTextLayout_GetLocaleName(layout, 0, buffW, ARRAY_SIZE(buffW), NULL);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!lstrcmpW(buffW, L"en-us"), "Unexpected locale name %s.\n", wine_dbgstr_w(buffW));
 
     IDWriteTextFormat_Release(format2);
@@ -2542,25 +2926,25 @@ static void test_SetLocaleName(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = 1;
     hr = IDWriteTextLayout_SetLocaleName(layout, L"en-us", range);
-    ok(hr == S_OK, "Failed to set locale name, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to set locale name, hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetLocaleName(layout, NULL, range);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     /* invalid locale name is allowed */
     hr = IDWriteTextLayout_SetLocaleName(layout, L"abcd", range);
-    ok(hr == S_OK, "Failed to set locale name, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to set locale name, hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_GetLocaleName(layout, 0, NULL, 0, NULL);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     if (0) /* crashes on native */
         hr = IDWriteTextLayout_GetLocaleName(layout, 0, NULL, 1, NULL);
@@ -2568,14 +2952,14 @@ static void test_SetLocaleName(void)
     buffW[0] = 0;
     range.length = 0;
     hr = IDWriteTextLayout_GetLocaleName(layout, 0, buffW, ARRAY_SIZE(buffW), &range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!lstrcmpW(buffW, L"abcd"), "Unexpected locale name %s.\n", wine_dbgstr_w(buffW));
     ok(range.startPosition == 0 && range.length == 1, "got %u,%u\n", range.startPosition, range.length);
 
     /* get with a shorter buffer */
     buffW[0] = 0xa;
     hr = IDWriteTextLayout_GetLocaleName(layout, 0, buffW, 1, NULL);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "got 0x%08x\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
     ok(buffW[0] == 0, "got %x\n", buffW[0]);
 
     /* name is too long */
@@ -2586,23 +2970,23 @@ static void test_SetLocaleName(void)
     range.startPosition = 0;
     range.length = 1;
     hr = IDWriteTextLayout_SetLocaleName(layout, buffW, range);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     buffW[0] = 0;
     hr = IDWriteTextLayout_GetLocaleName(layout, 0, buffW, ARRAY_SIZE(buffW), NULL);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!lstrcmpW(buffW, L"abcd"), "Unexpected locale name %s.\n", wine_dbgstr_w(buffW));
 
     /* set initial locale name for whole text, except with a different casing */
     range.startPosition = 0;
     range.length = 4;
     hr = IDWriteTextLayout_SetLocaleName(layout, L"eN-uS", range);
-    ok(hr == S_OK, "Failed to set locale name, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to set locale name, hr %#lx.\n", hr);
 
     buffW[0] = 0;
     range.length = 0;
     hr = IDWriteTextLayout_GetLocaleName(layout, 0, buffW, ARRAY_SIZE(buffW), &range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!lstrcmpW(buffW, L"en-us"), "Unexpected locale name %s.\n", wine_dbgstr_w(buffW));
     ok((range.startPosition == 0 && range.length == ~0u) ||
         broken(range.startPosition == 0 && range.length == 4) /* vista/win7 */, "got %u,%u\n", range.startPosition, range.length);
@@ -2611,7 +2995,7 @@ static void test_SetLocaleName(void)
     buffW[0] = 0;
     range.length = 0;
     hr = IDWriteTextLayout_GetLocaleName(layout, 100, buffW, ARRAY_SIZE(buffW), &range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!lstrcmpW(buffW, L"en-us"), "Unexpected locale name %s.\n", wine_dbgstr_w(buffW));
     ok((range.startPosition == 0 && range.length == ~0u) ||
         broken(range.startPosition == 4 && range.length == ~0u-4) /* vista/win7 */, "got %u,%u\n", range.startPosition, range.length);
@@ -2638,10 +3022,10 @@ static void test_SetPairKerning(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, strW, 4, format, 1000.0, 1000.0, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     IDWriteTextFormat_Release(format);
 
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextLayout1, (void**)&layout1);
@@ -2659,22 +3043,22 @@ if (0) { /* crashes on native */
 }
 
     hr = IDWriteTextLayout1_GetPairKerning(layout1, 0, &kerning, NULL);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = 0;
     kerning = TRUE;
     hr = IDWriteTextLayout1_GetPairKerning(layout1, 0, &kerning, &range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!kerning, "got %d\n", kerning);
     ok(range.length == ~0u, "got %u\n", range.length);
 
     count = 0;
     hr = IDWriteTextLayout1_GetClusterMetrics(layout1, clusters, 4, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
-    ok(count == 3, "Unexpected cluster count %u.\n", count);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    todo_wine ok(count == 3, "Unexpected cluster count %u.\n", count);
     ok(clusters[0].length == 1, "got %u\n", clusters[0].length);
-    ok(clusters[1].length == 2, "got %u\n", clusters[1].length);
+    todo_wine ok(clusters[1].length == 2, "got %u\n", clusters[1].length);
     ok(clusters[2].length == 1, "got %u\n", clusters[2].length);
 
     /* pair kerning flag participates in itemization - combining characters
@@ -2682,16 +3066,16 @@ if (0) { /* crashes on native */
     range.startPosition = 0;
     range.length = 2;
     hr = IDWriteTextLayout1_SetPairKerning(layout1, 2, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     kerning = FALSE;
     hr = IDWriteTextLayout1_GetPairKerning(layout1, 0, &kerning, &range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(kerning == TRUE, "got %d\n", kerning);
 
     count = 0;
     hr = IDWriteTextLayout1_GetClusterMetrics(layout1, clusters, 4, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 4, "got %u\n", count);
     ok(clusters[0].length == 1, "got %u\n", clusters[0].length);
     ok(clusters[1].length == 1, "got %u\n", clusters[1].length);
@@ -2716,10 +3100,10 @@ static void test_SetVerticalGlyphOrientation(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     IDWriteTextFormat_Release(format);
 
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextLayout2, (void**)&layout2);
@@ -2735,16 +3119,16 @@ static void test_SetVerticalGlyphOrientation(void)
     ok(orientation == DWRITE_VERTICAL_GLYPH_ORIENTATION_DEFAULT, "got %d\n", orientation);
 
     hr = IDWriteTextLayout2_SetVerticalGlyphOrientation(layout2, DWRITE_VERTICAL_GLYPH_ORIENTATION_STACKED+1);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout2_QueryInterface(layout2, &IID_IDWriteTextFormat1, (void **)&format1);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     orientation = IDWriteTextFormat1_GetVerticalGlyphOrientation(format1);
     ok(orientation == DWRITE_VERTICAL_GLYPH_ORIENTATION_DEFAULT, "Unexpected orientation %d.\n", orientation);
 
     hr = IDWriteTextLayout2_SetVerticalGlyphOrientation(layout2, DWRITE_VERTICAL_GLYPH_ORIENTATION_STACKED);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     orientation = IDWriteTextLayout2_GetVerticalGlyphOrientation(layout2);
     ok(orientation == DWRITE_VERTICAL_GLYPH_ORIENTATION_STACKED, "Unexpected orientation %d.\n", orientation);
@@ -2753,7 +3137,7 @@ static void test_SetVerticalGlyphOrientation(void)
     ok(orientation == DWRITE_VERTICAL_GLYPH_ORIENTATION_STACKED, "Unexpected orientation %d.\n", orientation);
 
     hr = IDWriteTextFormat1_SetVerticalGlyphOrientation(format1, DWRITE_VERTICAL_GLYPH_ORIENTATION_DEFAULT);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     orientation = IDWriteTextLayout2_GetVerticalGlyphOrientation(layout2);
     ok(orientation == DWRITE_VERTICAL_GLYPH_ORIENTATION_DEFAULT, "Unexpected orientation %d.\n", orientation);
@@ -2787,22 +3171,22 @@ static void test_DetermineMinWidth(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_DetermineMinWidth(layout, NULL);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     IDWriteTextLayout_Release(layout);
 
     /* empty string */
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 0, format, 100.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     minwidth = 1.0f;
     hr = IDWriteTextLayout_DetermineMinWidth(layout, &minwidth);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(minwidth == 0.0f, "got %f\n", minwidth);
     IDWriteTextLayout_Release(layout);
 
@@ -2811,10 +3195,10 @@ static void test_DetermineMinWidth(void)
 
         /* measure expected width */
         hr = IDWriteFactory_CreateTextLayout(factory, minwidth_tests[i].mintext, lstrlenW(minwidth_tests[i].mintext), format, 1000.0f, 1000.0f, &layout);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, ARRAY_SIZE(metrics), &count);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         for (j = 0; j < count; j++)
             width += metrics[j].width;
@@ -2822,11 +3206,11 @@ static void test_DetermineMinWidth(void)
         IDWriteTextLayout_Release(layout);
 
         hr = IDWriteFactory_CreateTextLayout(factory, minwidth_tests[i].text, lstrlenW(minwidth_tests[i].text), format, 1000.0f, 1000.0f, &layout);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         minwidth = 0.0f;
         hr = IDWriteTextLayout_DetermineMinWidth(layout, &minwidth);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         ok(minwidth == width, "test %u: expected width %f, got %f\n", i, width, minwidth);
 
         IDWriteTextLayout_Release(layout);
@@ -2849,76 +3233,76 @@ static void test_SetFontSize(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     /* negative/zero size */
     r.startPosition = 1;
     r.length = 1;
     hr = IDWriteTextLayout_SetFontSize(layout, -15.0, r);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetFontSize(layout, 0.0, r);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     r.startPosition = 1;
     r.length = 0;
     size = 0.0;
     hr = IDWriteTextLayout_GetFontSize(layout, 0, &size, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 0 && r.length == ~0u, "got %u, %u\n", r.startPosition, r.length);
     ok(size == 10.0, "got %.2f\n", size);
 
     r.startPosition = 1;
     r.length = 1;
     hr = IDWriteTextLayout_SetFontSize(layout, 15.0, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* zero length range */
     r.startPosition = 1;
     r.length = 0;
     hr = IDWriteTextLayout_SetFontSize(layout, 123.0, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     size = 0.0;
     hr = IDWriteTextLayout_GetFontSize(layout, 1, &size, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(size == 15.0, "got %.2f\n", size);
 
     r.startPosition = 0;
     r.length = 4;
     hr = IDWriteTextLayout_SetFontSize(layout, 15.0, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     size = 0.0;
     hr = IDWriteTextLayout_GetFontSize(layout, 1, &size, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(size == 15.0, "got %.2f\n", size);
 
     size = 0.0;
     hr = IDWriteTextLayout_GetFontSize(layout, 0, &size, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 0 && r.length == 4, "got %u, %u\n", r.startPosition, r.length);
     ok(size == 15.0, "got %.2f\n", size);
 
     size = 15.0;
     r.startPosition = r.length = 0;
     hr = IDWriteTextLayout_GetFontSize(layout, 20, &size, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 4 && r.length == ~0u-4, "got %u, %u\n", r.startPosition, r.length);
     ok(size == 10.0, "got %.2f\n", size);
 
     r.startPosition = 100;
     r.length = 4;
     hr = IDWriteTextLayout_SetFontSize(layout, 25.0, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     size = 15.0;
     r.startPosition = r.length = 0;
     hr = IDWriteTextLayout_GetFontSize(layout, 100, &size, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 100 && r.length == 4, "got %u, %u\n", r.startPosition, r.length);
     ok(size == 25.0, "got %.2f\n", size);
 
@@ -2940,63 +3324,63 @@ static void test_SetFontFamilyName(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     /* NULL name */
     r.startPosition = 1;
     r.length = 1;
     hr = IDWriteTextLayout_SetFontFamilyName(layout, NULL, r);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     r.startPosition = 1;
     r.length = 0;
     nameW[0] = 0;
     hr = IDWriteTextLayout_GetFontFamilyName(layout, 1, nameW, ARRAY_SIZE(nameW), &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 0 && r.length == ~0u, "got %u, %u\n", r.startPosition, r.length);
 
     /* set name only different in casing */
     r.startPosition = 1;
     r.length = 1;
     hr = IDWriteTextLayout_SetFontFamilyName(layout, L"TaHoma", r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* zero length range */
     r.startPosition = 1;
     r.length = 0;
     hr = IDWriteTextLayout_SetFontFamilyName(layout, L"Arial", r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     r.startPosition = 0;
     r.length = 0;
     nameW[0] = 0;
     hr = IDWriteTextLayout_GetFontFamilyName(layout, 1, nameW, ARRAY_SIZE(nameW), &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!lstrcmpW(nameW, L"TaHoma"), "Unexpected family name %s.\n", wine_dbgstr_w(nameW));
     ok(r.startPosition == 1 && r.length == 1, "got %u, %u\n", r.startPosition, r.length);
 
     r.startPosition = 1;
     r.length = 1;
     hr = IDWriteTextLayout_SetFontFamilyName(layout, L"Arial", r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     r.startPosition = 1;
     r.length = 0;
     hr = IDWriteTextLayout_GetFontFamilyName(layout, 1, nameW, ARRAY_SIZE(nameW), &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 1 && r.length == 1, "got %u, %u\n", r.startPosition, r.length);
 
     r.startPosition = 0;
     r.length = 4;
     hr = IDWriteTextLayout_SetFontFamilyName(layout, L"Arial", r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     nameW[0] = 0;
     hr = IDWriteTextLayout_GetFontFamilyName(layout, 1, nameW, ARRAY_SIZE(nameW), &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 0 && r.length == 4, "got %u, %u\n", r.startPosition, r.length);
     ok(!lstrcmpW(nameW, L"Arial"), "Unexpected family name %s.\n", wine_dbgstr_w(nameW));
 
@@ -3018,72 +3402,72 @@ static void test_SetFontStyle(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     /* invalid style value */
     r.startPosition = 1;
     r.length = 1;
     hr = IDWriteTextLayout_SetFontStyle(layout, DWRITE_FONT_STYLE_ITALIC+1, r);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     r.startPosition = 1;
     r.length = 0;
     hr = IDWriteTextLayout_GetFontStyle(layout, 0, &style, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 0 && r.length == ~0u, "got %u, %u\n", r.startPosition, r.length);
     ok(style == DWRITE_FONT_STYLE_NORMAL, "got %d\n", style);
 
     r.startPosition = 1;
     r.length = 1;
     hr = IDWriteTextLayout_SetFontStyle(layout, DWRITE_FONT_STYLE_ITALIC, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* zero length range */
     r.startPosition = 1;
     r.length = 0;
     hr = IDWriteTextLayout_SetFontStyle(layout, DWRITE_FONT_STYLE_NORMAL, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     style = DWRITE_FONT_STYLE_NORMAL;
     hr = IDWriteTextLayout_GetFontStyle(layout, 1, &style, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(style == DWRITE_FONT_STYLE_ITALIC, "got %d\n", style);
 
     r.startPosition = 0;
     r.length = 4;
     hr = IDWriteTextLayout_SetFontStyle(layout, DWRITE_FONT_STYLE_OBLIQUE, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     style = DWRITE_FONT_STYLE_ITALIC;
     hr = IDWriteTextLayout_GetFontStyle(layout, 1, &style, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(style == DWRITE_FONT_STYLE_OBLIQUE, "got %d\n", style);
 
     style = DWRITE_FONT_STYLE_ITALIC;
     hr = IDWriteTextLayout_GetFontStyle(layout, 0, &style, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 0 && r.length == 4, "got %u, %u\n", r.startPosition, r.length);
     ok(style == DWRITE_FONT_STYLE_OBLIQUE, "got %d\n", style);
 
     style = DWRITE_FONT_STYLE_ITALIC;
     r.startPosition = r.length = 0;
     hr = IDWriteTextLayout_GetFontStyle(layout, 20, &style, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 4 && r.length == ~0u-4, "got %u, %u\n", r.startPosition, r.length);
     ok(style == DWRITE_FONT_STYLE_NORMAL, "got %d\n", style);
 
     r.startPosition = 100;
     r.length = 4;
     hr = IDWriteTextLayout_SetFontStyle(layout, DWRITE_FONT_STYLE_OBLIQUE, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     style = DWRITE_FONT_STYLE_NORMAL;
     r.startPosition = r.length = 0;
     hr = IDWriteTextLayout_GetFontStyle(layout, 100, &style, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 100 && r.length == 4, "got %u, %u\n", r.startPosition, r.length);
     ok(style == DWRITE_FONT_STYLE_OBLIQUE, "got %d\n", style);
 
@@ -3105,73 +3489,73 @@ static void test_SetFontStretch(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     /* invalid stretch value */
     r.startPosition = 1;
     r.length = 1;
     hr = IDWriteTextLayout_SetFontStretch(layout, DWRITE_FONT_STRETCH_ULTRA_EXPANDED+1, r);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     r.startPosition = 1;
     r.length = 0;
     stretch = DWRITE_FONT_STRETCH_UNDEFINED;
     hr = IDWriteTextLayout_GetFontStretch(layout, 0, &stretch, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 0 && r.length == ~0u, "got %u, %u\n", r.startPosition, r.length);
     ok(stretch == DWRITE_FONT_STRETCH_NORMAL, "got %d\n", stretch);
 
     r.startPosition = 1;
     r.length = 1;
     hr = IDWriteTextLayout_SetFontStretch(layout, DWRITE_FONT_STRETCH_CONDENSED, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* zero length range */
     r.startPosition = 1;
     r.length = 0;
     hr = IDWriteTextLayout_SetFontStretch(layout, DWRITE_FONT_STRETCH_NORMAL, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     stretch = DWRITE_FONT_STRETCH_UNDEFINED;
     hr = IDWriteTextLayout_GetFontStretch(layout, 1, &stretch, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(stretch == DWRITE_FONT_STRETCH_CONDENSED, "got %d\n", stretch);
 
     r.startPosition = 0;
     r.length = 4;
     hr = IDWriteTextLayout_SetFontStretch(layout, DWRITE_FONT_STRETCH_EXPANDED, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     stretch = DWRITE_FONT_STRETCH_UNDEFINED;
     hr = IDWriteTextLayout_GetFontStretch(layout, 1, &stretch, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(stretch == DWRITE_FONT_STRETCH_EXPANDED, "got %d\n", stretch);
 
     stretch = DWRITE_FONT_STRETCH_UNDEFINED;
     hr = IDWriteTextLayout_GetFontStretch(layout, 0, &stretch, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 0 && r.length == 4, "got %u, %u\n", r.startPosition, r.length);
     ok(stretch == DWRITE_FONT_STRETCH_EXPANDED, "got %d\n", stretch);
 
     stretch = DWRITE_FONT_STRETCH_UNDEFINED;
     r.startPosition = r.length = 0;
     hr = IDWriteTextLayout_GetFontStretch(layout, 20, &stretch, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 4 && r.length == ~0u-4, "got %u, %u\n", r.startPosition, r.length);
     ok(stretch == DWRITE_FONT_STRETCH_NORMAL, "got %d\n", stretch);
 
     r.startPosition = 100;
     r.length = 4;
     hr = IDWriteTextLayout_SetFontStretch(layout, DWRITE_FONT_STRETCH_EXPANDED, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     stretch = DWRITE_FONT_STRETCH_UNDEFINED;
     r.startPosition = r.length = 0;
     hr = IDWriteTextLayout_GetFontStretch(layout, 100, &stretch, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 100 && r.length == 4, "got %u, %u\n", r.startPosition, r.length);
     ok(stretch == DWRITE_FONT_STRETCH_EXPANDED, "got %d\n", stretch);
 
@@ -3179,7 +3563,7 @@ static void test_SetFontStretch(void)
     r.startPosition = 0;
     r.length = 2;
     hr = IDWriteTextLayout_SetFontStretch(layout, DWRITE_FONT_STRETCH_UNDEFINED, r);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     IDWriteTextLayout_Release(layout);
     IDWriteTextFormat_Release(format);
@@ -3199,46 +3583,46 @@ static void test_SetStrikethrough(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     r.startPosition = 1;
     r.length = 0;
     value = TRUE;
     hr = IDWriteTextLayout_GetStrikethrough(layout, 0, &value, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 0 && r.length == ~0u, "got %u, %u\n", r.startPosition, r.length);
     ok(value == FALSE, "got %d\n", value);
 
     r.startPosition = 1;
     r.length = 1;
     hr = IDWriteTextLayout_SetStrikethrough(layout, TRUE, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     value = FALSE;
     hr = IDWriteTextLayout_GetStrikethrough(layout, 1, &value, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(value == TRUE, "got %d\n", value);
     ok(r.startPosition == 1 && r.length == 1, "got %u, %u\n", r.startPosition, r.length);
 
     value = TRUE;
     r.startPosition = r.length = 0;
     hr = IDWriteTextLayout_GetStrikethrough(layout, 20, &value, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 2 && r.length == ~0u-2, "got %u, %u\n", r.startPosition, r.length);
     ok(value == FALSE, "got %d\n", value);
 
     r.startPosition = 100;
     r.length = 4;
     hr = IDWriteTextLayout_SetStrikethrough(layout, TRUE, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     value = FALSE;
     r.startPosition = r.length = 0;
     hr = IDWriteTextLayout_GetStrikethrough(layout, 100, &value, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 100 && r.length == 4, "got %u, %u\n", r.startPosition, r.length);
     ok(value == TRUE, "got %d\n", value);
 
@@ -3263,21 +3647,21 @@ static void test_GetMetrics(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 500.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_GetClusterMetrics(layout, clusters, 4, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 4, "got %u\n", count);
     for (i = 0, width = 0.0; i < count; i++)
         width += clusters[i].width;
 
     memset(&metrics, 0xcc, sizeof(metrics));
     hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(metrics.left == 0.0, "got %.2f\n", metrics.left);
     ok(metrics.top == 0.0, "got %.2f\n", metrics.top);
     ok(metrics.width == width, "got %.2f, expected %.2f\n", metrics.width, width);
@@ -3293,12 +3677,12 @@ static void test_GetMetrics(void)
 
     /* a string with more complex bidi sequence */
     hr = IDWriteFactory_CreateTextLayout(factory, str2W, 7, format, 500.0, 1000.0, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     memset(&metrics, 0xcc, sizeof(metrics));
     metrics.maxBidiReorderingDepth = 0;
     hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(metrics.left == 0.0, "got %.2f\n", metrics.left);
     ok(metrics.top == 0.0, "got %.2f\n", metrics.top);
     ok(metrics.width > 0.0, "got %.2f\n", metrics.width);
@@ -3314,16 +3698,16 @@ static void test_GetMetrics(void)
 
     /* single cluster layout */
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, format, 500.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_GetClusterMetrics(layout, clusters, 1, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
 
     memset(&metrics, 0xcc, sizeof(metrics));
     hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(metrics.left == 0.0, "got %.2f\n", metrics.left);
     ok(metrics.top == 0.0, "got %.2f\n", metrics.top);
     ok(metrics.width == clusters[0].width, "got %.2f, expected %.2f\n", metrics.width, clusters[0].width);
@@ -3337,11 +3721,11 @@ static void test_GetMetrics(void)
 
     /* Whitespace only. */
     hr = IDWriteFactory_CreateTextLayout(factory, L" ", 1, format, 500.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     memset(&metrics, 0xcc, sizeof(metrics));
     hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-    ok(hr == S_OK, "Failed to get layout metrics, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to get layout metrics, hr %#lx.\n", hr);
     ok(metrics.left == 0.0f, "Unexpected value for left %f.\n", metrics.left);
     ok(metrics.top == 0.0f, "Unexpected value for top %f.\n", metrics.top);
     ok(metrics.width == 0.0f, "Unexpected width %f.\n", metrics.width);
@@ -3371,7 +3755,7 @@ static void test_SetFlowDirection(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     flow = IDWriteTextFormat_GetFlowDirection(format);
     ok(flow == DWRITE_FLOW_DIRECTION_TOP_TO_BOTTOM, "got %d\n", flow);
@@ -3380,25 +3764,25 @@ static void test_SetFlowDirection(void)
     ok(reading == DWRITE_READING_DIRECTION_LEFT_TO_RIGHT, "got %d\n", reading);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 500.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     IDWriteTextLayout_Release(layout);
 
     hr = IDWriteTextFormat_SetFlowDirection(format, DWRITE_FLOW_DIRECTION_LEFT_TO_RIGHT);
-    ok(hr == S_OK || broken(hr == E_INVALIDARG) /* vista,win7 */, "got 0x%08x\n", hr);
+    ok(hr == S_OK || broken(hr == E_INVALIDARG) /* vista,win7 */, "Unexpected hr %#lx.\n", hr);
     if (hr == S_OK)
     {
         hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 500.0f, 1000.0f, &layout);
-        ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
         IDWriteTextLayout_Release(layout);
 
         hr = IDWriteTextFormat_SetReadingDirection(format, DWRITE_READING_DIRECTION_TOP_TO_BOTTOM);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteTextFormat_SetFlowDirection(format, DWRITE_FLOW_DIRECTION_TOP_TO_BOTTOM);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 500.0f, 1000.0f, &layout);
-        ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
         IDWriteTextLayout_Release(layout);
     }
     else
@@ -3448,28 +3832,28 @@ static void test_SetDrawingEffect(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     /* string with combining mark */
     hr = IDWriteFactory_CreateTextLayout(factory, strW, 4, format, 500.0, 1000.0, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* set effect past the end of text */
     r.startPosition = 100;
     r.length = 10;
     hr = IDWriteTextLayout_SetDrawingEffect(layout, effect, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     r.startPosition = r.length = 0;
     hr = IDWriteTextLayout_GetDrawingEffect(layout, 101, &unk, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 100 && r.length == 10, "got %u, %u\n", r.startPosition, r.length);
     IUnknown_Release(unk);
 
     r.startPosition = r.length = 0;
     unk = (void*)0xdeadbeef;
     hr = IDWriteTextLayout_GetDrawingEffect(layout, 1000, &unk, &r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(r.startPosition == 110 && r.length == ~0u-110, "got %u, %u\n", r.startPosition, r.length);
     ok(unk == NULL, "got %p\n", unk);
 
@@ -3477,84 +3861,84 @@ static void test_SetDrawingEffect(void)
     r.startPosition = 0;
     r.length = 2;
     hr = IDWriteTextLayout_SetDrawingEffect(layout, effect, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, NULL, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draweffect_seq, "effect draw test", TRUE);
     IDWriteTextLayout_Release(layout);
 
     /* simple string */
     hr = IDWriteFactory_CreateTextLayout(factory, L"aecd", 4, format, 500.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     r.startPosition = 0;
     r.length = 2;
     hr = IDWriteTextLayout_SetDrawingEffect(layout, effect, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, NULL, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draweffect2_seq, "effect draw test 2", FALSE);
     IDWriteTextLayout_Release(layout);
 
     /* Inline object - effect set for same range */
     hr = IDWriteFactory_CreateEllipsisTrimmingSign(factory, format, &sign);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"aecd", 4, format, 500.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     r.startPosition = 0;
     r.length = 4;
     hr = IDWriteTextLayout_SetInlineObject(layout, sign, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetDrawingEffect(layout, effect, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, NULL, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draweffect3_seq, "effect draw test 3", FALSE);
 
     /* now set effect somewhere inside a range replaced by inline object */
     hr = IDWriteTextLayout_SetDrawingEffect(layout, NULL, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     r.startPosition = 1;
     r.length = 1;
     hr = IDWriteTextLayout_SetDrawingEffect(layout, effect, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* no effect is reported in this case */
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, NULL, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draweffect4_seq, "effect draw test 4", FALSE);
 
     r.startPosition = 0;
     r.length = 4;
     hr = IDWriteTextLayout_SetDrawingEffect(layout, NULL, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     r.startPosition = 0;
     r.length = 1;
     hr = IDWriteTextLayout_SetDrawingEffect(layout, effect, r);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* first range position is all that matters for inline ranges */
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, NULL, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, draweffect3_seq, "effect draw test 5", FALSE);
 
     IDWriteTextLayout_Release(layout);
 
     ref = IUnknown_Release(effect);
-    ok(ref == 0, "Unexpected effect refcount %u\n", ref);
+    ok(ref == 0, "Unexpected effect refcount %lu\n", ref);
     IDWriteInlineObject_Release(sign);
     IDWriteTextFormat_Release(format);
     IDWriteFactory_Release(factory);
@@ -3567,11 +3951,11 @@ static BOOL get_enus_string(IDWriteLocalizedStrings *strings, WCHAR *buff, UINT3
     HRESULT hr;
 
     hr = IDWriteLocalizedStrings_FindLocaleName(strings, L"en-us", &index, &exists);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     if (exists) {
         hr = IDWriteLocalizedStrings_GetString(strings, index, buff, size);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     }
     else
         *buff = 0;
@@ -3601,19 +3985,19 @@ static void test_GetLineMetrics(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 2048.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, strW, 5, format, 30000.0, 1000.0, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_GetLineMetrics(layout, metrics, 0, &count);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "got 0x%08x\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got count %u\n", count);
 
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetLineMetrics(layout, metrics, 1, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(metrics[0].length == 5, "got %u\n", metrics[0].length);
     ok(metrics[0].trailingWhitespaceLength == 1, "got %u\n", metrics[0].trailingWhitespaceLength);
 
@@ -3625,7 +4009,7 @@ static void test_GetLineMetrics(void)
 
     /* Test line height and baseline calculation */
     hr = IDWriteFactory_GetSystemFontCollection(factory, &syscollection, FALSE);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     familycount = IDWriteFontCollection_GetFontFamilyCount(syscollection);
 
     for (i = 0; i < familycount; i++) {
@@ -3638,17 +4022,17 @@ static void test_GetLineMetrics(void)
         layout = NULL;
 
         hr = IDWriteFontCollection_GetFontFamily(syscollection, i, &family);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFontFamily_GetFirstMatchingFont(family, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
             DWRITE_FONT_STYLE_NORMAL, &font);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFont_CreateFontFace(font, &fontface);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFontFamily_GetFamilyNames(family, &names);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         if (!(exists = get_enus_string(names, nameW, ARRAY_SIZE(nameW)))) {
             IDWriteLocalFontFileLoader *localloader;
@@ -3660,20 +4044,20 @@ static void test_GetLineMetrics(void)
 
             count = 1;
             hr = IDWriteFontFace_GetFiles(fontface, &count, &file);
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
             hr = IDWriteFontFile_GetLoader(file, &loader);
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
             hr = IDWriteFontFileLoader_QueryInterface(loader, &IID_IDWriteLocalFontFileLoader, (void**)&localloader);
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
             IDWriteFontFileLoader_Release(loader);
 
             hr = IDWriteFontFile_GetReferenceKey(file, &key, &keysize);
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
             hr = IDWriteLocalFontFileLoader_GetFilePathFromKey(localloader, key, keysize, nameW, ARRAY_SIZE(nameW));
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
             skip("Failed to get English family name, font file %s\n", wine_dbgstr_w(nameW));
 
@@ -3690,15 +4074,15 @@ static void test_GetLineMetrics(void)
         IDWriteFontFace_GetMetrics(fontface, &fontmetrics);
         hr = IDWriteFactory_CreateTextFormat(factory, nameW, NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL, fontmetrics.designUnitsPerEm, L"en-us", &format);
-        ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
         hr = IDWriteFactory_CreateTextLayout(factory, L"", 1, format, 30000.0f, 100.0f, &layout);
-        ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
         memset(metrics, 0, sizeof(metrics));
         count = 0;
         hr = IDWriteTextLayout_GetLineMetrics(layout, metrics, ARRAY_SIZE(metrics), &count);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         ok(count == 1, "got %u\n", count);
 
         ok(metrics[0].baseline == fontmetrics.ascent + fontmetrics.lineGap, "%s: got %.2f, expected %d, "
@@ -3720,19 +4104,19 @@ static void test_GetLineMetrics(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 2048.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     fontface = get_fontface_from_format(format);
     ok(fontface != NULL, "got %p\n", fontface);
 
     /* force 2 lines */
     hr = IDWriteFactory_CreateTextLayout(factory, str2W, 5, format, 10000.0, 1000.0, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     memset(metrics, 0, sizeof(metrics));
     count = 0;
     hr = IDWriteTextLayout_GetLineMetrics(layout, metrics, ARRAY_SIZE(metrics), &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 2, "got %u\n", count);
     /* baseline is relative to a line, and is not accumulated */
     ok(metrics[0].baseline == metrics[1].baseline, "got %.2f, %.2f\n", metrics[0].baseline,
@@ -3744,15 +4128,15 @@ static void test_GetLineMetrics(void)
     /* line breaks */
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, str3W, 10, format, 100.0, 300.0, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     memset(metrics, 0xcc, sizeof(metrics));
     count = 0;
     hr = IDWriteTextLayout_GetLineMetrics(layout, metrics, ARRAY_SIZE(metrics), &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 6, "got %u\n", count);
 
     ok(metrics[0].length == 2, "got %u\n", metrics[0].length);
@@ -3780,12 +4164,12 @@ static void test_GetLineMetrics(void)
 
     /* empty text layout */
     hr = IDWriteFactory_CreateTextLayout(factory, strW, 0, format, 100.0f, 300.0f, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetLineMetrics(layout, metrics, 1, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
     ok(metrics[0].length == 0, "got %u\n", metrics[0].length);
     ok(metrics[0].trailingWhitespaceLength == 0, "got %u\n", metrics[0].trailingWhitespaceLength);
@@ -3798,28 +4182,28 @@ static void test_GetLineMetrics(void)
     range.startPosition = 0;
     range.length = 1;
     hr = IDWriteTextLayout_SetFontSize(layout, 80.0f, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_GetLineMetrics(layout, metrics + 1, 1, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
     ok(metrics[1].height > metrics[0].height, "got %f\n", metrics[1].height);
     ok(metrics[1].baseline > metrics[0].baseline, "got %f\n", metrics[1].baseline);
 
     /* revert font size back to format value, set different size for position 1 */
     hr = IDWriteTextLayout_SetFontSize(layout, 12.0f, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 1;
     range.length = 1;
     hr = IDWriteTextLayout_SetFontSize(layout, 80.0f, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     memset(metrics + 1, 0, sizeof(*metrics));
     count = 0;
     hr = IDWriteTextLayout_GetLineMetrics(layout, metrics + 1, 1, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
     ok(metrics[1].height == metrics[0].height, "got %f\n", metrics[1].height);
     ok(metrics[1].baseline == metrics[0].baseline, "got %f\n", metrics[1].baseline);
@@ -3828,12 +4212,12 @@ static void test_GetLineMetrics(void)
 
     /* text is "a\r" */
     hr = IDWriteFactory_CreateTextLayout(factory, str4W, 2, format, 100.0f, 300.0f, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     memset(metrics, 0, sizeof(metrics));
     hr = IDWriteTextLayout_GetLineMetrics(layout, metrics, ARRAY_SIZE(metrics), &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 2, "got %u\n", count);
     ok(metrics[0].length == 2, "got %u\n", metrics[0].length);
     ok(metrics[0].newlineLength == 1, "got %u\n", metrics[0].newlineLength);
@@ -3847,29 +4231,29 @@ static void test_GetLineMetrics(void)
     range.startPosition = 1;
     range.length = 1;
     hr = IDWriteTextLayout_SetFontSize(layout, 80.0f, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_GetLineMetrics(layout, metrics + 2, 2, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 2, "got %u\n", count);
     ok(metrics[3].height > metrics[1].height, "got %f, old %f\n", metrics[3].height, metrics[1].height);
     ok(metrics[3].baseline > metrics[1].baseline, "got %f, old %f\n", metrics[3].baseline, metrics[1].baseline);
 
     /* revert to original format */
     hr = IDWriteTextLayout_SetFontSize(layout, 12.0f, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     hr = IDWriteTextLayout_GetLineMetrics(layout, metrics + 2, 2, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 2, "got %u\n", count);
     ok(metrics[3].height == metrics[1].height, "got %f, old %f\n", metrics[3].height, metrics[1].height);
     ok(metrics[3].baseline == metrics[1].baseline, "got %f, old %f\n", metrics[3].baseline, metrics[1].baseline);
 
     /* Switch to uniform spacing */
     hr = IDWriteTextLayout_SetLineSpacing(layout, DWRITE_LINE_SPACING_METHOD_UNIFORM, 456.0f, 123.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_GetLineMetrics(layout, metrics, ARRAY_SIZE(metrics), &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 2, "got %u\n", count);
 
     for (i = 0; i < count; i++) {
@@ -3883,18 +4267,18 @@ static void test_GetLineMetrics(void)
     hr = IDWriteTextFormat_SetLineSpacing(format, DWRITE_LINE_SPACING_METHOD_PROPORTIONAL, 2.0f, 4.0f);
     if (hr == S_OK) {
         hr = IDWriteFactory_CreateTextLayout(factory, str4W, 1, format, 100.0f, 300.0f, &layout);
-        ok(hr == S_OK, "Failed to create layout, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to create layout, hr %#lx.\n", hr);
 
         hr = IDWriteTextLayout_GetLineMetrics(layout, metrics, ARRAY_SIZE(metrics), &count);
-        ok(hr == S_OK, "Failed to get line metrics, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to get line metrics, hr %#lx.\n", hr);
         ok(count == 1, "Unexpected line count %u\n", count);
 
         /* Back to default mode. */
         hr = IDWriteTextLayout_SetLineSpacing(layout, DWRITE_LINE_SPACING_METHOD_DEFAULT, 0.0f, 0.0f);
-        ok(hr == S_OK, "Failed to set spacing method, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to set spacing method, hr %#lx.\n", hr);
 
         hr = IDWriteTextLayout_GetLineMetrics(layout, metrics + 1, 1, &count);
-        ok(hr == S_OK, "Failed to get line metrics, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to get line metrics, hr %#lx.\n", hr);
         ok(count == 1, "Unexpected line count %u\n", count);
 
         /* Proportional spacing applies multipliers to default, content based spacing. */
@@ -3932,22 +4316,22 @@ static void test_SetTextAlignment(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     v = IDWriteTextFormat_GetTextAlignment(format);
     ok(v == DWRITE_TEXT_ALIGNMENT_LEADING, "got %d\n", v);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, format, 500.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     v = IDWriteTextLayout_GetTextAlignment(layout);
     ok(v == DWRITE_TEXT_ALIGNMENT_LEADING, "got %d\n", v);
 
     hr = IDWriteTextLayout_SetTextAlignment(layout, DWRITE_TEXT_ALIGNMENT_TRAILING);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetTextAlignment(layout, DWRITE_TEXT_ALIGNMENT_TRAILING);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     v = IDWriteTextFormat_GetTextAlignment(format);
     ok(v == DWRITE_TEXT_ALIGNMENT_LEADING, "got %d\n", v);
@@ -3958,7 +4342,7 @@ static void test_SetTextAlignment(void)
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextFormat1, (void**)&format1);
     if (hr == S_OK) {
         hr = IDWriteTextFormat1_SetTextAlignment(format1, DWRITE_TEXT_ALIGNMENT_CENTER);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         v = IDWriteTextFormat_GetTextAlignment(format);
         ok(v == DWRITE_TEXT_ALIGNMENT_LEADING, "got %d\n", v);
@@ -3980,17 +4364,17 @@ static void test_SetTextAlignment(void)
         FLOAT text_width;
 
         hr = IDWriteTextFormat_SetTextAlignment(format, DWRITE_TEXT_ALIGNMENT_LEADING);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFactory_CreateTextLayout(factory, stringsW[i], lstrlenW(stringsW[i]), format, 500.0f, 100.0f, &layout);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteTextLayout_SetWordWrapping(layout, DWRITE_WORD_WRAPPING_NO_WRAP);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         count = 0;
         hr = IDWriteTextLayout_GetClusterMetrics(layout, clusters, ARRAY_SIZE(clusters), &count);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         if (stringsW[i][0])
             ok(count > 0, "got %u\n", count);
         else
@@ -4002,10 +4386,10 @@ static void test_SetTextAlignment(void)
 
         /* maxwidth is 500, leading alignment */
         hr = IDWriteTextLayout_SetTextAlignment(layout, DWRITE_TEXT_ALIGNMENT_LEADING);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         ok(metrics.left == 0.0f, "got %.2f\n", metrics.left);
         ok(metrics.width == text_width, "got %.2f\n", metrics.width);
@@ -4014,10 +4398,10 @@ static void test_SetTextAlignment(void)
 
         /* maxwidth is 500, trailing alignment */
         hr = IDWriteTextLayout_SetTextAlignment(layout, DWRITE_TEXT_ALIGNMENT_TRAILING);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         ok(metrics.left == metrics.layoutWidth - metrics.width, "got %.2f\n", metrics.left);
         ok(metrics.width == text_width, "got %.2f\n", metrics.width);
@@ -4027,13 +4411,13 @@ static void test_SetTextAlignment(void)
 
         /* initially created with trailing alignment */
         hr = IDWriteTextFormat_SetTextAlignment(format, DWRITE_TEXT_ALIGNMENT_TRAILING);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFactory_CreateTextLayout(factory, stringsW[i], lstrlenW(stringsW[i]), format, 500.0f, 100.0f, &layout);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         ok(metrics.left == metrics.layoutWidth - metrics.width, "got %.2f\n", metrics.left);
         ok(metrics.width == text_width, "got %.2f\n", metrics.width);
@@ -4044,12 +4428,12 @@ static void test_SetTextAlignment(void)
         if (stringsW[i][0]) {
             /* max width less than total run width, trailing alignment */
             hr = IDWriteTextFormat_SetWordWrapping(format, DWRITE_WORD_WRAPPING_NO_WRAP);
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
             hr = IDWriteFactory_CreateTextLayout(factory, stringsW[i], lstrlenW(stringsW[i]), format, clusters[0].width, 100.0f, &layout);
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
             hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
             ok(metrics.left == metrics.layoutWidth - metrics.width, "got %.2f\n", metrics.left);
             ok(metrics.width == text_width, "got %.2f\n", metrics.width);
             ok(metrics.lineCount == 1, "got %d\n", metrics.lineCount);
@@ -4058,13 +4442,13 @@ static void test_SetTextAlignment(void)
 
         /* maxwidth is 500, centered */
         hr = IDWriteTextFormat_SetTextAlignment(format, DWRITE_TEXT_ALIGNMENT_CENTER);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFactory_CreateTextLayout(factory, stringsW[i], lstrlenW(stringsW[i]), format, 500.0f, 100.0f, &layout);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         ok(metrics.left == (metrics.layoutWidth - metrics.width) / 2.0f, "got %.2f\n", metrics.left);
         ok(metrics.width == text_width, "got %.2f\n", metrics.width);
         ok(metrics.lineCount == 1, "got %d\n", metrics.lineCount);
@@ -4091,22 +4475,22 @@ static void test_SetParagraphAlignment(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     v = IDWriteTextFormat_GetParagraphAlignment(format);
     ok(v == DWRITE_PARAGRAPH_ALIGNMENT_NEAR, "got %d\n", v);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, format, 500.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     v = IDWriteTextLayout_GetParagraphAlignment(layout);
     ok(v == DWRITE_PARAGRAPH_ALIGNMENT_NEAR, "got %d\n", v);
 
     hr = IDWriteTextLayout_SetParagraphAlignment(layout, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetParagraphAlignment(layout, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     v = IDWriteTextFormat_GetParagraphAlignment(format);
     ok(v == DWRITE_PARAGRAPH_ALIGNMENT_NEAR, "got %d\n", v);
@@ -4115,22 +4499,22 @@ static void test_SetParagraphAlignment(void)
     ok(v == DWRITE_PARAGRAPH_ALIGNMENT_FAR, "got %d\n", v);
 
     hr = IDWriteTextLayout_SetParagraphAlignment(layout, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     v = IDWriteTextLayout_GetParagraphAlignment(layout);
     ok(v == DWRITE_PARAGRAPH_ALIGNMENT_CENTER, "got %d\n", v);
 
     count = 0;
     hr = IDWriteTextLayout_GetLineMetrics(layout, lines, 1, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
 
     /* maxheight is 100, near alignment */
     hr = IDWriteTextLayout_SetParagraphAlignment(layout, DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     ok(metrics.top == 0.0, "got %.2f\n", metrics.top);
     ok(metrics.height == lines[0].height, "got %.2f\n", metrics.height);
@@ -4139,10 +4523,10 @@ static void test_SetParagraphAlignment(void)
 
     /* maxwidth is 100, far alignment */
     hr = IDWriteTextLayout_SetParagraphAlignment(layout, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     ok(metrics.top == metrics.layoutHeight - metrics.height, "got %.2f\n", metrics.top);
     ok(metrics.height == lines[0].height, "got %.2f\n", metrics.height);
@@ -4152,13 +4536,13 @@ static void test_SetParagraphAlignment(void)
 
     /* initially created with centered alignment */
     hr = IDWriteTextFormat_SetParagraphAlignment(format, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, format, 500.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     ok(metrics.top == (metrics.layoutHeight - lines[0].height) / 2, "got %.2f\n", metrics.top);
     ok(metrics.height == lines[0].height, "got %.2f\n", metrics.height);
@@ -4185,13 +4569,13 @@ static void test_SetReadingDirection(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     v = IDWriteTextFormat_GetReadingDirection(format);
     ok(v == DWRITE_READING_DIRECTION_LEFT_TO_RIGHT, "got %d\n", v);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, format, 500.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     v = IDWriteTextLayout_GetReadingDirection(layout);
     ok(v == DWRITE_READING_DIRECTION_LEFT_TO_RIGHT, "got %d\n", v);
@@ -4200,21 +4584,21 @@ static void test_SetReadingDirection(void)
     ok(v == DWRITE_READING_DIRECTION_LEFT_TO_RIGHT, "got %d\n", v);
 
     hr = IDWriteTextLayout_SetReadingDirection(layout, DWRITE_READING_DIRECTION_RIGHT_TO_LEFT);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_GetLineMetrics(layout, lines, 1, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
 
     count = 0;
     hr = IDWriteTextLayout_GetClusterMetrics(layout, clusters, 1, &count);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 1, "got %u\n", count);
 
     /* leading alignment, RTL */
     hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     ok(metrics.left == metrics.layoutWidth - clusters[0].width, "got %.2f\n", metrics.left);
     ok(metrics.top == 0.0, "got %.2f\n", metrics.top);
@@ -4226,10 +4610,10 @@ static void test_SetReadingDirection(void)
 
     /* trailing alignment, RTL */
     hr = IDWriteTextLayout_SetTextAlignment(layout, DWRITE_TEXT_ALIGNMENT_TRAILING);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     ok(metrics.left == 0.0, "got %.2f\n", metrics.left);
     ok(metrics.top == 0.0, "got %.2f\n", metrics.top);
@@ -4241,10 +4625,10 @@ static void test_SetReadingDirection(void)
 
     /* centered alignment, RTL */
     hr = IDWriteTextLayout_SetTextAlignment(layout, DWRITE_TEXT_ALIGNMENT_CENTER);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     ok(metrics.left == (metrics.layoutWidth - clusters[0].width) / 2.0, "got %.2f\n", metrics.left);
     ok(metrics.top == 0.0, "got %.2f\n", metrics.top);
@@ -4372,13 +4756,13 @@ static void test_pixelsnapping(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     fontface = get_fontface_from_format(format);
     IDWriteFontFace_GetMetrics(fontface, &metrics);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, format, 500.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     /* disabled snapping */
     ctxt.snapping_disabled = TRUE;
@@ -4390,7 +4774,7 @@ static void test_pixelsnapping(void)
     originX = 0.1;
 
     hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, originX, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     baseline = get_scaled_font_metric(metrics.ascent, 12.0, &metrics);
     ok(ctxt.originX == originX, "got %f, originX %f\n", ctxt.originX, originX);
@@ -4410,7 +4794,7 @@ static void test_pixelsnapping(void)
 
         expectedY = snap_coord(&ctxt.m, ctxt.ppdip, baseline);
         hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, originX, 0.0);
-        ok(hr == S_OK, "%d: got 0x%08x\n", i, hr);
+        ok(hr == S_OK, "%d: unexpected hr %#lx.\n", i, hr);
         ok(ctxt.originX == originX, "%d: got %f, originX %f\n", i, ctxt.originX, originX);
         ok(float_eq(ctxt.originY, expectedY), "%d: got %f, expected %f, baseline %f\n",
             i, ctxt.originY, expectedY, baseline);
@@ -4420,11 +4804,11 @@ static void test_pixelsnapping(void)
         {
             hr = IDWriteFactory_CreateGdiCompatibleTextLayout(factory, L"a", 1, format, 500.0f, 100.0f,
                     1.0f, &compattransforms[j], FALSE, &layout2);
-            ok(hr == S_OK, "%d: failed to create text layout, hr %#x.\n", i, hr);
+            ok(hr == S_OK, "%d: failed to create text layout, hr %#lx.\n", i, hr);
 
             expectedY = snap_coord(&ctxt.m, ctxt.ppdip, baseline);
             hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, originX, 0.0);
-            ok(hr == S_OK, "%d: got 0x%08x\n", i, hr);
+            ok(hr == S_OK, "%d: unexpected hr %#lx.\n", i, hr);
             ok(ctxt.originX == originX, "%d: got %f, originX %f\n", i, ctxt.originX, originX);
             ok(float_eq(ctxt.originY, expectedY), "%d: got %f, expected %f, baseline %f\n",
                 i, ctxt.originY, expectedY, baseline);
@@ -4454,41 +4838,41 @@ static void test_SetWordWrapping(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     v = IDWriteTextFormat_GetWordWrapping(format);
     ok(v == DWRITE_WORD_WRAPPING_WRAP, "got %d\n", v);
 
     hr = IDWriteFactory_CreateTextLayout(factory, strW, ARRAY_SIZE(strW), format, 10.0f, 100.0f, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     v = IDWriteTextLayout_GetWordWrapping(layout);
     ok(v == DWRITE_WORD_WRAPPING_WRAP, "got %d\n", v);
 
     hr = IDWriteTextLayout_SetWordWrapping(layout, DWRITE_WORD_WRAPPING_NO_WRAP);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetWordWrapping(layout, DWRITE_WORD_WRAPPING_NO_WRAP);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     v = IDWriteTextFormat_GetWordWrapping(format);
     ok(v == DWRITE_WORD_WRAPPING_WRAP, "got %d\n", v);
 
     /* disable wrapping, text has explicit newline */
     hr = IDWriteTextLayout_SetWordWrapping(layout, DWRITE_WORD_WRAPPING_NO_WRAP);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_GetLineMetrics(layout, NULL, 0, &count);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "got 0x%08x\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
     ok(count == 2, "got %u\n", count);
 
     hr = IDWriteTextLayout_SetWordWrapping(layout, DWRITE_WORD_WRAPPING_WRAP);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_GetLineMetrics(layout, NULL, 0, &count);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "got 0x%08x\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
     ok(count > 2, "got %u\n", count);
 
     IDWriteTextLayout_Release(layout);
@@ -4537,13 +4921,13 @@ static HRESULT WINAPI fontcollection_GetFontFamily(IDWriteFontCollection *iface,
         HRESULT hr;
 
         hr = IDWriteFactory_GetSystemFontCollection(factory, &syscollection, FALSE);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFontCollection_FindFamilyName(syscollection, L"Tahoma", &index, &exists);
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFontCollection_GetFontFamily(syscollection, index, family);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         IDWriteFontCollection_Release(syscollection);
         IDWriteFactory_Release(factory);
@@ -4583,32 +4967,86 @@ static const IDWriteFontCollectionVtbl fallbackcollectionvtbl = {
 
 static IDWriteFontCollection fallbackcollection = { &fallbackcollectionvtbl };
 
+static void get_font_name(IDWriteFont *font, WCHAR *name, UINT32 size)
+{
+    IDWriteLocalizedStrings *names;
+    IDWriteFontFamily *family;
+    UINT32 index;
+    BOOL exists;
+    HRESULT hr;
+
+    hr = IDWriteFont_GetFontFamily(font, &family);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = IDWriteFontFamily_GetFamilyNames(family, &names);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = IDWriteLocalizedStrings_FindLocaleName(names, L"en-us", &index, &exists);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(index != UINT_MAX && exists, "Name was not found.\n");
+    hr = IDWriteLocalizedStrings_GetString(names, index, name, size);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    IDWriteLocalizedStrings_Release(names);
+    IDWriteFontFamily_Release(family);
+}
+
+static void utf32_to_utf16(UINT32 C, WCHAR **ptr)
+{
+    if (C > 0xffff)
+    {
+        WCHAR X = (WCHAR)C;
+        UINT32 U = (C >> 16) & ((1 << 5) - 1);
+        WCHAR W = (WCHAR)U - 1;
+
+        **ptr = 0xD800 | (W << 6) | X >> 10; *ptr += 1;
+        **ptr = (WCHAR)(0xDC00 | (X & ((1 << 10) - 1))); *ptr += 1;
+    }
+    else
+    {
+        **ptr = C; *ptr += 1;
+    }
+}
+
 static void test_MapCharacters(void)
 {
     static const WCHAR str2W[] = {'a',0x3058,'b',0};
+    static const UINT32 variation_selectors[] =
+    {
+        0x180b, 0x180c, 0x180d,
+
+        0xfe00, 0xfe01, 0xfe02, 0xfe03, 0xfe04, 0xfe05, 0xfe06, 0xfe07,
+        0xfe08, 0xfe09, 0xfe0a, 0xfe0b, 0xfe0c, 0xfe0d, 0xfe0e, 0xfe0f,
+
+        0xe0100, 0xe0121, 0xe01ef,
+    };
+    IDWriteFontCollectionLoader *resource_collection_loader;
+    IDWriteFontFileLoader *resource_loader;
+    IDWriteFontCollection *collection;
     IDWriteLocalizedStrings *strings;
+    UINT32 mappedlength, vs_length;
     IDWriteFontFallback *fallback;
     IDWriteFactory2 *factory2;
-    IDWriteFactory *factory;
-    UINT32 mappedlength;
     IDWriteFont *font;
     WCHAR buffW[50];
+    WCHAR name[64];
+    unsigned int i;
+    HRSRC hrsrc;
     BOOL exists;
     FLOAT scale;
+    WCHAR *ptr;
     HRESULT hr;
 
-    factory = create_factory();
-
-    hr = IDWriteFactory_QueryInterface(factory, &IID_IDWriteFactory2, (void**)&factory2);
-    IDWriteFactory_Release(factory);
-    if (hr != S_OK) {
-        win_skip("MapCharacters() is not supported\n");
+    factory2 = create_factory_iid(&IID_IDWriteFactory2);
+    if (!factory2)
+    {
+        win_skip("MapCharacters() is not supported.\n");
         return;
     }
 
     fallback = NULL;
     hr = IDWriteFactory2_GetSystemFontFallback(factory2, &fallback);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(fallback != NULL, "got %p\n", fallback);
 
     mappedlength = 1;
@@ -4616,7 +5054,7 @@ static void test_MapCharacters(void)
     font = (void*)0xdeadbeef;
     hr = IDWriteFontFallback_MapCharacters(fallback, NULL, 0, 0, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
     ok(mappedlength == 0, "got %u\n", mappedlength);
     ok(scale == 1.0f, "got %f\n", scale);
     ok(font == NULL, "got %p\n", font);
@@ -4628,7 +5066,7 @@ static void test_MapCharacters(void)
     font = (void*)0xdeadbeef;
     hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, 0, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(mappedlength == 0, "got %u\n", mappedlength);
     ok(scale == 1.0f, "got %f\n", scale);
     ok(font == NULL, "got %p\n", font);
@@ -4639,16 +5077,13 @@ static void test_MapCharacters(void)
     font = NULL;
     hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, 1, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-todo_wine {
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(mappedlength == 1, "got %u\n", mappedlength);
-}
     ok(scale == 1.0f, "got %f\n", scale);
-    todo_wine
     ok(font != NULL, "got %p\n", font);
-if (font) {
-    IDWriteFont_Release(font);
-}
+    if (font)
+        IDWriteFont_Release(font);
+
     /* same Latin text, full length */
     g_source = L"abc";
     mappedlength = 0;
@@ -4656,16 +5091,14 @@ if (font) {
     font = NULL;
     hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, 3, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-todo_wine {
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(mappedlength == 3, "got %u\n", mappedlength);
-}
+
     ok(scale == 1.0f, "got %f\n", scale);
-    todo_wine
     ok(font != NULL, "got %p\n", font);
-if (font) {
-    IDWriteFont_Release(font);
-}
+    if (font)
+        IDWriteFont_Release(font);
+
     /* string 'a\x3058b' */
     g_source = str2W;
     mappedlength = 0;
@@ -4673,32 +5106,26 @@ if (font) {
     font = NULL;
     hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, 3, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-todo_wine {
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(mappedlength == 1, "got %u\n", mappedlength);
-}
     ok(scale == 1.0f, "got %f\n", scale);
-    todo_wine
     ok(font != NULL, "got %p\n", font);
-if (font) {
-    IDWriteFont_Release(font);
-}
+    if (font)
+        IDWriteFont_Release(font);
+
     g_source = str2W;
     mappedlength = 0;
     scale = 0.0f;
     font = NULL;
     hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 1, 2, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-todo_wine {
-    ok(hr == S_OK, "got 0x%08x\n", hr);
-    ok(mappedlength == 1, "got %u\n", mappedlength);
-}
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(mappedlength == 1, "Unexpected length %u.\n", mappedlength);
     ok(scale == 1.0f, "got %f\n", scale);
-    todo_wine
     ok(font != NULL, "got %p\n", font);
-if (font) {
-    IDWriteFont_Release(font);
-}
+    if (font)
+        IDWriteFont_Release(font);
+
     /* Try with explicit collection, Tahoma will be forced. */
     /* 1. Latin part */
     g_source = str2W;
@@ -4707,16 +5134,16 @@ if (font) {
     font = NULL;
     hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, 3, &fallbackcollection, g_blahfontW, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(mappedlength == 1, "got %u\n", mappedlength);
     ok(scale == 1.0f, "got %f\n", scale);
     ok(font != NULL, "got %p\n", font);
 
     exists = FALSE;
     hr = IDWriteFont_GetInformationalStrings(font, DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES, &strings, &exists);
-    ok(hr == S_OK && exists, "got 0x%08x, exists %d\n", hr, exists);
+    ok(hr == S_OK && exists, "Unexpected hr %#lx, exists %d.\n", hr, exists);
     hr = IDWriteLocalizedStrings_GetString(strings, 0, buffW, ARRAY_SIZE(buffW));
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(!lstrcmpW(buffW, L"Tahoma"), "Unexpected string %s.\n", wine_dbgstr_w(buffW));
     IDWriteLocalizedStrings_Release(strings);
     IDWriteFont_Release(font);
@@ -4728,23 +5155,205 @@ if (font) {
     font = NULL;
     hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 1, 1, &fallbackcollection, g_blahfontW, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(mappedlength == 1, "got %u\n", mappedlength);
     ok(scale == 1.0f, "got %f\n", scale);
     ok(font != NULL, "got %p\n", font);
 
-    exists = FALSE;
-    hr = IDWriteFont_GetInformationalStrings(font, DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES, &strings, &exists);
-    ok(hr == S_OK && exists, "got 0x%08x, exists %d\n", hr, exists);
-    hr = IDWriteLocalizedStrings_GetString(strings, 0, buffW, ARRAY_SIZE(buffW));
-    ok(hr == S_OK, "got 0x%08x\n", hr);
-    todo_wine
-    ok(lstrcmpW(buffW, L"Tahoma"), "Unexpected string %s.\n", wine_dbgstr_w(buffW));
-    IDWriteLocalizedStrings_Release(strings);
-    IDWriteFont_Release(font);
+    if (font)
+    {
+        exists = FALSE;
+        hr = IDWriteFont_GetInformationalStrings(font, DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES, &strings, &exists);
+        ok(hr == S_OK && exists, "Unexpected hr %#lx, exists %d.\n", hr, exists);
+        hr = IDWriteLocalizedStrings_GetString(strings, 0, buffW, ARRAY_SIZE(buffW));
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        ok(lstrcmpW(buffW, L"Tahoma"), "Unexpected string %s.\n", wine_dbgstr_w(buffW));
+        IDWriteLocalizedStrings_Release(strings);
+        IDWriteFont_Release(font);
+    }
+
+    /* Control characters. The test is using a bundled font that does not support them. */
+    resource_loader = create_resource_file_loader();
+    resource_collection_loader = create_resource_collection_loader(resource_loader);
+
+    hr = IDWriteFactory2_RegisterFontFileLoader(factory2, resource_loader);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IDWriteFactory2_RegisterFontCollectionLoader(factory2, resource_collection_loader);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hrsrc = FindResourceA(GetModuleHandleA(NULL), (LPCSTR)MAKEINTRESOURCE(1), (LPCSTR)RT_RCDATA);
+    ok(!!hrsrc, "Failed to find font resource\n");
+
+    hr = IDWriteFactory2_CreateCustomFontCollection(factory2, resource_collection_loader, &hrsrc, sizeof(hrsrc), &collection);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n",hr);
+
+    /* Variation selectors are skipped. */
+    for (i = 0; i < ARRAY_SIZE(variation_selectors); ++i)
+    {
+        g_source = buffW;
+
+        vs_length = variation_selectors[i] > 0xffff ? 2 : 1;
+
+        winetest_push_context("Test %#x", variation_selectors[i]);
+
+        /* Selector within supported text. */
+
+        font = NULL;
+        ptr = buffW;
+
+        *ptr = 'A'; ptr++;
+        utf32_to_utf16(variation_selectors[i], &ptr);
+        *ptr = 'A';
+
+        hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, vs_length + 1, collection, L"wine_test",
+                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        ok(mappedlength == vs_length + 1, "Unexpected mapped length %u.\n", mappedlength);
+        get_font_name(font, name, ARRAY_SIZE(name));
+        ok(!wcscmp(name, L"wine_test"), "Unexpected font %s.\n", debugstr_w(name));
+        IDWriteFont_Release(font);
+
+        /* Only selectors. */
+        font = NULL;
+        ptr = buffW;
+        utf32_to_utf16(variation_selectors[i], &ptr);
+        hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, vs_length, collection, L"wine_test",
+                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        ok(mappedlength == vs_length, "Unexpected mapped length %u.\n", mappedlength);
+        if (variation_selectors[i] < 0xfe00)
+        {
+            /* Mongolian selectors belong to Mongolian range, and are mapped to a specific font. */
+            if (font) IDWriteFont_Release(font);
+        }
+        else
+        {
+            /* Variation selectors do not have a fallback mapping on their own. */
+            ok(!font, "Unexpected font instance.\n");
+        }
+
+        /* Leading selector. Only use VS-1..16 so we don't hit a valid mapping range. */
+        if (variation_selectors[i] >= 0xfe00)
+        {
+            ptr = buffW;
+            utf32_to_utf16(variation_selectors[i], &ptr);
+            utf32_to_utf16(variation_selectors[i], &ptr);
+            *ptr = 'A';
+
+            font = (void *)0xdeadbeef;
+            hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, vs_length * 2 + 1, collection, L"wine_test",
+                    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+            ok(mappedlength == vs_length * 2, "Unexpected mapped length %u.\n", mappedlength);
+            ok(!font, "Unexpected font instance.\n");
+
+            hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, vs_length * 2 + 1, NULL, NULL,
+                    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+            ok(mappedlength == vs_length * 2, "Unexpected mapped length %u.\n", mappedlength);
+            ok(!font, "Unexpected font instance.\n");
+        }
+
+        /* Trailing selector. */
+        ptr = buffW;
+        *ptr = 'A'; ptr++;
+        utf32_to_utf16(variation_selectors[i], &ptr);
+
+        font = (void *)0xdeadbeef;
+        hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, vs_length + 1, collection, L"wine_test",
+                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        ok(mappedlength == vs_length + 1, "Unexpected mapped length %u.\n", mappedlength);
+        get_font_name(font, name, ARRAY_SIZE(name));
+        ok(!wcscmp(name, L"wine_test"), "Unexpected font %s.\n", debugstr_w(name));
+        IDWriteFont_Release(font);
+
+        winetest_pop_context();
+    }
+
+    IDWriteFontCollection_Release(collection);
+
+    hr = IDWriteFactory2_UnregisterFontCollectionLoader(factory2, resource_collection_loader);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IDWriteFactory2_UnregisterFontFileLoader(factory2, resource_loader);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    IDWriteFontCollectionLoader_Release(resource_collection_loader);
+    IDWriteFontFileLoader_Release(resource_loader);
 
     IDWriteFontFallback_Release(fallback);
     IDWriteFactory2_Release(factory2);
+}
+
+static BOOL is_font_name_match(const WCHAR *name, const WCHAR *list)
+{
+     WCHAR *p, str[256];
+
+     wcscpy(str, list);
+     for (p = wcstok(str, L";"); p; p = wcstok(NULL, L";"))
+     {
+         if (!wcscmp(p, name))
+             return TRUE;
+     }
+     return FALSE;
+}
+
+static void test_system_fallback(void)
+{
+    static const struct fallback_test
+    {
+        const WCHAR text[2];
+        const WCHAR *name;
+    }
+    tests[] =
+    {
+        { { 0x25d4, 0}, L"Segoe UI Symbol;Meiryo UI" },
+    };
+    IDWriteFontFallback *fallback;
+    IDWriteFactory2 *factory;
+    IDWriteFont *font;
+    UINT32 i, length;
+    WCHAR name[256];
+    BOOL exists;
+    float scale;
+    HRESULT hr;
+
+    if (!(factory = create_factory_iid(&IID_IDWriteFactory2)))
+    {
+        win_skip("System font fallback API is not supported.\n");
+        return;
+    }
+
+    hr = IDWriteFactory2_GetSystemFontFallback(factory, &fallback);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    for (i = 0; i < ARRAY_SIZE(tests); ++i)
+    {
+        font = NULL;
+
+        g_source = tests[i].text;
+        hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, 1, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &length, &font, &scale);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        if (hr != S_OK) continue;
+        ok(length == 1, "Unexpected length %u\n", length);
+        ok(scale == 1.0f, "got %f\n", scale);
+        if (!font) continue;
+
+        get_font_name(font, name, ARRAY_SIZE(name));
+        todo_wine
+        ok(is_font_name_match(name, tests[i].name), "%u: unexpected name %s.\n", i, wine_dbgstr_w(name));
+
+        hr = IDWriteFont_HasCharacter(font, g_source[0], &exists);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        todo_wine
+        ok(exists, "%s missing character %#x\n", wine_dbgstr_w(name), g_source[0]);
+
+        IDWriteFont_Release(font);
+    }
+
+    IDWriteFontFallback_Release(fallback);
+    IDWriteFactory2_Release(factory);
 }
 
 static void test_FontFallbackBuilder(void)
@@ -4780,67 +5389,67 @@ static void test_FontFallbackBuilder(void)
     EXPECT_REF(factory2, 2);
     EXPECT_REF(builder, 1);
     hr = IDWriteFontFallbackBuilder_CreateFontFallback(builder, &fallback);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
-    EXPECT_REF(factory2, 3);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    todo_wine EXPECT_REF(factory2, 3);
     EXPECT_REF(fallback, 1);
     EXPECT_REF(builder, 1);
 
     IDWriteFontFallback_AddRef(fallback);
     EXPECT_REF(builder, 1);
     EXPECT_REF(fallback, 2);
-    EXPECT_REF(factory2, 3);
+    todo_wine EXPECT_REF(factory2, 3);
     IDWriteFontFallback_Release(fallback);
 
     /* New instance is created every time, even if mappings have not changed. */
     hr = IDWriteFontFallbackBuilder_CreateFontFallback(builder, &fallback2);
-    ok(hr == S_OK, "Failed to create fallback object, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create fallback object, hr %#lx.\n", hr);
     ok(fallback != fallback2, "Unexpected fallback instance.\n");
     IDWriteFontFallback_Release(fallback2);
 
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, NULL, 0, NULL, 0, NULL, NULL, NULL, 0.0f);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.first = 'A';
     range.last = 'B';
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 0, NULL, 0, NULL, NULL, NULL, 0.0f);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 0, NULL, 0, NULL, NULL, NULL, 1.0f);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 0, &familyW, 1, NULL, NULL, NULL, 1.0f);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, NULL, 0, &familyW, 1, NULL, NULL, NULL, 1.0f);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     /* negative scaling factor */
     range.first = range.last = 0;
     familyW = g_blahfontW;
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 1, &familyW, 1, NULL, NULL, NULL, -1.0f);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 1, &familyW, 1, NULL, NULL, NULL, 0.0f);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* empty range */
     range.first = range.last = 0;
     familyW = g_blahfontW;
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 1, &familyW, 1, NULL, NULL, NULL, 1.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.first = range.last = 0;
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 1, &familyW, 1, NULL, NULL, NULL, 2.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.first = range.last = 'A';
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 1, &familyW, 1, NULL, NULL, NULL, 3.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.first = 'B';
     range.last = 'A';
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 1, &familyW, 1, NULL, NULL, NULL, 4.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     IDWriteFontFallback_Release(fallback);
 
@@ -4848,7 +5457,7 @@ static void test_FontFallbackBuilder(void)
         hr = IDWriteFontFallbackBuilder_CreateFontFallback(builder, NULL);
 
     hr = IDWriteFontFallbackBuilder_CreateFontFallback(builder, &fallback);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* fallback font missing from system collection */
     g_source = L"A";
@@ -4857,21 +5466,20 @@ static void test_FontFallbackBuilder(void)
     font = (void*)0xdeadbeef;
     hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, 1, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-todo_wine {
-    ok(hr == S_OK, "got 0x%08x\n", hr);
-    ok(mappedlength == 1, "got %u\n", mappedlength);
-    ok(scale == 1.0f, "got %f\n", scale);
-    ok(font == NULL, "got %p\n", font);
-}
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(mappedlength == 1, "Unexpected length %u.\n", mappedlength);
+    ok(scale == 1.0f, "Unexpected scale %f.\n", scale);
+    ok(!font, "Unexpected font instance %p.\n", font);
+
     IDWriteFontFallback_Release(fallback);
 
     /* remap with custom collection */
     range.first = range.last = 'A';
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 1, &familyW, 1, &fallbackcollection, NULL, NULL, 5.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFontFallbackBuilder_CreateFontFallback(builder, &fallback);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     g_source = L"A";
     mappedlength = 0;
@@ -4879,12 +5487,10 @@ todo_wine {
     font = NULL;
     hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, 1, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-todo_wine {
-    ok(hr == S_OK, "got 0x%08x\n", hr);
-    ok(mappedlength == 1, "got %u\n", mappedlength);
-    ok(scale == 5.0f, "got %f\n", scale);
-    ok(font != NULL, "got %p\n", font);
-}
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(mappedlength == 1, "Unexpected length %u.\n", mappedlength);
+    ok(scale == 5.0f, "Unexpected scale %f.\n", scale);
+    ok(font != NULL, "Expected font instance %p.\n", font);
     if (font)
         IDWriteFont_Release(font);
 
@@ -4893,10 +5499,10 @@ todo_wine {
     range.first = 'B';
     range.last = 'A';
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 1, &familyW, 1, &fallbackcollection, NULL, NULL, 6.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFontFallbackBuilder_CreateFontFallback(builder, &fallback);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     g_source = L"A";
     mappedlength = 0;
@@ -4904,12 +5510,10 @@ todo_wine {
     font = NULL;
     hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, 1, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-todo_wine {
-    ok(hr == S_OK, "got 0x%08x\n", hr);
-    ok(mappedlength == 1, "got %u\n", mappedlength);
-    ok(scale == 5.0f, "got %f\n", scale);
-    ok(font != NULL, "got %p\n", font);
-}
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(mappedlength == 1, "Unexpected length %u.\n", mappedlength);
+    ok(scale == 5.0f, "Unexpected scale %f.\n", scale);
+    ok(font != NULL, "Expected font instance %p.\n", font);
     if (font)
         IDWriteFont_Release(font);
 
@@ -4919,10 +5523,10 @@ todo_wine {
     range.first = 'A';
     range.last = 'B';
     hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 1, &familyW, 1, &fallbackcollection, L"locale", NULL, 6.0f);
-    ok(hr == S_OK, "Failed to add mapping, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to add mapping, hr %#lx.\n", hr);
 
     hr = IDWriteFontFallbackBuilder_CreateFontFallback(builder, &fallback);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     g_source = L"A";
     mappedlength = 0;
@@ -4930,12 +5534,10 @@ todo_wine {
     font = NULL;
     hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, 1, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
-todo_wine {
-    ok(hr == S_OK, "got 0x%08x\n", hr);
-    ok(mappedlength == 1, "got %u\n", mappedlength);
-    ok(scale == 5.0f, "got %f\n", scale);
-    ok(font != NULL, "got %p\n", font);
-}
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(mappedlength == 1, "Unexpected length %u.\n", mappedlength);
+    ok(scale == 5.0f, "Unexpected scale %f.\n", scale);
+    ok(font != NULL, "Expected font instance %p.\n", font);
     if (font)
         IDWriteFont_Release(font);
 
@@ -4950,7 +5552,7 @@ todo_wine {
 
     IDWriteFontFallbackBuilder_Release(builder);
     ref = IDWriteFactory2_Release(factory2);
-    ok(ref == 0, "Factory is not released, ref %u.\n", ref);
+    ok(ref == 0, "Factory is not released, ref %lu.\n", ref);
 }
 
 static void test_fallback(void)
@@ -4974,38 +5576,34 @@ static void test_fallback(void)
     /* Font does not exist in system collection. */
     hr = IDWriteFactory_CreateTextFormat(factory, g_blahfontW, NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_GetClusterMetrics(layout, clusters, 4, &count);
-todo_wine {
-    ok(hr == S_OK, "Failed to get cluster metrics, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to get cluster metrics, hr %#lx.\n", hr);
     ok(count == 4, "Unexpected count %u.\n", count);
-}
     for (i = 0, width = 0.0; i < count; i++)
         width += clusters[i].width;
 
     memset(&metrics, 0xcc, sizeof(metrics));
     hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-    ok(hr == S_OK, "Failed to get layout metrics, hr %#x.\n", hr);
-todo_wine {
+    ok(hr == S_OK, "Failed to get layout metrics, hr %#lx.\n", hr);
     ok(metrics.width > 0.0 && metrics.width == width, "Unexpected width %.2f, expected %.2f.\n", metrics.width, width);
     ok(metrics.height > 0.0, "Unexpected height %.2f.\n", metrics.height);
     ok(metrics.lineCount == 1, "Unexpected line count %u.\n", metrics.lineCount);
-}
     IDWriteTextLayout_Release(layout);
     IDWriteTextFormat_Release(format);
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     /* Existing font. */
     hr = IDWriteFactory_CreateTextLayout(factory, L"abcd", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     IDWriteTextFormat_Release(format);
 
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextLayout2, (void**)&layout2);
@@ -5022,39 +5620,39 @@ todo_wine {
 
     fallback = (void*)0xdeadbeef;
     hr = IDWriteTextLayout2_GetFontFallback(layout2, &fallback);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(fallback == NULL, "got %p\n", fallback);
 
     hr = IDWriteTextLayout2_QueryInterface(layout2, &IID_IDWriteTextFormat1, (void**)&format1);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     fallback = (void*)0xdeadbeef;
     hr = IDWriteTextFormat1_GetFontFallback(format1, &fallback);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(fallback == NULL, "got %p\n", fallback);
 
     hr = IDWriteFactory_QueryInterface(factory, &IID_IDWriteFactory2, (void**)&factory2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     fallback = NULL;
     hr = IDWriteFactory2_GetSystemFontFallback(factory2, &fallback);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(fallback != NULL, "got %p\n", fallback);
 
     hr = IDWriteTextFormat1_SetFontFallback(format1, fallback);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     fallback2 = (void*)0xdeadbeef;
     hr = IDWriteTextLayout2_GetFontFallback(layout2, &fallback2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(fallback2 == fallback, "got %p\n", fallback2);
 
     hr = IDWriteTextLayout2_SetFontFallback(layout2, NULL);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     fallback2 = (void*)0xdeadbeef;
     hr = IDWriteTextFormat1_GetFontFallback(format1, &fallback2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(fallback2 == NULL, "got %p\n", fallback2);
 
     if (SUCCEEDED(IDWriteFontFallback_QueryInterface(fallback, &IID_IDWriteFontFallback1, (void **)&fallback1)))
@@ -5083,40 +5681,40 @@ static void test_SetTypography(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"afib", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
     IDWriteTextFormat_Release(format);
 
     hr = IDWriteFactory_CreateTypography(factory, &typography);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     EXPECT_REF(typography, 1);
     range.startPosition = 0;
     range.length = 2;
     hr = IDWriteTextLayout_SetTypography(layout, typography, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     EXPECT_REF(typography, 2);
 
     hr = IDWriteTextLayout_GetTypography(layout, 0, &typography2, NULL);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(typography2 == typography, "got %p, expected %p\n", typography2, typography);
     IDWriteTypography_Release(typography2);
     IDWriteTypography_Release(typography);
 
     hr = IDWriteFactory_CreateTypography(factory, &typography2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = 1;
     hr = IDWriteTextLayout_SetTypography(layout, typography2, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     EXPECT_REF(typography2, 2);
     IDWriteTypography_Release(typography2);
 
     hr = IDWriteTextLayout_GetTypography(layout, 0, &typography, &range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.length == 1, "got %u\n", range.length);
 
     IDWriteTypography_Release(typography);
@@ -5139,7 +5737,7 @@ static void test_SetLastLineWrapping(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_QueryInterface(format, &IID_IDWriteTextFormat1, (void**)&format1);
     IDWriteTextFormat_Release(format);
@@ -5153,20 +5751,20 @@ static void test_SetLastLineWrapping(void)
     ok(ret, "got %d\n", ret);
 
     hr = IDWriteTextFormat1_SetLastLineWrapping(format1, FALSE);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, (IDWriteTextFormat *)format1, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextLayout2, (void**)&layout2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     IDWriteTextLayout_Release(layout);
 
     ret = IDWriteTextLayout2_GetLastLineWrapping(layout2);
     ok(!ret, "got %d\n", ret);
 
     hr = IDWriteTextLayout2_SetLastLineWrapping(layout2, TRUE);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     IDWriteTextLayout2_Release(layout2);
     IDWriteTextFormat1_Release(format1);
@@ -5187,7 +5785,7 @@ static void test_SetOpticalAlignment(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_QueryInterface(format, &IID_IDWriteTextFormat1, (void**)&format1);
     IDWriteTextFormat_Release(format);
@@ -5201,10 +5799,10 @@ static void test_SetOpticalAlignment(void)
     ok(alignment == DWRITE_OPTICAL_ALIGNMENT_NONE, "got %d\n", alignment);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, (IDWriteTextFormat *)format1, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextLayout2, (void**)&layout2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     IDWriteTextLayout_Release(layout);
     IDWriteTextFormat1_Release(format1);
 
@@ -5212,25 +5810,25 @@ static void test_SetOpticalAlignment(void)
     ok(alignment == DWRITE_OPTICAL_ALIGNMENT_NONE, "got %d\n", alignment);
 
     hr = IDWriteTextLayout2_QueryInterface(layout2, &IID_IDWriteTextFormat1, (void**)&format1);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     alignment = IDWriteTextFormat1_GetOpticalAlignment(format1);
     ok(alignment == DWRITE_OPTICAL_ALIGNMENT_NONE, "got %d\n", alignment);
 
     hr = IDWriteTextLayout2_SetOpticalAlignment(layout2, DWRITE_OPTICAL_ALIGNMENT_NO_SIDE_BEARINGS);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout2_SetOpticalAlignment(layout2, DWRITE_OPTICAL_ALIGNMENT_NO_SIDE_BEARINGS+1);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     alignment = IDWriteTextFormat1_GetOpticalAlignment(format1);
     ok(alignment == DWRITE_OPTICAL_ALIGNMENT_NO_SIDE_BEARINGS, "got %d\n", alignment);
 
     hr = IDWriteTextFormat1_SetOpticalAlignment(format1, DWRITE_OPTICAL_ALIGNMENT_NONE);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat1_SetOpticalAlignment(format1, DWRITE_OPTICAL_ALIGNMENT_NO_SIDE_BEARINGS+1);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     alignment = IDWriteTextLayout2_GetOpticalAlignment(layout2);
     ok(alignment == DWRITE_OPTICAL_ALIGNMENT_NONE, "got %d\n", alignment);
@@ -5286,29 +5884,31 @@ static void test_SetUnderline(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, strW, 4, format, 1000.0, 1000.0, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_GetClusterMetrics(layout, clusters, ARRAY_SIZE(clusters), &count);
-    ok(hr == S_OK, "Failed to get cluster metrics, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to get cluster metrics, hr %#lx.\n", hr);
+    todo_wine
     ok(count == 3, "Unexpected cluster count %u.\n", count);
 
     range.startPosition = 0;
     range.length = 2;
     hr = IDWriteTextLayout_SetUnderline(layout, TRUE, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_GetClusterMetrics(layout, clusters, ARRAY_SIZE(clusters), &count);
-    ok(hr == S_OK, "Failed to get cluster metrics, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to get cluster metrics, hr %#lx.\n", hr);
+    todo_wine
     ok(count == 3, "Unexpected cluster count %u.\n", count);
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, NULL, &testrenderer, 0.0, 0.0);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, drawunderline_seq, "draw underline test", TRUE);
 
     IDWriteTextLayout_Release(layout);
@@ -5316,53 +5916,53 @@ static void test_SetUnderline(void)
     /* 2 characters, same font, significantly different font size. Set underline for both, see how many
        underline drawing calls is there. */
     hr = IDWriteFactory_CreateTextLayout(factory, strW, 2, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = 2;
     hr = IDWriteTextLayout_SetUnderline(layout, TRUE, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = 1;
     hr = IDWriteTextLayout_SetFontSize(layout, 100.0f, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, NULL, &testrenderer, 0.0f, 0.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, drawunderline2_seq, "draw underline test 2", FALSE);
 
     /* now set different locale for second char, draw again */
     range.startPosition = 0;
     range.length = 1;
     hr = IDWriteTextLayout_SetLocaleName(layout, L"en-CA", range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, NULL, &testrenderer, 0.0f, 0.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, drawunderline3_seq, "draw underline test 2", FALSE);
 
     IDWriteTextLayout_Release(layout);
 
     /* 2 characters, same font properties, first with strikethrough, both underlined */
     hr = IDWriteFactory_CreateTextLayout(factory, strW, 2, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = 1;
     hr = IDWriteTextLayout_SetStrikethrough(layout, TRUE, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = 2;
     hr = IDWriteTextLayout_SetUnderline(layout, TRUE, range);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     flush_sequence(sequences, RENDERER_ID);
     hr = IDWriteTextLayout_Draw(layout, NULL, &testrenderer, 0.0f, 0.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok_sequence(sequences, RENDERER_ID, drawunderline4_seq, "draw underline test 4", FALSE);
 
     IDWriteTextLayout_Release(layout);
@@ -5371,7 +5971,7 @@ static void test_SetUnderline(void)
 
     /* Test runHeight value with all available fonts */
     hr = IDWriteFactory_GetSystemFontCollection(factory, &syscollection, FALSE);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     count = IDWriteFontCollection_GetFontFamilyCount(syscollection);
 
     for (i = 0; i < count; ++i)
@@ -5391,17 +5991,17 @@ static void test_SetUnderline(void)
         layout = NULL;
 
         hr = IDWriteFontCollection_GetFontFamily(syscollection, i, &family);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFontFamily_GetFirstMatchingFont(family, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
             DWRITE_FONT_STYLE_NORMAL, &font);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFont_CreateFontFace(font, &fontface);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteFontFamily_GetFamilyNames(family, &names);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         if (!(exists = get_enus_string(names, nameW, ARRAY_SIZE(nameW)))) {
             IDWriteLocalFontFileLoader *localloader;
@@ -5413,20 +6013,20 @@ static void test_SetUnderline(void)
 
             count = 1;
             hr = IDWriteFontFace_GetFiles(fontface, &count, &file);
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
             hr = IDWriteFontFile_GetLoader(file, &loader);
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
             hr = IDWriteFontFileLoader_QueryInterface(loader, &IID_IDWriteLocalFontFileLoader, (void**)&localloader);
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
             IDWriteFontFileLoader_Release(loader);
 
             hr = IDWriteFontFile_GetReferenceKey(file, &key, &keysize);
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
             hr = IDWriteLocalFontFileLoader_GetFilePathFromKey(localloader, key, keysize, nameW, ARRAY_SIZE(nameW));
-            ok(hr == S_OK, "got 0x%08x\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
             skip("Failed to get English family name, font file %s\n", wine_dbgstr_w(nameW));
 
@@ -5443,7 +6043,7 @@ static void test_SetUnderline(void)
         IDWriteFontFace_GetMetrics(fontface, &fontmetrics);
         hr = IDWriteFactory_CreateTextFormat(factory, nameW, NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL, fontmetrics.designUnitsPerEm, L"en-us", &format);
-        ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
         /* Look for first supported character to avoid triggering fallback path. With fallback it's harder to test
            DrawUnderline() metrics, because actual resolved fontface is not passed to it. Grabbing fontface instance
@@ -5452,7 +6052,7 @@ static void test_SetUnderline(void)
         {
             glyph = 0;
             hr = IDWriteFontFace_GetGlyphIndices(fontface, &codepoint, 1, &glyph);
-            ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
             if (glyph)
                 break;
         }
@@ -5465,18 +6065,18 @@ static void test_SetUnderline(void)
 
         str[0] = codepoint;
         hr = IDWriteFactory_CreateTextLayout(factory, str, 1, format, 30000.0f, 100.0f, &layout);
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         range.startPosition = 0;
         range.length = 2;
         hr = IDWriteTextLayout_SetUnderline(layout, TRUE, range);
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         memset(&ctxt, 0, sizeof(ctxt));
         ctxt.format = format;
         ctxt.familyW = nameW;
         hr = IDWriteTextLayout_Draw(layout, &ctxt, &testrenderer, 0.0f, 0.0f);
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     cleanup:
         if (layout)
@@ -5503,10 +6103,10 @@ static void test_InvalidateLayout(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextLayout3, (void**)&layout3);
     if (hr == S_OK) {
@@ -5514,32 +6114,32 @@ static void test_InvalidateLayout(void)
         IDWriteTextFormat2 *format2;
 
         hr = IDWriteTextFormat_QueryInterface(format, &IID_IDWriteTextFormat2, (void**)&format2);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         IDWriteTextFormat2_Release(format2);
 
         hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextFormat2, (void**)&format2);
-        ok(hr == S_OK || broken(hr == E_NOINTERFACE), "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK || broken(hr == E_NOINTERFACE), "Unexpected hr %#lx.\n", hr);
         if (hr == S_OK) {
             ok(format != (IDWriteTextFormat *)format2, "Unexpected interface pointer.\n");
             IDWriteTextFormat2_Release(format2);
         }
 
         hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextFormat1, (void**)&format1);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteTextFormat1_QueryInterface(format1, &IID_IDWriteTextFormat2, (void**)&format2);
-        ok(hr == S_OK || broken(hr == E_NOINTERFACE), "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK || broken(hr == E_NOINTERFACE), "Unexpected hr %#lx.\n", hr);
         if (hr == S_OK)
             IDWriteTextFormat2_Release(format2);
         IDWriteTextFormat1_Release(format1);
 
         hr = IDWriteTextLayout3_QueryInterface(layout3, &IID_IDWriteTextFormat2, (void**)&format2);
-        ok(hr == S_OK || broken(hr == E_NOINTERFACE), "got 0x%08x\n", hr);
+        ok(hr == S_OK || broken(hr == E_NOINTERFACE), "Unexpected hr %#lx.\n", hr);
         if (hr == S_OK)
             IDWriteTextFormat2_Release(format2);
 
         hr = IDWriteTextLayout3_InvalidateLayout(layout3);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         IDWriteTextLayout3_Release(layout3);
     }
     else
@@ -5562,40 +6162,40 @@ static void test_line_spacing(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetLineSpacing(format, DWRITE_LINE_SPACING_METHOD_DEFAULT, 0.0f, 0.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetLineSpacing(format, DWRITE_LINE_SPACING_METHOD_DEFAULT, 0.0f, -10.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetLineSpacing(format, DWRITE_LINE_SPACING_METHOD_DEFAULT, -10.0f, 0.0f);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetLineSpacing(format, DWRITE_LINE_SPACING_METHOD_PROPORTIONAL+1, 0.0f, 0.0f);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetLineSpacing(layout, DWRITE_LINE_SPACING_METHOD_DEFAULT, 0.0f, 0.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetLineSpacing(layout, DWRITE_LINE_SPACING_METHOD_DEFAULT, 0.0f, -10.0f);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetLineSpacing(layout, DWRITE_LINE_SPACING_METHOD_DEFAULT, -10.0f, 0.0f);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetLineSpacing(layout, DWRITE_LINE_SPACING_METHOD_PROPORTIONAL+1, 0.0f, 0.0f);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     if (IDWriteTextFormat_QueryInterface(format, &IID_IDWriteTextFormat2, (void**)&format2) == S_OK) {
         DWRITE_LINE_SPACING spacing;
 
         hr = IDWriteTextFormat2_GetLineSpacing(format2, &spacing);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         ok(spacing.method == DWRITE_LINE_SPACING_METHOD_DEFAULT, "got method %d\n", spacing.method);
         ok(spacing.height == 0.0f, "got %f\n", spacing.height);
@@ -5606,29 +6206,29 @@ static void test_line_spacing(void)
         spacing.leadingBefore = -1.0f;
 
         hr = IDWriteTextFormat2_SetLineSpacing(format2, &spacing);
-        ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+        ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
         spacing.leadingBefore = 1.1f;
 
         hr = IDWriteTextFormat2_SetLineSpacing(format2, &spacing);
-        ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+        ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
         spacing.leadingBefore = 1.0f;
 
         hr = IDWriteTextFormat2_SetLineSpacing(format2, &spacing);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         spacing.method = DWRITE_LINE_SPACING_METHOD_PROPORTIONAL + 1;
         hr = IDWriteTextFormat2_SetLineSpacing(format2, &spacing);
-        ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+        ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
         spacing.method = DWRITE_LINE_SPACING_METHOD_PROPORTIONAL;
         spacing.fontLineGapUsage = DWRITE_FONT_LINE_GAP_USAGE_ENABLED + 1;
         hr = IDWriteTextFormat2_SetLineSpacing(format2, &spacing);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         hr = IDWriteTextFormat2_GetLineSpacing(format2, &spacing);
-        ok(hr == S_OK, "got 0x%08x\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         ok(spacing.fontLineGapUsage == DWRITE_FONT_LINE_GAP_USAGE_ENABLED + 1, "got %d\n", spacing.fontLineGapUsage);
 
         IDWriteTextFormat2_Release(format2);
@@ -5653,42 +6253,46 @@ static void test_GetOverhangMetrics(void)
         { 16.0f, { 10.0f, 50.0f, 20.0f }, { -1.0f, 0.0f, -3.0f, 4.0f }, { -1.0f, 4.0f, -3.0f, 0.0f } },
         { 15.0f, { 10.0f, 50.0f, 20.0f }, { -1.0f, 10.0f, 3.0f, -4.0f }, { -1.0f, 15.0f, 3.0f, -9.0f } },
     };
+    struct test_inline_obj *inline_obj;
     IDWriteFactory *factory;
     IDWriteTextFormat *format;
     IDWriteTextLayout *layout;
     HRESULT hr;
     UINT32 i;
 
+    inline_obj = create_test_inline_object(&testinlineobjvtbl3);
+    ok(!!inline_obj, "Failed to create test inline object.\n");
+
     factory = create_factory();
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 100.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"A", 1, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %lx.\n", hr);
 
     for (i = 0; i < ARRAY_SIZE(overhangs_tests); i++) {
         const struct overhangs_test *test = &overhangs_tests[i];
         DWRITE_OVERHANG_METRICS overhang_metrics;
         DWRITE_TEXT_RANGE range = { 0, 1 };
         DWRITE_TEXT_METRICS metrics;
-        struct test_inline_obj obj;
 
-        test_inline_obj_init(&obj, &test->metrics, &test->overhang_metrics);
+        inline_obj->metrics = test->metrics;
+        inline_obj->overhangs = test->overhang_metrics;
 
         hr = IDWriteTextLayout_SetLineSpacing(layout, DWRITE_LINE_SPACING_METHOD_UNIFORM, test->metrics.height * 2.0f,
                 test->uniform_baseline);
-        ok(hr == S_OK, "Failed to set line spacing, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to set line spacing, hr %#lx.\n", hr);
 
         hr = IDWriteTextLayout_SetInlineObject(layout, NULL, range);
-        ok(hr == S_OK, "Failed to reset inline object, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to reset inline object, hr %#lx.\n", hr);
 
-        hr = IDWriteTextLayout_SetInlineObject(layout, &obj.IDWriteInlineObject_iface, range);
-        ok(hr == S_OK, "Failed to set inline object, hr %#x.\n", hr);
+        hr = IDWriteTextLayout_SetInlineObject(layout, &inline_obj->IDWriteInlineObject_iface, range);
+        ok(hr == S_OK, "Failed to set inline object, hr %#lx.\n", hr);
 
         hr = IDWriteTextLayout_GetMetrics(layout, &metrics);
-        ok(hr == S_OK, "Failed to get layout metrics, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to get layout metrics, hr %#lx.\n", hr);
 
         ok(metrics.width == test->metrics.width, "%u: unexpected formatted width.\n", i);
         ok(metrics.height == test->metrics.height * 2.0f, "%u: unexpected formatted height.\n", i);
@@ -5697,13 +6301,14 @@ static void test_GetOverhangMetrics(void)
         hr = IDWriteTextLayout_SetMaxHeight(layout, test->metrics.height);
 
         hr = IDWriteTextLayout_GetOverhangMetrics(layout, &overhang_metrics);
-        ok(hr == S_OK, "Failed to get overhang metrics, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to get overhang metrics, hr %#lx.\n", hr);
 
         ok(!memcmp(&overhang_metrics, &test->expected, sizeof(overhang_metrics)),
                 "%u: unexpected overhang metrics (%f, %f, %f, %f).\n", i, overhang_metrics.left, overhang_metrics.top,
                 overhang_metrics.right, overhang_metrics.bottom);
     }
 
+    IDWriteInlineObject_Release(&inline_obj->IDWriteInlineObject_iface);
     IDWriteTextLayout_Release(layout);
     IDWriteTextFormat_Release(format);
     IDWriteFactory_Release(factory);
@@ -5717,7 +6322,7 @@ static void test_tab_stops(void)
     IDWriteFactory *factory;
     DWRITE_TEXT_RANGE range;
     FLOAT tabstop, size;
-    ULONG count;
+    UINT count;
     HRESULT hr;
 
     factory = create_factory();
@@ -5727,7 +6332,7 @@ static void test_tab_stops(void)
     {
         hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL,
                 DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, L"en-us", &format);
-        ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+        ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
         tabstop = IDWriteTextFormat_GetIncrementalTabStop(format);
         ok(tabstop == 4.0f * size, "Unexpected tab stop %f.\n", tabstop);
@@ -5737,28 +6342,28 @@ static void test_tab_stops(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetIncrementalTabStop(format, 0.0f);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_SetIncrementalTabStop(format, -10.0f);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     tabstop = IDWriteTextFormat_GetIncrementalTabStop(format);
     ok(tabstop == 40.0f, "Unexpected tab stop %f.\n", tabstop);
 
     hr = IDWriteTextFormat_SetIncrementalTabStop(format, 100.0f);
-    ok(hr == S_OK, "Failed to set tab stop value, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to set tab stop value, hr %#lx.\n", hr);
 
     tabstop = IDWriteTextFormat_GetIncrementalTabStop(format);
     ok(tabstop == 100.0f, "Unexpected tab stop %f.\n", tabstop);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"\ta\tb", 4, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %lx.\n", hr);
 
     hr = IDWriteTextLayout_GetClusterMetrics(layout, clusters, 4, &count);
-    ok(hr == S_OK, "Failed to get cluster metrics, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to get cluster metrics, hr %#lx.\n", hr);
     ok(clusters[0].isWhitespace, "Unexpected isWhitespace.\n");
     ok(!clusters[1].isWhitespace, "Unexpected isWhitespace.\n");
     ok(clusters[2].isWhitespace, "Unexpected isWhitespace.\n");
@@ -5770,13 +6375,13 @@ todo_wine {
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetFontSize(layout, 20.0f, range);
-    ok(hr == S_OK, "Failed to set font size, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to set font size, hr %#lx.\n", hr);
 
     tabstop = IDWriteTextLayout_GetIncrementalTabStop(layout);
     ok(tabstop == 100.0f, "Unexpected tab stop %f.\n", tabstop);
 
     hr = IDWriteTextLayout_GetClusterMetrics(layout, clusters, 4, &count);
-    ok(hr == S_OK, "Failed to get cluster metrics, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to get cluster metrics, hr %#lx.\n", hr);
     ok(clusters[0].isWhitespace, "Unexpected isWhitespace.\n");
     ok(!clusters[1].isWhitespace, "Unexpected isWhitespace.\n");
     ok(clusters[2].isWhitespace, "Unexpected isWhitespace.\n");
@@ -5806,10 +6411,10 @@ static void test_automatic_font_axes(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 16.0f, L"en-us", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %lx.\n", hr);
 
     IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextLayout4, (void **)&layout4);
 
@@ -5824,16 +6429,16 @@ static void test_automatic_font_axes(void)
     }
 
     hr = IDWriteTextFormat_QueryInterface(format, &IID_IDWriteTextFormat3, (void **)&format3);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     axes = IDWriteTextFormat3_GetAutomaticFontAxes(format3);
     ok(axes == DWRITE_AUTOMATIC_FONT_AXES_NONE, "Unexpected automatic axes %u.\n", axes);
 
     hr = IDWriteTextFormat3_SetAutomaticFontAxes(format3, DWRITE_AUTOMATIC_FONT_AXES_OPTICAL_SIZE);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat3_SetAutomaticFontAxes(format3, DWRITE_AUTOMATIC_FONT_AXES_OPTICAL_SIZE + 1);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     IDWriteTextFormat3_Release(format3);
 
@@ -5841,37 +6446,37 @@ static void test_automatic_font_axes(void)
     ok(axes == DWRITE_AUTOMATIC_FONT_AXES_NONE, "Unexpected automatic axes %u.\n", axes);
 
     hr = IDWriteTextLayout4_SetAutomaticFontAxes(layout4, DWRITE_AUTOMATIC_FONT_AXES_OPTICAL_SIZE + 1);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout4_SetAutomaticFontAxes(layout4, DWRITE_AUTOMATIC_FONT_AXES_OPTICAL_SIZE);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     IDWriteTextLayout4_Release(layout4);
 
     /* Out of range values allow for formats, but not for layouts. */
     hr = IDWriteFactory_CreateTextLayout(factory, L"a", 1, format, 1000.0f, 1000.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %lx.\n", hr);
 
     hr = IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextLayout4, (void **)&layout4);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     axes = IDWriteTextLayout4_GetAutomaticFontAxes(layout4);
     ok(axes == DWRITE_AUTOMATIC_FONT_AXES_OPTICAL_SIZE + 1, "Unexpected automatic axes %u.\n", axes);
 
     hr = IDWriteTextLayout4_QueryInterface(layout4, &IID_IDWriteTextFormat3, (void **)&format3);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     axes = IDWriteTextFormat3_GetAutomaticFontAxes(format3);
     ok(axes == DWRITE_AUTOMATIC_FONT_AXES_OPTICAL_SIZE + 1, "Unexpected automatic axes %u.\n", axes);
 
     hr = IDWriteTextLayout4_SetAutomaticFontAxes(layout4, DWRITE_AUTOMATIC_FONT_AXES_OPTICAL_SIZE);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     axes = IDWriteTextFormat3_GetAutomaticFontAxes(format3);
     ok(axes == DWRITE_AUTOMATIC_FONT_AXES_OPTICAL_SIZE, "Unexpected automatic axes %u.\n", axes);
 
     hr = IDWriteTextFormat3_SetAutomaticFontAxes(format3, DWRITE_AUTOMATIC_FONT_AXES_OPTICAL_SIZE + 1);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     IDWriteTextFormat3_Release(format3);
 
@@ -5906,16 +6511,13 @@ static void test_text_format_axes(void)
     }
 
     hr = IDWriteFactory6_CreateTextFormat(factory, L"test_family", NULL, NULL, 0, 10.0f, L"en-us", &format3);
-    todo_wine
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
-if (SUCCEEDED(hr))
-{
     hr = IDWriteTextFormat3_GetFontCollection(format3, &collection);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteFontCollection_QueryInterface(collection, &IID_IDWriteFontCollection2, (void **)&collection2);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     model = IDWriteFontCollection2_GetFontFamilyModel(collection2);
     ok(model == DWRITE_FONT_FAMILY_MODEL_TYPOGRAPHIC, "Unexpected model %d.\n", model);
@@ -5939,27 +6541,27 @@ if (SUCCEEDED(hr))
     axes[0].axisTag = DWRITE_FONT_AXIS_TAG_WEIGHT;
     axes[0].value = 200.0f;
     hr = IDWriteTextFormat3_SetFontAxisValues(format3, axes, 1);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     weight = IDWriteTextFormat3_GetFontWeight(format3);
     ok(weight == DWRITE_FONT_WEIGHT_NORMAL, "Unexpected font weight %d.\n", weight);
 
     IDWriteTextFormat3_Release(format3);
-}
+
     hr = IDWriteFactory_CreateTextFormat((IDWriteFactory *)factory, L"test_family", NULL,
             DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STRETCH_EXPANDED,
             10.0f, L"en-us", &format);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat_QueryInterface(format, &IID_IDWriteTextFormat3, (void **)&format3);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = IDWriteTextFormat3_GetFontAxisValueCount(format3);
     ok(!count, "Unexpected axis count %u.\n", count);
 
     axes[0].axisTag = DWRITE_FONT_AXIS_TAG_WEIGHT;
     hr = IDWriteTextFormat3_GetFontAxisValues(format3, axes, 1);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(axes[0].axisTag == 0 && axes[0].value == 0.0f, "Unexpected value.\n");
 
     axes[0].axisTag = DWRITE_FONT_AXIS_TAG_WEIGHT;
@@ -5967,22 +6569,22 @@ if (SUCCEEDED(hr))
     axes[1].axisTag = DWRITE_FONT_AXIS_TAG_WIDTH;
     axes[1].value = 2.0f;
     hr = IDWriteTextFormat3_SetFontAxisValues(format3, axes, 2);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = IDWriteTextFormat3_GetFontAxisValueCount(format3);
     ok(count == 2, "Unexpected axis count %u.\n", count);
 
     hr = IDWriteTextFormat3_GetFontAxisValues(format3, axes, 1);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat3_GetFontAxisValues(format3, axes, 0);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat3_GetFontAxisValues(format3, axes, 2);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextFormat3_SetFontAxisValues(format3, axes, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = IDWriteTextFormat3_GetFontAxisValueCount(format3);
     ok(!count, "Unexpected axis count %u.\n", count);
@@ -6013,238 +6615,238 @@ static void test_layout_range_length(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"ru", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     /* Range length is validated when setting properties. */
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, format, 100.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     /* Weight */
     range.startPosition = 10;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetFontWeight(layout, DWRITE_FONT_WEIGHT_NORMAL, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 9;
     hr = IDWriteTextLayout_SetFontWeight(layout, DWRITE_FONT_WEIGHT_NORMAL, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 10;
     hr = IDWriteTextLayout_SetFontWeight(layout, DWRITE_FONT_WEIGHT_HEAVY, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetFontWeight(layout, 0, &weight, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 0 && range.length == 10, "Unexpected range (%u, %u).\n", range.startPosition, range.length);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetFontWeight(layout, 10, &weight, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 10 && range.length == ~0u - 10, "Unexpected range (%u, %u).\n",
             range.startPosition, range.length);
 
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetFontWeight(layout, DWRITE_FONT_WEIGHT_NORMAL, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* Family name */
     range.startPosition = 10;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetFontFamilyName(layout, L"family", range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 9;
     hr = IDWriteTextLayout_SetFontFamilyName(layout, L"family", range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 10;
     hr = IDWriteTextLayout_SetFontFamilyName(layout, L"family", range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetFontFamilyName(layout, L"Tahoma", range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* Style */
     range.startPosition = 10;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetFontStyle(layout, DWRITE_FONT_STYLE_ITALIC, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 9;
     hr = IDWriteTextLayout_SetFontStyle(layout, DWRITE_FONT_STYLE_ITALIC, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 10;
     hr = IDWriteTextLayout_SetFontStyle(layout, DWRITE_FONT_STYLE_ITALIC, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetFontStyle(layout, 0, &style, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 0 && range.length == 10, "Unexpected range (%u, %u).\n", range.startPosition, range.length);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetFontStyle(layout, 10, &style, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 10 && range.length == ~0u - 10, "Unexpected range (%u, %u).\n",
             range.startPosition, range.length);
 
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetFontStyle(layout, DWRITE_FONT_STYLE_NORMAL, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* Stretch */
     range.startPosition = 10;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetFontStretch(layout, DWRITE_FONT_STRETCH_CONDENSED, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 9;
     hr = IDWriteTextLayout_SetFontStretch(layout, DWRITE_FONT_STRETCH_CONDENSED, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 10;
     hr = IDWriteTextLayout_SetFontStretch(layout, DWRITE_FONT_STRETCH_CONDENSED, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetFontStretch(layout, 0, &stretch, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 0 && range.length == 10, "Unexpected range (%u, %u).\n", range.startPosition, range.length);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetFontStretch(layout, 10, &stretch, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 10 && range.length == ~0u - 10, "Unexpected range (%u, %u).\n",
             range.startPosition, range.length);
 
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetFontStretch(layout, DWRITE_FONT_STRETCH_NORMAL, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* Underline */
     range.startPosition = 10;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetUnderline(layout, TRUE, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 9;
     hr = IDWriteTextLayout_SetUnderline(layout, TRUE, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 10;
     hr = IDWriteTextLayout_SetUnderline(layout, TRUE, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetUnderline(layout, 0, &value, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 0 && range.length == 10, "Unexpected range (%u, %u).\n", range.startPosition, range.length);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetUnderline(layout, 10, &value, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 10 && range.length == ~0u - 10, "Unexpected range (%u, %u).\n",
             range.startPosition, range.length);
 
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetUnderline(layout, FALSE, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* Strikethrough */
     range.startPosition = 10;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetStrikethrough(layout, TRUE, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 9;
     hr = IDWriteTextLayout_SetStrikethrough(layout, TRUE, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 10;
     hr = IDWriteTextLayout_SetStrikethrough(layout, TRUE, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetStrikethrough(layout, 0, &value, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 0 && range.length == 10, "Unexpected range (%u, %u).\n", range.startPosition, range.length);
 
     range.startPosition = range.length = 0;
     hr = IDWriteTextLayout_GetStrikethrough(layout, 10, &value, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 10 && range.length == ~0u - 10, "Unexpected range (%u, %u).\n",
             range.startPosition, range.length);
 
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetStrikethrough(layout, FALSE, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* Locale name */
     range.startPosition = 10;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetLocaleName(layout, L"locale", range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 9;
     hr = IDWriteTextLayout_SetLocaleName(layout, L"locale", range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 10;
     hr = IDWriteTextLayout_SetLocaleName(layout, L"locale", range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetLocaleName(layout, L"ru", range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* Inline object */
     hr = IDWriteFactory_CreateEllipsisTrimmingSign(factory, format, &sign);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetInlineObject(layout, sign, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 9;
     hr = IDWriteTextLayout_SetInlineObject(layout, sign, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 10;
     hr = IDWriteTextLayout_SetInlineObject(layout, sign, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = range.length = 0;
     object = NULL;
     hr = IDWriteTextLayout_GetInlineObject(layout, 10, &object, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.startPosition == 10 && range.length == ~0u - 10, "Unexpected range (%u, %u).\n",
             range.startPosition, range.length);
     IDWriteInlineObject_Release(object);
@@ -6252,85 +6854,85 @@ static void test_layout_range_length(void)
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetInlineObject(layout, NULL, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* Drawing effect */
     range.startPosition = 10;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetDrawingEffect(layout, (IUnknown *)sign, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 9;
     hr = IDWriteTextLayout_SetDrawingEffect(layout, (IUnknown *)sign, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 10;
     hr = IDWriteTextLayout_SetDrawingEffect(layout, (IUnknown *)sign, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetDrawingEffect(layout, NULL, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     IDWriteInlineObject_Release(sign);
 
     /* Typography */
     hr = IDWriteFactory_CreateTypography(factory, &typography);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetTypography(layout, typography, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 9;
     hr = IDWriteTextLayout_SetTypography(layout, typography, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 10;
     hr = IDWriteTextLayout_SetTypography(layout, typography, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetTypography(layout, NULL, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     IDWriteTypography_Release(typography);
 
     /* Font collection */
     hr = IDWriteFactory_GetSystemFontCollection(factory, &collection, FALSE);
-    ok(hr == S_OK, "Failed to get system collection, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to get system collection, hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetFontCollection(layout, collection, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 9;
     hr = IDWriteTextLayout_SetFontCollection(layout, collection, range);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 10;
     range.length = ~0u - 10;
     hr = IDWriteTextLayout_SetFontCollection(layout, collection, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = 0;
     range.length = ~0u;
     hr = IDWriteTextLayout_SetFontCollection(layout, NULL, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     range.startPosition = range.length = 0;
     collection2 = NULL;
     hr = IDWriteTextLayout_GetFontCollection(layout, 10, &collection2, &range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(range.length == ~0u, "Unexpected range length %u.\n", range.length);
     if (collection2)
         IDWriteFontCollection_Release(collection2);
@@ -6343,27 +6945,27 @@ static void test_layout_range_length(void)
         range.startPosition = 10;
         range.length = ~0u;
         hr = IDWriteTextLayout1_SetPairKerning(layout1, TRUE, range);
-        ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+        ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
         range.startPosition = 10;
         range.length = ~0u - 9;
         hr = IDWriteTextLayout1_SetPairKerning(layout1, TRUE, range);
-        ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+        ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
 
         range.startPosition = 10;
         range.length = ~0u - 10;
         hr = IDWriteTextLayout1_SetPairKerning(layout1, TRUE, range);
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         range.startPosition = range.length = 0;
         hr = IDWriteTextLayout1_GetPairKerning(layout1, 0, &value, &range);
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         ok(range.startPosition == 0 && range.length == 10, "Unexpected range (%u, %u).\n", range.startPosition, range.length);
 
         range.startPosition = range.length = 0;
         value = FALSE;
         hr = IDWriteTextLayout1_GetPairKerning(layout1, 10, &value, &range);
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         ok(range.startPosition == 10 && range.length == ~0u - 10, "Unexpected range (%u, %u).\n",
                 range.startPosition, range.length);
         ok(!!value, "Unexpected value %d.\n", value);
@@ -6371,7 +6973,7 @@ static void test_layout_range_length(void)
         range.startPosition = 0;
         range.length = ~0u;
         hr = IDWriteTextLayout1_SetPairKerning(layout1, FALSE, range);
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
         IDWriteTextLayout1_Release(layout1);
     }
@@ -6398,16 +7000,16 @@ static void test_HitTestTextRange(void)
 
     hr = IDWriteFactory_CreateTextFormat(factory, L"Tahoma", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"ru", &format);
-    ok(hr == S_OK, "Failed to create text format, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text format, hr %#lx.\n", hr);
 
     hr = IDWriteFactory_CreateTextLayout(factory, L"string", 6, format, 100.0f, 100.0f, &layout);
-    ok(hr == S_OK, "Failed to create text layout, hr %#x.\n", hr);
+    ok(hr == S_OK, "Failed to create text layout, hr %#lx.\n", hr);
 
     /* Start index exceeding layout text length, dummy range returned. */
     count = 0;
     hr = IDWriteTextLayout_HitTestTextRange(layout, 7, 10, 0.0f, 0.0f, metrics, ARRAY_SIZE(metrics), &count);
     todo_wine
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 if (SUCCEEDED(hr))
 {
     ok(count == 1, "Unexpected metrics count %u.\n", count);
@@ -6419,7 +7021,7 @@ if (SUCCEEDED(hr))
     count = 0;
     hr = IDWriteTextLayout_HitTestTextRange(layout, 0, 10, 0.0f, 0.0f, metrics, ARRAY_SIZE(metrics), &count);
     todo_wine
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 if (SUCCEEDED(hr))
 {
     ok(count == 1, "Unexpected metrics count %u.\n", count);
@@ -6431,12 +7033,12 @@ if (SUCCEEDED(hr))
     range.startPosition = 3;
     range.length = 3;
     hr = IDWriteTextLayout_SetFontSize(layout, 20.0f, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_HitTestTextRange(layout, 0, 6, 0.0f, 0.0f, metrics, ARRAY_SIZE(metrics), &count);
     todo_wine
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 if (SUCCEEDED(hr))
 {
     ok(count == 1, "Unexpected metrics count %u.\n", count);
@@ -6445,20 +7047,20 @@ if (SUCCEEDED(hr))
     ok(!!metrics[0].isText, "Expected text range.\n");
 
     hr = IDWriteTextLayout_GetLineMetrics(layout, &line, 1, &count);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(line.height == metrics[0].height, "Unexpected range height.\n");
 }
     /* With inline object. */
     hr = IDWriteFactory_CreateEllipsisTrimmingSign(factory, format, &inlineobj);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IDWriteTextLayout_SetInlineObject(layout, inlineobj, range);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     count = 0;
     hr = IDWriteTextLayout_HitTestTextRange(layout, 0, 6, 0.0f, 0.0f, metrics, ARRAY_SIZE(metrics), &count);
     todo_wine
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 if (SUCCEEDED(hr))
 {
     ok(count == 2, "Unexpected metrics count %u.\n", count);
@@ -6472,7 +7074,7 @@ if (SUCCEEDED(hr))
     count = 0;
     hr = IDWriteTextLayout_HitTestTextRange(layout, 7, 10, 0.0f, 0.0f, metrics, ARRAY_SIZE(metrics), &count);
     todo_wine
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 if (SUCCEEDED(hr))
 {
     ok(count == 1, "Unexpected metrics count %u.\n", count);
@@ -6529,6 +7131,7 @@ START_TEST(layout)
     test_pixelsnapping();
     test_SetWordWrapping();
     test_MapCharacters();
+    test_system_fallback();
     test_FontFallbackBuilder();
     test_SetTypography();
     test_SetLastLineWrapping();

@@ -20,8 +20,6 @@
  */
 
 #define COBJMACROS
-#define NONAMELESSUNION
-
 #include "objbase.h"
 
 #include "wine/debug.h"
@@ -48,7 +46,7 @@ static void handle_release(struct handle_wrapper *handle)
     if (!ref)
     {
         if (handle->delete_on_release) GlobalFree(handle->hglobal);
-        HeapFree(GetProcessHeap(), 0, handle);
+        free(handle);
     }
 }
 
@@ -56,14 +54,14 @@ static struct handle_wrapper *handle_create(HGLOBAL hglobal, BOOL delete_on_rele
 {
     struct handle_wrapper *handle;
 
-    handle = HeapAlloc(GetProcessHeap(), 0, sizeof(*handle));
+    handle = malloc(sizeof(*handle));
     if (!handle) return NULL;
 
     /* allocate a handle if one is not supplied */
     if (!hglobal) hglobal = GlobalAlloc(GMEM_MOVEABLE | GMEM_NODISCARD | GMEM_SHARE, 0);
     if (!hglobal)
     {
-        HeapFree(GetProcessHeap(), 0, handle);
+        free(handle);
         return NULL;
     }
     handle->ref = 1;
@@ -92,7 +90,7 @@ static const IStreamVtbl hglobalstreamvtbl;
 
 static struct hglobal_stream *hglobalstream_construct(void)
 {
-    struct hglobal_stream *object = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*object));
+    struct hglobal_stream *object = calloc(1, sizeof(*object));
 
     if (object)
     {
@@ -134,7 +132,7 @@ static ULONG WINAPI stream_Release(IStream *iface)
     if (!ref)
     {
         handle_release(stream->handle);
-        HeapFree(GetProcessHeap(), 0, stream);
+        free(stream);
     }
 
     return ref;
@@ -146,12 +144,15 @@ static HRESULT WINAPI stream_Read(IStream *iface, void *pv, ULONG cb, ULONG *rea
     ULONG dummy, len;
     char *buffer;
 
-    TRACE("%p, %p, %d, %p\n", iface, pv, cb, read_len);
+    TRACE("%p, %p, %ld, %p\n", iface, pv, cb, read_len);
 
     if (!read_len)
         read_len = &dummy;
 
-    len = min(stream->handle->size - stream->position.u.LowPart, cb);
+    if (stream->handle->size >= stream->position.LowPart)
+        len = min(stream->handle->size - stream->position.LowPart, cb);
+    else
+        len = 0;
 
     buffer = GlobalLock(stream->handle->hglobal);
     if (!buffer)
@@ -161,8 +162,8 @@ static HRESULT WINAPI stream_Read(IStream *iface, void *pv, ULONG cb, ULONG *rea
         return S_OK;
     }
 
-    memcpy(pv, buffer + stream->position.u.LowPart, len);
-    stream->position.u.LowPart += len;
+    memcpy(pv, buffer + stream->position.LowPart, len);
+    stream->position.LowPart += len;
 
     *read_len = len;
 
@@ -178,7 +179,7 @@ static HRESULT WINAPI stream_Write(IStream *iface, const void *pv, ULONG cb, ULO
     ULONG dummy = 0;
     char *buffer;
 
-    TRACE("%p, %p, %d, %p\n", iface, pv, cb, written);
+    TRACE("%p, %p, %ld, %p\n", iface, pv, cb, written);
 
     if (!written)
         written = &dummy;
@@ -188,16 +189,16 @@ static HRESULT WINAPI stream_Write(IStream *iface, const void *pv, ULONG cb, ULO
 
     *written = 0;
 
-    size.u.HighPart = 0;
-    size.u.LowPart = stream->position.u.LowPart + cb;
+    size.HighPart = 0;
+    size.LowPart = stream->position.LowPart + cb;
 
-    if (size.u.LowPart > stream->handle->size)
+    if (size.LowPart > stream->handle->size)
     {
         /* grow stream */
         HRESULT hr = IStream_SetSize(iface, size);
         if (FAILED(hr))
         {
-            ERR("IStream_SetSize failed with error 0x%08x\n", hr);
+            ERR("IStream_SetSize failed with error %#lx\n", hr);
             return hr;
         }
     }
@@ -209,8 +210,8 @@ static HRESULT WINAPI stream_Write(IStream *iface, const void *pv, ULONG cb, ULO
         return S_OK;
     }
 
-    memcpy(buffer + stream->position.u.LowPart, pv, cb);
-    stream->position.u.LowPart += cb;
+    memcpy(buffer + stream->position.LowPart, pv, cb);
+    stream->position.LowPart += cb;
 
     GlobalUnlock(stream->handle->hglobal);
 
@@ -227,7 +228,7 @@ static HRESULT WINAPI stream_Seek(IStream *iface, LARGE_INTEGER move, DWORD orig
     ULARGE_INTEGER position = stream->position;
     HRESULT hr = S_OK;
 
-    TRACE("%p, %s, %d, %p\n", iface, wine_dbgstr_longlong(move.QuadPart), origin, pos);
+    TRACE("%p, %s, %ld, %p\n", iface, wine_dbgstr_longlong(move.QuadPart), origin, pos);
 
     switch (origin)
     {
@@ -244,10 +245,10 @@ static HRESULT WINAPI stream_Seek(IStream *iface, LARGE_INTEGER move, DWORD orig
             goto end;
     }
 
-    position.u.HighPart = 0;
-    position.u.LowPart += move.QuadPart;
+    position.HighPart = 0;
+    position.LowPart += move.QuadPart;
 
-    if (move.u.LowPart >= 0x80000000 && position.u.LowPart >= move.u.LowPart)
+    if (move.LowPart >= 0x80000000 && position.LowPart >= move.LowPart)
     {
         /* We tried to seek backwards and went past the start. */
         hr = STG_E_SEEKERROR;
@@ -269,15 +270,15 @@ static HRESULT WINAPI stream_SetSize(IStream *iface, ULARGE_INTEGER size)
 
     TRACE("%p, %s\n", iface, wine_dbgstr_longlong(size.QuadPart));
 
-    if (stream->handle->size == size.u.LowPart)
+    if (stream->handle->size == size.LowPart)
         return S_OK;
 
-    hglobal = GlobalReAlloc(stream->handle->hglobal, size.u.LowPart, GMEM_MOVEABLE);
+    hglobal = GlobalReAlloc(stream->handle->hglobal, size.LowPart, GMEM_MOVEABLE);
     if (!hglobal)
         return E_OUTOFMEMORY;
 
     stream->handle->hglobal = hglobal;
-    stream->handle->size = size.u.LowPart;
+    stream->handle->size = size.LowPart;
 
     return S_OK;
 }
@@ -289,7 +290,7 @@ static HRESULT WINAPI stream_CopyTo(IStream *iface, IStream *dest, ULARGE_INTEGE
     HRESULT hr = S_OK;
     BYTE buffer[128];
 
-    TRACE("%p, %p, %d, %p, %p\n", iface, dest, cb.u.LowPart, read_len, written);
+    TRACE("%p, %p, %ld, %p, %p\n", iface, dest, cb.LowPart, read_len, written);
 
     if (!dest)
         return STG_E_INVALIDPOINTER;
@@ -299,7 +300,7 @@ static HRESULT WINAPI stream_CopyTo(IStream *iface, IStream *dest, ULARGE_INTEGE
 
     while (cb.QuadPart > 0)
     {
-        ULONG chunk_size = cb.QuadPart >= sizeof(buffer) ? sizeof(buffer) : cb.u.LowPart;
+        ULONG chunk_size = cb.QuadPart >= sizeof(buffer) ? sizeof(buffer) : cb.LowPart;
         ULONG chunk_read, chunk_written;
 
         hr = IStream_Read(iface, buffer, chunk_size, &chunk_read);
@@ -422,7 +423,7 @@ HRESULT WINAPI CreateStreamOnHGlobal(HGLOBAL hGlobal, BOOL delete_on_release, IS
     object->handle = handle_create(hGlobal, delete_on_release);
     if (!object->handle)
     {
-        HeapFree(GetProcessHeap(), 0, object);
+        free(object);
         return E_OUTOFMEMORY;
     }
 

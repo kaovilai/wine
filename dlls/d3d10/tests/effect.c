@@ -19,11 +19,29 @@
 
 #define COBJMACROS
 #include "d3d10.h"
+#include "d3dcompiler.h"
 #include "wine/test.h"
 
 #include <float.h>
+#include <math.h>
 
 #define D3DERR_INVALIDCALL 0x8876086c
+
+static void set_vec4(float *v, float x, float y, float z, float w)
+{
+    v[0] = x;
+    v[1] = y;
+    v[2] = z;
+    v[3] = w;
+}
+
+static void set_int4(int *v, int x, int y, int z, int w)
+{
+    v[0] = x;
+    v[1] = y;
+    v[2] = z;
+    v[3] = w;
+}
 
 static ULONG get_refcount(void *iface)
 {
@@ -118,14 +136,17 @@ static void test_effect_constant_buffer_type(void)
         return;
     }
 
+    hr = create_effect(fx_test_ecbt, 0, NULL, NULL, &effect);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
+
     hr = create_effect(fx_test_ecbt, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "D3D10CreateEffectFromMemory failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, NULL);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(desc.ConstantBuffers == 2, "Unexpected constant buffers count %u.\n", desc.ConstantBuffers);
     ok(desc.SharedConstantBuffers == 0, "Unexpected shared constant buffers count %u.\n",
@@ -138,14 +159,14 @@ static void test_effect_constant_buffer_type(void)
     constantbuffer = effect->lpVtbl->GetConstantBufferByIndex(effect, 0);
 
     hr = constantbuffer->lpVtbl->GetDesc(constantbuffer, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(var_desc.Flags == D3D10_EFFECT_VARIABLE_EXPLICIT_BIND_POINT, "Unexpected variable flags %#x.\n", var_desc.Flags);
     ok(var_desc.ExplicitBindPoint == 1, "Unexpected bind point %#x.\n", var_desc.ExplicitBindPoint);
 
     type = constantbuffer->lpVtbl->GetType(constantbuffer);
 
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "cbuffer") == 0, "TypeName is \"%s\", expected \"cbuffer\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_OBJECT);
@@ -159,7 +180,7 @@ static void test_effect_constant_buffer_type(void)
     ok(type_desc.Stride == 0x10, "Stride is %#x, expected 0x10\n", type_desc.Stride);
 
     hr = constantbuffer->lpVtbl->GetConstantBuffer(constantbuffer, &buffer);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Buffer_GetDesc(buffer, &buffer_desc);
     ok(buffer_desc.ByteWidth == type_desc.UnpackedSize, "Unexpected buffer size %u.\n", buffer_desc.ByteWidth);
     ok(!buffer_desc.Usage, "Unexpected buffer usage %u.\n", buffer_desc.Usage);
@@ -170,7 +191,7 @@ static void test_effect_constant_buffer_type(void)
     ID3D10Buffer_Release(buffer);
 
     hr = constantbuffer->lpVtbl->GetTextureBuffer(constantbuffer, &srv);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
 
     string = type->lpVtbl->GetMemberName(type, 0);
     ok(strcmp(string, "f1") == 0, "GetMemberName is \"%s\", expected \"f1\"\n", string);
@@ -191,7 +212,7 @@ static void test_effect_constant_buffer_type(void)
         else type2 = type->lpVtbl->GetMemberTypeBySemantic(type, "SV_POSITION");
 
         hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-        ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+        ok(hr == S_OK, "%u: Got unexpected hr %#lx.\n", i, hr);
 
         ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
         ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -209,7 +230,7 @@ static void test_effect_constant_buffer_type(void)
         else type2 = type->lpVtbl->GetMemberTypeBySemantic(type, "COLOR0");
 
         hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-        ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+        ok(hr == S_OK, "%u: Got unexpected hr %#lx.\n", i, hr);
 
         ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
         ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -225,14 +246,14 @@ static void test_effect_constant_buffer_type(void)
 
     type2 = type->lpVtbl->GetMemberTypeByIndex(type, 0);
     hr = type2->lpVtbl->GetDesc(type2, NULL);
-    ok(hr == E_INVALIDARG, "GetDesc got %x, expected %x\n", hr, E_INVALIDARG);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
 
     null_type = type->lpVtbl->GetMemberTypeByIndex(type, 3);
     hr = null_type->lpVtbl->GetDesc(null_type, &type_desc);
-    ok(hr == E_FAIL, "GetDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = null_type->lpVtbl->GetDesc(null_type, NULL);
-    ok(hr == E_FAIL, "GetDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     type2 = type->lpVtbl->GetMemberTypeByName(type, "invalid");
     ok(type2 == null_type, "GetMemberTypeByName got wrong type %p, expected %p\n", type2, null_type);
@@ -255,7 +276,7 @@ static void test_effect_constant_buffer_type(void)
     constantbuffer = effect->lpVtbl->GetConstantBufferByIndex(effect, 1);
     v = constantbuffer->lpVtbl->GetMemberByIndex(constantbuffer, 0);
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "f3"), "Unexpected name %s.\n", var_desc.Name);
     ok(var_desc.Flags == D3D10_EFFECT_VARIABLE_EXPLICIT_BIND_POINT, "Unexpected variable flags %#x.\n", var_desc.Flags);
     ok(var_desc.BufferOffset == 0x20, "Unexpected buffer offset %#x.\n", var_desc.BufferOffset);
@@ -264,14 +285,14 @@ static void test_effect_constant_buffer_type(void)
     /* Invalid buffer variable */
     constantbuffer = effect->lpVtbl->GetConstantBufferByIndex(effect, 100);
     hr = constantbuffer->lpVtbl->GetConstantBuffer(constantbuffer, &buffer);
-    ok(hr == E_FAIL, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
     hr = constantbuffer->lpVtbl->GetTextureBuffer(constantbuffer, &srv);
-    ok(hr == E_FAIL, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 /*
@@ -343,10 +364,10 @@ static void test_effect_variable_type(void)
     }
 
     hr = create_effect(fx_test_evt, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "D3D10CreateEffectFromMemory failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(desc.ConstantBuffers == 1, "Unexpected constant buffers count %u.\n", desc.ConstantBuffers);
     ok(desc.SharedConstantBuffers == 0, "Unexpected shared constant buffers count %u.\n",
@@ -359,7 +380,7 @@ static void test_effect_variable_type(void)
     constantbuffer = effect->lpVtbl->GetConstantBufferByIndex(effect, 0);
     type = constantbuffer->lpVtbl->GetType(constantbuffer);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "cbuffer") == 0, "TypeName is \"%s\", expected \"cbuffer\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_OBJECT);
@@ -376,7 +397,7 @@ static void test_effect_variable_type(void)
     variable = constantbuffer->lpVtbl->GetMemberByIndex(constantbuffer, 0);
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "test1") == 0, "TypeName is \"%s\", expected \"test1\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_STRUCT, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_STRUCT);
@@ -400,7 +421,7 @@ static void test_effect_variable_type(void)
 
     type2 = type->lpVtbl->GetMemberTypeByIndex(type, 0);
     hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -415,7 +436,7 @@ static void test_effect_variable_type(void)
 
     type2 = type->lpVtbl->GetMemberTypeByIndex(type, 1);
     hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -430,7 +451,7 @@ static void test_effect_variable_type(void)
 
     type2 = type->lpVtbl->GetMemberTypeByIndex(type, 2);
     hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "test") == 0, "TypeName is \"%s\", expected \"test\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_STRUCT, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_STRUCT);
@@ -451,7 +472,7 @@ static void test_effect_variable_type(void)
         else type3 = type2->lpVtbl->GetMemberTypeBySemantic(type2, "sv_POSITION");
 
         hr = type3->lpVtbl->GetDesc(type3, &type_desc);
-        ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+        ok(hr == S_OK, "%u: Got unexpected hr %#lx.\n", i, hr);
 
         ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n",
             type_desc.TypeName);
@@ -471,7 +492,7 @@ static void test_effect_variable_type(void)
         else type3 = type2->lpVtbl->GetMemberTypeBySemantic(type2, "color0");
 
         hr = type3->lpVtbl->GetDesc(type3, &type_desc);
-        ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+        ok(hr == S_OK, "%u: Got unexpected hr %#lx.\n", i, hr);
 
         ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n",
             type_desc.TypeName);
@@ -488,27 +509,27 @@ static void test_effect_variable_type(void)
 
     type2 = type->lpVtbl->GetMemberTypeByIndex(type, 0);
     hr = type2->lpVtbl->GetDesc(type2, NULL);
-    ok(hr == E_INVALIDARG, "GetDesc got %x, expected %x\n", hr, E_INVALIDARG);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
 
     type2 = type->lpVtbl->GetMemberTypeByIndex(type, 4);
     hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-    ok(hr == E_FAIL, "GetDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     type2 = type->lpVtbl->GetMemberTypeByName(type, "invalid");
     hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-    ok(hr == E_FAIL, "GetDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     type2 = type->lpVtbl->GetMemberTypeByName(type, NULL);
     hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-    ok(hr == E_FAIL, "GetDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     type2 = type->lpVtbl->GetMemberTypeBySemantic(type, "invalid");
     hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-    ok(hr == E_FAIL, "GetDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     type2 = type->lpVtbl->GetMemberTypeBySemantic(type, NULL);
     hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-    ok(hr == E_FAIL, "GetDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     string = type->lpVtbl->GetMemberName(type, 4);
     ok(string == NULL, "GetMemberName is \"%s\", expected NULL\n", string);
@@ -519,7 +540,7 @@ static void test_effect_variable_type(void)
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 /*
@@ -588,10 +609,10 @@ static void test_effect_variable_member(void)
     }
 
     hr = create_effect(fx_test_evm, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "D3D10CreateEffectFromMemory failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(effect_desc.ConstantBuffers == 1, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -605,7 +626,7 @@ static void test_effect_variable_member(void)
 
     constantbuffer = effect->lpVtbl->GetConstantBufferByIndex(effect, 0);
     hr = constantbuffer->lpVtbl->GetDesc(constantbuffer, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "cb") == 0, "Name is \"%s\", expected \"cb\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -616,16 +637,16 @@ static void test_effect_variable_member(void)
 
     null_variable = constantbuffer->lpVtbl->GetMemberByIndex(constantbuffer, 1);
     hr = null_variable->lpVtbl->GetDesc(null_variable, &desc);
-    ok(hr == E_FAIL, "GetDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     variable = constantbuffer->lpVtbl->GetMemberByIndex(constantbuffer, 0);
     hr = variable->lpVtbl->GetDesc(variable, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     variable2 = constantbuffer->lpVtbl->GetMemberByName(constantbuffer, "t1");
     ok(variable == variable2, "GetMemberByName got %p, expected %p\n", variable2, variable);
     hr = variable2->lpVtbl->GetDesc(variable2, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "t1") == 0, "Name is \"%s\", expected \"t1\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -649,7 +670,7 @@ static void test_effect_variable_member(void)
     /* check members of "t1" */
     variable2 = variable->lpVtbl->GetMemberByName(variable, "f1");
     hr = variable2->lpVtbl->GetDesc(variable2, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f1") == 0, "Name is \"%s\", expected \"f1\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -663,7 +684,7 @@ static void test_effect_variable_member(void)
 
     variable2 = variable->lpVtbl->GetMemberByName(variable, "f2");
     hr = variable2->lpVtbl->GetDesc(variable2, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f2") == 0, "Name is \"%s\", expected \"f2\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -677,7 +698,7 @@ static void test_effect_variable_member(void)
 
     variable2 = variable->lpVtbl->GetMemberByName(variable, "t");
     hr = variable2->lpVtbl->GetDesc(variable2, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "t") == 0, "Name is \"%s\", expected \"t\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -692,7 +713,7 @@ static void test_effect_variable_member(void)
     /* check members of "t" */
     variable3 = variable2->lpVtbl->GetMemberByName(variable2, "f3");
     hr = variable3->lpVtbl->GetDesc(variable3, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f3") == 0, "Name is \"%s\", expected \"f3\"\n", desc.Name);
     ok(strcmp(desc.Semantic, "SV_POSITION") == 0, "Semantic is \"%s\", expected \"SV_POSITION\"\n", desc.Semantic);
@@ -712,7 +733,7 @@ static void test_effect_variable_member(void)
 
     variable3 = variable2->lpVtbl->GetMemberByName(variable2, "f4");
     hr = variable3->lpVtbl->GetDesc(variable3, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f4") == 0, "Name is \"%s\", expected \"f4\"\n", desc.Name);
     ok(strcmp(desc.Semantic, "COLOR0") == 0, "Semantic is \"%s\", expected \"COLOR0\"\n", desc.Semantic);
@@ -733,7 +754,7 @@ static void test_effect_variable_member(void)
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 /*
@@ -809,10 +830,10 @@ static void test_effect_variable_element(void)
     }
 
     hr = create_effect(fx_test_eve, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "D3D10CreateEffectFromMemory failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(effect_desc.ConstantBuffers == 1, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -826,7 +847,7 @@ static void test_effect_variable_element(void)
 
     constantbuffer = effect->lpVtbl->GetConstantBufferByIndex(effect, 0);
     hr = constantbuffer->lpVtbl->GetDesc(constantbuffer, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "cb") == 0, "Name is \"%s\", expected \"cb\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -837,7 +858,7 @@ static void test_effect_variable_element(void)
 
     variable = constantbuffer->lpVtbl->GetMemberByIndex(constantbuffer, 0);
     hr = variable->lpVtbl->GetDesc(variable, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     parent = variable->lpVtbl->GetParentConstantBuffer(variable);
     ok(parent == constantbuffer, "GetParentConstantBuffer got %p, expected %p\n",
@@ -845,7 +866,7 @@ static void test_effect_variable_element(void)
 
     variable2 = constantbuffer->lpVtbl->GetMemberByName(constantbuffer, "t1");
     hr = variable2->lpVtbl->GetDesc(variable2, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     parent = variable2->lpVtbl->GetParentConstantBuffer(variable2);
     ok(parent == constantbuffer, "GetParentConstantBuffer got %p, expected %p\n", parent, constantbuffer);
@@ -853,7 +874,7 @@ static void test_effect_variable_element(void)
     /* check variable f1 */
     variable3 = variable2->lpVtbl->GetMemberByName(variable2, "f1");
     hr = variable3->lpVtbl->GetDesc(variable3, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f1") == 0, "Name is \"%s\", expected \"f1\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -868,7 +889,7 @@ static void test_effect_variable_element(void)
 
     type = variable3->lpVtbl->GetType(variable3);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -884,7 +905,7 @@ static void test_effect_variable_element(void)
     /* check variable f2 */
     variable3 = variable2->lpVtbl->GetMemberByName(variable2, "f2");
     hr = variable3->lpVtbl->GetDesc(variable3, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)!\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f2") == 0, "Name is \"%s\", expected \"f2\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -899,7 +920,7 @@ static void test_effect_variable_element(void)
 
     type = variable3->lpVtbl->GetType(variable3);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -914,7 +935,7 @@ static void test_effect_variable_element(void)
 
     variable4 = variable3->lpVtbl->GetElement(variable3, 0);
     hr = variable4->lpVtbl->GetDesc(variable4, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f2") == 0, "Name is \"%s\", expected \"f2\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -929,7 +950,7 @@ static void test_effect_variable_element(void)
 
     type = variable4->lpVtbl->GetType(variable4);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -944,7 +965,7 @@ static void test_effect_variable_element(void)
 
     variable4 = variable3->lpVtbl->GetElement(variable3, 1);
     hr = variable4->lpVtbl->GetDesc(variable4, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f2") == 0, "Name is \"%s\", expected \"f2\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -959,7 +980,7 @@ static void test_effect_variable_element(void)
 
     type2 = variable4->lpVtbl->GetType(variable4);
     hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(type == type2, "type(%p) != type2(%p)\n", type, type2);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
@@ -975,7 +996,7 @@ static void test_effect_variable_element(void)
 
     variable4 = variable3->lpVtbl->GetElement(variable3, 2);
     hr = variable4->lpVtbl->GetDesc(variable4, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f2") == 0, "Name is \"%s\", expected \"f2\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -990,7 +1011,7 @@ static void test_effect_variable_element(void)
 
     type2 = variable4->lpVtbl->GetType(variable4);
     hr = type2->lpVtbl->GetDesc(type2, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(type == type2, "type(%p) != type2(%p)\n", type, type2);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
@@ -1007,7 +1028,7 @@ static void test_effect_variable_element(void)
     /* check variable t */
     variable3 = variable2->lpVtbl->GetMemberByName(variable2, "t");
     hr = variable3->lpVtbl->GetDesc(variable3, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)!\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "t") == 0, "Name is \"%s\", expected \"t\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -1022,7 +1043,7 @@ static void test_effect_variable_element(void)
 
     type = variable3->lpVtbl->GetType(variable3);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "test") == 0, "TypeName is \"%s\", expected \"test\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_STRUCT, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_STRUCT);
@@ -1037,7 +1058,7 @@ static void test_effect_variable_element(void)
 
     variable4 = variable3->lpVtbl->GetElement(variable3, 0);
     hr = variable4->lpVtbl->GetDesc(variable4, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "t") == 0, "Name is \"%s\", expected \"t\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -1052,7 +1073,7 @@ static void test_effect_variable_element(void)
 
     type = variable4->lpVtbl->GetType(variable4);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "test") == 0, "TypeName is \"%s\", expected \"test\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_STRUCT, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_STRUCT);
@@ -1067,7 +1088,7 @@ static void test_effect_variable_element(void)
 
     variable5 = variable4->lpVtbl->GetMemberByIndex(variable4, 0);
     hr = variable5->lpVtbl->GetDesc(variable5, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f3") == 0, "Name is \"%s\", expected \"f3\"\n", desc.Name);
     ok(strcmp(desc.Semantic, "SV_POSITION") == 0, "Semantic is \"%s\", expected \"SV_POSITION\"\n", desc.Semantic);
@@ -1081,7 +1102,7 @@ static void test_effect_variable_element(void)
 
     type = variable5->lpVtbl->GetType(variable5);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -1096,7 +1117,7 @@ static void test_effect_variable_element(void)
 
     variable5 = variable4->lpVtbl->GetMemberByIndex(variable4, 1);
     hr = variable5->lpVtbl->GetDesc(variable5, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f4") == 0, "Name is \"%s\", expected \"f4\"\n", desc.Name);
     ok(strcmp(desc.Semantic, "COLOR0") == 0, "Semantic is \"%s\", expected \"COLOR0\"\n", desc.Semantic);
@@ -1110,7 +1131,7 @@ static void test_effect_variable_element(void)
 
     type = variable5->lpVtbl->GetType(variable5);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -1125,7 +1146,7 @@ static void test_effect_variable_element(void)
 
     variable5 = variable4->lpVtbl->GetMemberByIndex(variable4, 2);
     hr = variable5->lpVtbl->GetDesc(variable5, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f5") == 0, "Name is \"%s\", expected \"f5\"\n", desc.Name);
     ok(strcmp(desc.Semantic, "COLOR1") == 0, "Semantic is \"%s\", expected \"COLOR1\"\n", desc.Semantic);
@@ -1139,7 +1160,7 @@ static void test_effect_variable_element(void)
 
     type = variable5->lpVtbl->GetType(variable5);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -1154,7 +1175,7 @@ static void test_effect_variable_element(void)
 
     variable4 = variable3->lpVtbl->GetElement(variable3, 1);
     hr = variable4->lpVtbl->GetDesc(variable4, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "t") == 0, "Name is \"%s\", expected \"t\"\n", desc.Name);
     ok(desc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", desc.Semantic);
@@ -1169,7 +1190,7 @@ static void test_effect_variable_element(void)
 
     type = variable4->lpVtbl->GetType(variable4);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "test") == 0, "TypeName is \"%s\", expected \"test\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_STRUCT, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_STRUCT);
@@ -1184,7 +1205,7 @@ static void test_effect_variable_element(void)
 
     variable5 = variable4->lpVtbl->GetMemberByIndex(variable4, 0);
     hr = variable5->lpVtbl->GetDesc(variable5, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f3") == 0, "Name is \"%s\", expected \"f3\"\n", desc.Name);
     ok(strcmp(desc.Semantic, "SV_POSITION") == 0, "Semantic is \"%s\", expected \"SV_POSITION\"\n", desc.Semantic);
@@ -1198,7 +1219,7 @@ static void test_effect_variable_element(void)
 
     type = variable5->lpVtbl->GetType(variable5);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -1213,7 +1234,7 @@ static void test_effect_variable_element(void)
 
     variable5 = variable4->lpVtbl->GetMemberByIndex(variable4, 1);
     hr = variable5->lpVtbl->GetDesc(variable5, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f4") == 0, "Name is \"%s\", expected \"f4\"\n", desc.Name);
     ok(strcmp(desc.Semantic, "COLOR0") == 0, "Semantic is \"%s\", expected \"COLOR0\"\n", desc.Semantic);
@@ -1227,7 +1248,7 @@ static void test_effect_variable_element(void)
 
     type = variable5->lpVtbl->GetType(variable5);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -1242,7 +1263,7 @@ static void test_effect_variable_element(void)
 
     variable5 = variable4->lpVtbl->GetMemberByIndex(variable4, 2);
     hr = variable5->lpVtbl->GetDesc(variable5, &desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(desc.Name, "f5") == 0, "Name is \"%s\", expected \"f5\"\n", desc.Name);
     ok(strcmp(desc.Semantic, "COLOR1") == 0, "Semantic is \"%s\", expected \"COLOR1\"\n", desc.Semantic);
@@ -1256,7 +1277,7 @@ static void test_effect_variable_element(void)
 
     type = variable5->lpVtbl->GetType(variable5);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(type_desc.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", type_desc.TypeName);
     ok(type_desc.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", type_desc.Class, D3D10_SVC_SCALAR);
@@ -1272,7 +1293,7 @@ static void test_effect_variable_element(void)
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 /*
@@ -1390,7 +1411,7 @@ static void check_as(ID3D10EffectVariable *variable)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     variable2 = (ID3D10EffectVariable *)variable->lpVtbl->AsConstantBuffer(variable);
     is_valid = variable2->lpVtbl->IsValid(variable2);
@@ -1487,10 +1508,10 @@ static void test_effect_variable_type_class(void)
     }
 
     hr = create_effect(fx_test_evtc, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "D3D10CreateEffectFromMemory failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(effect_desc.ConstantBuffers == 1, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -1508,7 +1529,7 @@ static void test_effect_variable_type_class(void)
     /* check constantbuffer cb */
     constantbuffer = effect->lpVtbl->GetConstantBufferByIndex(effect, 0);
     hr = constantbuffer->lpVtbl->GetDesc(constantbuffer, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "cb") == 0, "Name is \"%s\", expected \"cb\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1524,7 +1545,7 @@ static void test_effect_variable_type_class(void)
 
     type = constantbuffer->lpVtbl->GetType(constantbuffer);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "cbuffer") == 0, "TypeName is \"%s\", expected \"cbuffer\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -1539,7 +1560,7 @@ static void test_effect_variable_type_class(void)
 
     variable = constantbuffer->lpVtbl->GetAnnotationByIndex(constantbuffer, 0);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "s") == 0, "Name is \"%s\", expected \"s\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1555,7 +1576,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "String") == 0, "TypeName is \"%s\", expected \"String\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -1570,15 +1591,15 @@ static void test_effect_variable_type_class(void)
 
     string_var = variable->lpVtbl->AsString(variable);
     hr = string_var->lpVtbl->GetString(string_var, NULL);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
     hr = string_var->lpVtbl->GetString(string_var, &str1);
-    ok(SUCCEEDED(hr), "GetString failed, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(str1, "STRING"), "Unexpected value %s.\n", str1);
 
     variable = constantbuffer->lpVtbl->GetAnnotationByIndex(constantbuffer, 1);
     string_var = variable->lpVtbl->AsString(variable);
     hr = string_var->lpVtbl->GetString(string_var, &str2);
-    ok(SUCCEEDED(hr), "GetString failed, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(str2 != str1, "Unexpected string pointer.\n");
     ok(!strcmp(str2, "STRING"), "Unexpected value %s.\n", str1);
 
@@ -1586,16 +1607,16 @@ static void test_effect_variable_type_class(void)
     variable = constantbuffer->lpVtbl->GetAnnotationByIndex(constantbuffer, 2);
     string_var = variable->lpVtbl->AsString(variable);
     hr = string_var->lpVtbl->GetString(string_var, NULL);
-    ok(hr == E_FAIL, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
     str1 = (void *)0xdeadbeef;
     hr = string_var->lpVtbl->GetString(string_var, &str1);
-    ok(hr == E_FAIL, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
     ok(str1 == (void *)0xdeadbeef, "Unexpected pointer.\n");
 
     /* check float f */
     variable = constantbuffer->lpVtbl->GetMemberByIndex(constantbuffer, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "f") == 0, "Name is \"%s\", expected \"f\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1611,7 +1632,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "float") == 0, "TypeName is \"%s\", expected \"float\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_SCALAR, "Class is %x, expected %x\n", td.Class, D3D10_SVC_SCALAR);
@@ -1627,7 +1648,7 @@ static void test_effect_variable_type_class(void)
     /* check int2 i */
     variable = constantbuffer->lpVtbl->GetMemberByIndex(constantbuffer, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "i") == 0, "Name is \"%s\", expected \"i\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1643,7 +1664,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "int2") == 0, "TypeName is \"%s\", expected \"int2\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_VECTOR, "Class is %x, expected %x\n", td.Class, D3D10_SVC_VECTOR);
@@ -1659,7 +1680,7 @@ static void test_effect_variable_type_class(void)
     /* check uint2x3 u */
     variable = constantbuffer->lpVtbl->GetMemberByIndex(constantbuffer, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "u") == 0, "Name is \"%s\", expected \"u\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1675,7 +1696,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "uint2x3") == 0, "TypeName is \"%s\", expected \"uint2x3\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_MATRIX_COLUMNS, "Class is %x, expected %x\n", td.Class, D3D10_SVC_MATRIX_COLUMNS);
@@ -1691,7 +1712,7 @@ static void test_effect_variable_type_class(void)
     /* check bool2x3 b */
     variable = constantbuffer->lpVtbl->GetMemberByIndex(constantbuffer, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "b") == 0, "Name is \"%s\", expected \"b\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1707,7 +1728,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "bool2x3") == 0, "TypeName is \"%s\", expected \"bool2x3\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_MATRIX_ROWS, "Class is %x, expected %x\n", td.Class, D3D10_SVC_MATRIX_ROWS);
@@ -1723,7 +1744,7 @@ static void test_effect_variable_type_class(void)
     /* check BlendState blend */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "blend") == 0, "Name is \"%s\", expected \"blend\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1739,7 +1760,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "BlendState") == 0, "TypeName is \"%s\", expected \"BlendState\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -1755,7 +1776,7 @@ static void test_effect_variable_type_class(void)
     /* check DepthStencilState depthstencil */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "depthstencil") == 0, "Name is \"%s\", expected \"depthstencil\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1771,7 +1792,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "DepthStencilState") == 0, "TypeName is \"%s\", expected \"DepthStencilState\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -1787,7 +1808,7 @@ static void test_effect_variable_type_class(void)
     /* check RasterizerState rast */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "rast") == 0, "Name is \"%s\", expected \"rast\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1803,7 +1824,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "RasterizerState") == 0, "TypeName is \"%s\", expected \"RasterizerState\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -1819,7 +1840,7 @@ static void test_effect_variable_type_class(void)
     /* check SamplerState sam */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "sam") == 0, "Name is \"%s\", expected \"sam\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1835,7 +1856,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "SamplerState") == 0, "TypeName is \"%s\", expected \"SamplerState\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -1851,7 +1872,7 @@ static void test_effect_variable_type_class(void)
     /* check RenderTargetView rtv */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "rtv") == 0, "Name is \"%s\", expected \"rtv\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1867,7 +1888,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "RenderTargetView") == 0, "TypeName is \"%s\", expected \"RenderTargetView\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -1883,7 +1904,7 @@ static void test_effect_variable_type_class(void)
     /* check DepthStencilView dsv */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "dsv") == 0, "Name is \"%s\", expected \"dsv\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1899,7 +1920,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "DepthStencilView") == 0, "TypeName is \"%s\", expected \"DepthStencilView\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -1915,7 +1936,7 @@ static void test_effect_variable_type_class(void)
     /* check Texture t0 */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(!strcmp(vd.Name, "t0"), "Unexpected Name \"%s\".\n", vd.Name);
     ok(!vd.Semantic, "Unexpected Semantic \"%s\".\n", vd.Semantic);
@@ -1931,7 +1952,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(!strcmp(td.TypeName, "texture"), "Unexpected TypeName \"%s\".\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Unexpected Class %x.\n", td.Class);
@@ -1947,7 +1968,7 @@ static void test_effect_variable_type_class(void)
     /* check Texture1D t1 */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "t1") == 0, "Name is \"%s\", expected \"t1\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1963,7 +1984,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "Texture1D") == 0, "TypeName is \"%s\", expected \"Texture1D\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -1979,7 +2000,7 @@ static void test_effect_variable_type_class(void)
     /* check Texture1DArray t1a */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "t1a") == 0, "Name is \"%s\", expected \"t1a\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -1995,7 +2016,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "Texture1DArray") == 0, "TypeName is \"%s\", expected \"Texture1DArray\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -2011,7 +2032,7 @@ static void test_effect_variable_type_class(void)
     /* check Texture2D t2 */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "t2") == 0, "Name is \"%s\", expected \"t2\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -2027,7 +2048,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "Texture2D") == 0, "TypeName is \"%s\", expected \"Texture2D\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -2043,7 +2064,7 @@ static void test_effect_variable_type_class(void)
     /* check Texture2DMS t2dms */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "t2dms") == 0, "Name is \"%s\", expected \"t2dms\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -2059,7 +2080,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "Texture2DMS") == 0, "TypeName is \"%s\", expected \"Texture2DMS\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -2075,7 +2096,7 @@ static void test_effect_variable_type_class(void)
     /* check Texture2DArray t2a */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "t2a") == 0, "Name is \"%s\", expected \"t2a\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -2091,7 +2112,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "Texture2DArray") == 0, "TypeName is \"%s\", expected \"Texture2DArray\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -2107,7 +2128,7 @@ static void test_effect_variable_type_class(void)
     /* check Texture2DMSArray t2dmsa */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "t2dmsa") == 0, "Name is \"%s\", expected \"t2dmsa\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -2123,7 +2144,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "Texture2DMSArray") == 0, "TypeName is \"%s\", expected \"TTexture2DMSArray\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -2139,7 +2160,7 @@ static void test_effect_variable_type_class(void)
     /* check Texture3D t3 */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "t3") == 0, "Name is \"%s\", expected \"t3\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -2155,7 +2176,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "Texture3D") == 0, "TypeName is \"%s\", expected \"Texture3D\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -2171,7 +2192,7 @@ static void test_effect_variable_type_class(void)
     /* check TextureCube tq */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "tq") == 0, "Name is \"%s\", expected \"tq\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -2187,7 +2208,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "TextureCube") == 0, "TypeName is \"%s\", expected \"TextureCube\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -2203,7 +2224,7 @@ static void test_effect_variable_type_class(void)
     /* check GeometryShader gs[2] */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "gs") == 0, "Name is \"%s\", expected \"gs\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -2219,7 +2240,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "GeometryShader") == 0, "TypeName is \"%s\", expected \"GeometryShader\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -2235,7 +2256,7 @@ static void test_effect_variable_type_class(void)
     /* check PixelShader ps */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "ps") == 0, "Name is \"%s\", expected \"ps\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -2251,7 +2272,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "PixelShader") == 0, "TypeName is \"%s\", expected \"PixelShader\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -2267,7 +2288,7 @@ static void test_effect_variable_type_class(void)
     /* check VertexShader vs[1] */
     variable = effect->lpVtbl->GetVariableByIndex(effect, variable_nr++);
     hr = variable->lpVtbl->GetDesc(variable, &vd);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vd.Name, "vs") == 0, "Name is \"%s\", expected \"vs\"\n", vd.Name);
     ok(vd.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vd.Semantic);
@@ -2283,7 +2304,7 @@ static void test_effect_variable_type_class(void)
 
     type = variable->lpVtbl->GetType(variable);
     hr = type->lpVtbl->GetDesc(type, &td);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(td.TypeName, "VertexShader") == 0, "TypeName is \"%s\", expected \"VertexShader\"\n", td.TypeName);
     ok(td.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", td.Class, D3D10_SVC_OBJECT);
@@ -2299,7 +2320,7 @@ static void test_effect_variable_type_class(void)
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 /*
@@ -2579,10 +2600,10 @@ static void test_effect_constant_buffer_stride(void)
     }
 
     hr = create_effect(fx_test_ecbs, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "D3D10CreateEffectFromMemory failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(effect_desc.ConstantBuffers == 15, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -2600,7 +2621,7 @@ static void test_effect_constant_buffer_stride(void)
         type = constantbuffer->lpVtbl->GetType(constantbuffer);
 
         hr = type->lpVtbl->GetDesc(type, &tdesc);
-        ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+        ok(hr == S_OK, "%u: Got unexpected hr %#lx.\n", i, hr);
 
         ok(strcmp(tdesc.TypeName, "cbuffer") == 0, "TypeName is \"%s\", expected \"cbuffer\"\n", tdesc.TypeName);
         ok(tdesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", tdesc.Class, D3D10_SVC_OBJECT);
@@ -2617,7 +2638,7 @@ static void test_effect_constant_buffer_stride(void)
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 #if 0
@@ -2948,10 +2969,10 @@ static void test_effect_local_shader(void)
     }
 
     hr = create_effect(fx_local_shader, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "D3D10CreateEffectFromMemory failed!\n");
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(effect_desc.ConstantBuffers == 0, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -2998,22 +3019,22 @@ if (0)
 
     /* check for invalid arguments */
     hr = null_pass->lpVtbl->GetVertexShaderDesc(null_pass, NULL);
-    ok(hr == E_FAIL, "GetVertexShaderDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = null_pass->lpVtbl->GetVertexShaderDesc(null_pass, &pdesc);
-    ok(hr == E_FAIL, "GetVertexShaderDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = null_pass->lpVtbl->GetPixelShaderDesc(null_pass, NULL);
-    ok(hr == E_FAIL, "GetPixelShaderDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = null_pass->lpVtbl->GetPixelShaderDesc(null_pass, &pdesc);
-    ok(hr == E_FAIL, "GetPixelShaderDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = null_pass->lpVtbl->GetGeometryShaderDesc(null_pass, NULL);
-    ok(hr == E_FAIL, "GetGeometryShaderDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = null_pass->lpVtbl->GetGeometryShaderDesc(null_pass, &pdesc);
-    ok(hr == E_FAIL, "GetGeometryShaderDesc got %x, expected %x\n", hr, E_FAIL);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     /* check valid pass arguments */
     t = effect->lpVtbl->GetTechniqueByIndex(effect, 0);
@@ -3023,19 +3044,19 @@ if (0)
     ok(p2 == p, "GetPassByName got %p, expected %p\n", p2, p);
 
     hr = p->lpVtbl->GetVertexShaderDesc(p, NULL);
-    ok(hr == E_INVALIDARG, "GetVertexShaderDesc got %x, expected %x\n", hr, E_INVALIDARG);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
 
     hr = p->lpVtbl->GetPixelShaderDesc(p, NULL);
-    ok(hr == E_INVALIDARG, "GetPixelShaderDesc got %x, expected %x\n", hr, E_INVALIDARG);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
 
     hr = p->lpVtbl->GetGeometryShaderDesc(p, NULL);
-    ok(hr == E_INVALIDARG, "GetGeometryShaderDesc got %x, expected %x\n", hr, E_INVALIDARG);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
 
     v = effect->lpVtbl->GetVariableByName(effect, "p");
     ps = v->lpVtbl->AsShader(v);
 
     hr = ps->lpVtbl->GetPixelShader(ps, 0, &ps_d3d);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     /* get the null_shader_variable */
     v = effect->lpVtbl->GetVariableByIndex(effect, 10000);
@@ -3046,9 +3067,9 @@ if (0)
 
     /* Pass without Set*Shader() instructions */
     hr = D3D10StateBlockMaskDisableAll(&mask);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     hr = p->lpVtbl->ComputeStateBlockMask(p, &mask);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ret = D3D10StateBlockMaskGetSetting(&mask, D3D10_DST_VS, 0);
     ok(!ret, "Unexpected mask.\n");
     ret = D3D10StateBlockMaskGetSetting(&mask, D3D10_DST_PS, 0);
@@ -3058,52 +3079,52 @@ if (0)
 
     ID3D10Device_PSSetShader(device, ps_d3d);
     hr = p->lpVtbl->Apply(p, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_PSGetShader(device, &ps_d3d_2);
     ok(ps_d3d_2 == ps_d3d, "Unexpected shader object.\n");
     ID3D10PixelShader_Release(ps_d3d_2);
 
     hr = p->lpVtbl->GetVertexShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetVertexShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable == null_shader, "Got %p, expected %p\n", pdesc.pShaderVariable, null_shader);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(hr == E_FAIL, "GetDesc failed (%x)\n", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = p->lpVtbl->GetPixelShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetPixelShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable == null_shader, "Got %p, expected %p\n", pdesc.pShaderVariable, null_shader);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(hr == E_FAIL, "GetDesc failed (%x)\n", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = p->lpVtbl->GetGeometryShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetGeometryShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable == null_shader, "Got %p, expected %p\n", pdesc.pShaderVariable, null_shader);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(hr == E_FAIL, "GetDesc failed (%x)\n", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     /* pass 1 */
     p = t->lpVtbl->GetPassByIndex(t, 1);
 
     ID3D10Device_PSSetShader(device, ps_d3d);
     hr = p->lpVtbl->Apply(p, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_PSGetShader(device, &ps_d3d_2);
     ok(!ps_d3d_2, "Unexpected shader object.\n");
 
     /* pass 1 vertexshader */
     hr = p->lpVtbl->GetVertexShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetVertexShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     null_anon_vs = pdesc.pShaderVariable;
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3120,7 +3141,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "vertexshader") == 0, "TypeName is \"%s\", expected \"vertexhader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_VERTEXSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_VERTEXSHADER);
@@ -3134,12 +3155,12 @@ if (0)
 
     /* pass 1 pixelshader */
     hr = p->lpVtbl->GetPixelShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetPixelShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     null_anon_ps = pdesc.pShaderVariable;
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3156,7 +3177,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "pixelshader") == 0, "TypeName is \"%s\", expected \"pixelshader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_PIXELSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_PIXELSHADER);
@@ -3170,12 +3191,12 @@ if (0)
 
     /* pass 1 geometryshader */
     hr = p->lpVtbl->GetGeometryShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetGeometryShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     null_anon_gs = pdesc.pShaderVariable;
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(hr == S_OK, "GetDesc failed (%x) expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3192,7 +3213,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "geometryshader") == 0, "TypeName is \"%s\", expected \"geometryshader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_GEOMETRYSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_GEOMETRYSHADER);
@@ -3206,9 +3227,9 @@ if (0)
 
     /* Pass is using Set*Shader(NULL) */
     hr = D3D10StateBlockMaskDisableAll(&mask);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     hr = p->lpVtbl->ComputeStateBlockMask(p, &mask);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ret = D3D10StateBlockMaskGetSetting(&mask, D3D10_DST_VS, 0);
     ok(ret, "Unexpected mask.\n");
     ret = D3D10StateBlockMaskGetSetting(&mask, D3D10_DST_PS, 0);
@@ -3221,12 +3242,12 @@ if (0)
 
     /* pass 2 vertexshader */
     hr = p->lpVtbl->GetVertexShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetVertexShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable == null_anon_vs, "Got %p, expected %p\n", pdesc.pShaderVariable, null_anon_vs);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3237,12 +3258,12 @@ if (0)
 
     /* pass 2 pixelshader */
     hr = p->lpVtbl->GetPixelShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetPixelShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable == null_anon_ps, "Got %p, expected %p\n", pdesc.pShaderVariable, null_anon_ps);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3253,12 +3274,12 @@ if (0)
 
     /* pass 2 geometryshader */
     hr = p->lpVtbl->GetGeometryShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetGeometryShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable == null_anon_gs, "Got %p, expected %p\n", pdesc.pShaderVariable, null_anon_gs);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(hr == S_OK, "GetDesc failed (%x) expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3272,12 +3293,12 @@ if (0)
 
     /* pass 3 vertexshader */
     hr = p->lpVtbl->GetVertexShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetVertexShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     p3_anon_vs = pdesc.pShaderVariable;
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3294,7 +3315,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "vertexshader") == 0, "TypeName is \"%s\", expected \"vertexshader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_VERTEXSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_VERTEXSHADER);
@@ -3308,12 +3329,12 @@ if (0)
 
     /* pass 3 pixelshader */
     hr = p->lpVtbl->GetPixelShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetPixelShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     p3_anon_ps = pdesc.pShaderVariable;
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3330,7 +3351,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "pixelshader") == 0, "TypeName is \"%s\", expected \"pixelshader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_PIXELSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_PIXELSHADER);
@@ -3344,12 +3365,12 @@ if (0)
 
     /* pass 3 geometryshader */
     hr = p->lpVtbl->GetGeometryShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetGeometryShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     p3_anon_gs = pdesc.pShaderVariable;
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3366,7 +3387,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "geometryshader") == 0, "TypeName is \"%s\", expected \"geometryshader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_GEOMETRYSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_GEOMETRYSHADER);
@@ -3383,12 +3404,12 @@ if (0)
 
     /* pass 4 vertexshader */
     hr = p->lpVtbl->GetVertexShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetVertexShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable != p3_anon_vs, "Got %p, expected %p\n", pdesc.pShaderVariable, p3_anon_vs);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3405,7 +3426,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "vertexshader") == 0, "TypeName is \"%s\", expected \"vertexshader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_VERTEXSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_VERTEXSHADER);
@@ -3419,12 +3440,12 @@ if (0)
 
     /* pass 4 pixelshader */
     hr = p->lpVtbl->GetPixelShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetPixelShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable != p3_anon_ps, "Got %p, expected %p\n", pdesc.pShaderVariable, p3_anon_ps);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3441,7 +3462,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "pixelshader") == 0, "TypeName is \"%s\", expected \"pixelshader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_PIXELSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_PIXELSHADER);
@@ -3455,12 +3476,12 @@ if (0)
 
     /* pass 4 geometryshader */
     hr = p->lpVtbl->GetGeometryShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetGeometryShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable != p3_anon_gs, "Got %p, expected %p\n", pdesc.pShaderVariable, p3_anon_gs);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %x\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "$Anonymous") == 0, "Name is \"%s\", expected \"$Anonymous\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3477,7 +3498,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "geometryshader") == 0, "TypeName is \"%s\", expected \"geometryshader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_GEOMETRYSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_GEOMETRYSHADER);
@@ -3494,11 +3515,11 @@ if (0)
 
     /* pass 5 vertexshader */
     hr = p->lpVtbl->GetVertexShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetVertexShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "v0") == 0, "Name is \"%s\", expected \"v0\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3515,7 +3536,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "VertexShader") == 0, "TypeName is \"%s\", expected \"VertexShader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_VERTEXSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_VERTEXSHADER);
@@ -3529,11 +3550,11 @@ if (0)
 
     /* pass 5 pixelshader */
     hr = p->lpVtbl->GetPixelShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetPixelShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "p0") == 0, "Name is \"%s\", expected \"p0\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3550,7 +3571,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "PixelShader") == 0, "TypeName is \"%s\", expected \"PixelShader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_PIXELSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_PIXELSHADER);
@@ -3564,11 +3585,11 @@ if (0)
 
     /* pass 5 geometryshader */
     hr = p->lpVtbl->GetGeometryShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetGeometryShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "g0") == 0, "Name is \"%s\", expected \"g0\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3585,7 +3606,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "GeometryShader") == 0, "TypeName is \"%s\", expected \"GeometryShader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_GEOMETRYSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_GEOMETRYSHADER);
@@ -3602,12 +3623,12 @@ if (0)
 
     /* pass 6 vertexshader */
     hr = p->lpVtbl->GetVertexShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetVertexShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     p6_vs = pdesc.pShaderVariable;
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "v") == 0, "Name is \"%s\", expected \"v\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3624,7 +3645,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "VertexShader") == 0, "TypeName is \"%s\", expected \"VertexShader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_VERTEXSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_VERTEXSHADER);
@@ -3638,18 +3659,18 @@ if (0)
 
     /* Get input signature from vertex shader set from array element. */
     hr = p->lpVtbl->GetDesc(p, &pass_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!!pass_desc.pIAInputSignature, "Expected input signature.\n");
     ok(pass_desc.IAInputSignatureSize == 88, "Unexpected input signature size.\n");
 
     /* pass 6 pixelshader */
     hr = p->lpVtbl->GetPixelShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetPixelShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     p6_ps = pdesc.pShaderVariable;
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "p") == 0, "Name is \"%s\", expected \"p\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3666,7 +3687,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "PixelShader") == 0, "TypeName is \"%s\", expected \"PixelShader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_PIXELSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_PIXELSHADER);
@@ -3680,12 +3701,12 @@ if (0)
 
     /* pass 6 geometryshader */
     hr = p->lpVtbl->GetGeometryShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetGeometryShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     p6_gs = pdesc.pShaderVariable;
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "g") == 0, "Name is \"%s\", expected \"g\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3702,7 +3723,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "GeometryShader") == 0, "TypeName is \"%s\", expected \"GeometryShader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_GEOMETRYSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_GEOMETRYSHADER);
@@ -3719,12 +3740,12 @@ if (0)
 
     /* pass 7 vertexshader */
     hr = p->lpVtbl->GetVertexShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetVertexShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable == p6_vs, "Got %p, expected %p\n", pdesc.pShaderVariable, p6_vs);
     ok(pdesc.ShaderIndex == 1, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 1);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "v") == 0, "Name is \"%s\", expected \"v\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3741,7 +3762,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "VertexShader") == 0, "TypeName is \"%s\", expected \"VertexShader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_VERTEXSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_VERTEXSHADER);
@@ -3755,12 +3776,12 @@ if (0)
 
     /* pass 7 pixelshader */
     hr = p->lpVtbl->GetPixelShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetPixelShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable == p6_ps, "Got %p, expected %p\n", pdesc.pShaderVariable, p6_ps);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "p") == 0, "Name is \"%s\", expected \"p\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3777,7 +3798,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "PixelShader") == 0, "TypeName is \"%s\", expected \"PixelShader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_PIXELSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_PIXELSHADER);
@@ -3791,12 +3812,12 @@ if (0)
 
     /* pass 7 geometryshader */
     hr = p->lpVtbl->GetGeometryShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "GetGeometryShaderDesc got %x, expected %x\n", hr, S_OK);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pdesc.pShaderVariable == p6_gs, "Got %p, expected %p\n", pdesc.pShaderVariable, p6_gs);
     ok(pdesc.ShaderIndex == 0, "ShaderIndex is %u, expected %u\n", pdesc.ShaderIndex, 0);
 
     hr = pdesc.pShaderVariable->lpVtbl->GetDesc(pdesc.pShaderVariable, &vdesc);
-    ok(SUCCEEDED(hr), "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ok(strcmp(vdesc.Name, "g") == 0, "Name is \"%s\", expected \"g\"\n", vdesc.Name);
     ok(vdesc.Semantic == NULL, "Semantic is \"%s\", expected NULL\n", vdesc.Semantic);
@@ -3813,7 +3834,7 @@ if (0)
     ok(ret, "IsValid() failed\n");
 
     hr = type->lpVtbl->GetDesc(type, &typedesc);
-    ok(hr == S_OK, "GetDesc failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(strcmp(typedesc.TypeName, "GeometryShader") == 0, "TypeName is \"%s\", expected \"GeometryShader\"\n", typedesc.TypeName);
     ok(typedesc.Class == D3D10_SVC_OBJECT, "Class is %x, expected %x\n", typedesc.Class, D3D10_SVC_OBJECT);
     ok(typedesc.Type == D3D10_SVT_GEOMETRYSHADER, "Type is %x, expected %x\n", typedesc.Type, D3D10_SVT_GEOMETRYSHADER);
@@ -3830,9 +3851,9 @@ if (0)
     /* Inline variant */
     p = t->lpVtbl->GetPassByName(t, "P8");
     hr = p->lpVtbl->GetGeometryShaderDesc(p, &pdesc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     hr = pdesc.pShaderVariable->lpVtbl->GetShaderDesc(pdesc.pShaderVariable, 0, &shaderdesc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(shaderdesc.IsInline, "Unexpected inline flag.\n");
     ok(!strcmp(shaderdesc.SODecl, "SV_POSITION.y"), "Unexpected stream output declaration %s.\n",
                 shaderdesc.SODecl);
@@ -3840,7 +3861,7 @@ if (0)
     v = effect->lpVtbl->GetVariableByName(effect, "g_so");
     gs = v->lpVtbl->AsShader(v);
     hr = gs->lpVtbl->GetShaderDesc(gs, 0, &shaderdesc);
-    ok(hr == S_OK, "Failed to get shader description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!shaderdesc.IsInline, "Unexpected inline flag.\n");
     ok(!strcmp(shaderdesc.SODecl, "SV_POSITION.x; $Skip.x; SV_POSITION.gb"),
             "Unexpected stream output declaration %s.\n", shaderdesc.SODecl);
@@ -3850,25 +3871,25 @@ if (0)
     ps = v->lpVtbl->AsShader(v);
 
     hr = ps->lpVtbl->GetOutputSignatureElementDesc(ps, 0, 0, &sign);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(sign.SemanticName, "SV_Target"), "Unexpected semantic %s.\n", sign.SemanticName);
     todo_wine
     ok(!sign.SystemValueType, "Unexpected system value type %u.\n", sign.SystemValueType);
 
     hr = ps->lpVtbl->GetOutputSignatureElementDesc(ps, 4, 0, &sign);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(sign.SemanticName, "SV_POSITION"), "Unexpected semantic %s.\n", sign.SemanticName);
     ok(sign.SystemValueType == D3D10_NAME_POSITION, "Unexpected system value type %u.\n",
             sign.SystemValueType);
 
     hr = ps->lpVtbl->GetInputSignatureElementDesc(ps, 0, 0, &sign);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(sign.SemanticName, "SV_POSITION"), "Unexpected semantic %s.\n", sign.SemanticName);
     ok(sign.SystemValueType == D3D10_NAME_POSITION, "Unexpected system value type %u.\n",
             sign.SystemValueType);
 
     hr = ps->lpVtbl->GetInputSignatureElementDesc(ps, 4, 0, &sign);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(sign.SemanticName, "POSITION"), "Unexpected semantic %s.\n", sign.SemanticName);
     ok(!sign.SystemValueType, "Unexpected system value type %u.\n", sign.SystemValueType);
 
@@ -3876,24 +3897,24 @@ if (0)
     vs = v->lpVtbl->AsShader(v);
 
     hr = vs->lpVtbl->GetOutputSignatureElementDesc(vs, 0, 0, &sign);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(sign.SemanticName, "SV_POSITION"), "Unexpected semantic %s.\n", sign.SemanticName);
     ok(sign.SystemValueType == D3D10_NAME_POSITION, "Unexpected system value type %u.\n",
             sign.SystemValueType);
 
     hr = vs->lpVtbl->GetOutputSignatureElementDesc(vs, 1, 0, &sign);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(sign.SemanticName, "SV_POSITION"), "Unexpected semantic %s.\n", sign.SemanticName);
     ok(sign.SystemValueType == D3D10_NAME_POSITION, "Unexpected system value type %u.\n",
             sign.SystemValueType);
 
     hr = vs->lpVtbl->GetInputSignatureElementDesc(vs, 0, 0, &sign);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(sign.SemanticName, "POSITION"), "Unexpected semantic %s.\n", sign.SemanticName);
     ok(!sign.SystemValueType, "Unexpected system value type %u.\n", sign.SystemValueType);
 
     hr = vs->lpVtbl->GetInputSignatureElementDesc(vs, 1, 0, &sign);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(sign.SemanticName, "POSITION"), "Unexpected semantic %s.\n", sign.SemanticName);
     ok(!sign.SystemValueType, "Unexpected system value type %u.\n", sign.SystemValueType);
 
@@ -3902,31 +3923,31 @@ if (0)
     vs = v->lpVtbl->AsShader(v);
 
     hr = vs->lpVtbl->GetOutputSignatureElementDesc(vs, 0, 0, &sign);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
 
     hr = vs->lpVtbl->GetOutputSignatureElementDesc(vs, 1, 0, &sign);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
 
     hr = vs->lpVtbl->GetOutputSignatureElementDesc(vs, 2, 0, &sign);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
 
     hr = vs->lpVtbl->GetOutputSignatureElementDesc(vs, 3, 0, &sign);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(sign.SemanticName, "SV_POSITION"), "Unexpected semantic %s.\n", sign.SemanticName);
     ok(sign.SystemValueType == D3D10_NAME_POSITION, "Unexpected system value type %u.\n",
             sign.SystemValueType);
 
     hr = vs->lpVtbl->GetInputSignatureElementDesc(vs, 0, 0, &sign);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
 
     hr = vs->lpVtbl->GetInputSignatureElementDesc(vs, 1, 0, &sign);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
 
     hr = vs->lpVtbl->GetInputSignatureElementDesc(vs, 2, 0, &sign);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
 
     hr = vs->lpVtbl->GetInputSignatureElementDesc(vs, 3, 0, &sign);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(sign.SemanticName, "POSITION"), "Unexpected semantic %s.\n", sign.SemanticName);
     ok(!sign.SystemValueType, "Unexpected system value type %u.\n", sign.SystemValueType);
 
@@ -3935,7 +3956,7 @@ if (0)
     ID3D10PixelShader_Release(ps_d3d);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 /*
@@ -3989,10 +4010,10 @@ static void test_effect_get_variable_by(void)
     }
 
     hr = create_effect(fx_test_egvb, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "D3D10CreateEffectFromMemory failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(effect_desc.ConstantBuffers == 2, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -4091,7 +4112,7 @@ static void test_effect_get_variable_by(void)
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 #if 0
@@ -4423,9 +4444,9 @@ static void create_effect_texture_resource(ID3D10Device *device, ID3D10ShaderRes
     tex_desc.MiscFlags = 0;
 
     hr = ID3D10Device_CreateTexture2D(device, &tex_desc, NULL, tex);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     hr = ID3D10Device_CreateShaderResourceView(device, (ID3D10Resource *)*tex, NULL, srv);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 }
 
 static void test_effect_state_groups(void)
@@ -4465,10 +4486,10 @@ static void test_effect_state_groups(void)
     }
 
     hr = create_effect(fx_test_state_groups, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create effect, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(!effect_desc.ConstantBuffers, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -4498,7 +4519,7 @@ static void test_effect_state_groups(void)
     ok(sampler_desc.MinLOD == 6.0f, "Got unexpected MinLOD %.8e.\n", sampler_desc.MinLOD);
     ok(sampler_desc.MaxLOD == 5.0f, "Got unexpected MaxLOD %.8e.\n", sampler_desc.MaxLOD);
     hr = s->lpVtbl->GetSampler(s, 0, &sampler);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10SamplerState_GetDesc(sampler, &sampler_desc);
     ok(sampler_desc.Filter == D3D10_FILTER_MIN_MAG_MIP_LINEAR, "Got unexpected Filter %#x.\n", sampler_desc.Filter);
     ID3D10SamplerState_Release(sampler);
@@ -4506,7 +4527,7 @@ static void test_effect_state_groups(void)
     s->lpVtbl->GetBackingStore(s, 1, &sampler_desc);
     ok(sampler_desc.AddressU == D3D10_TEXTURE_ADDRESS_MIRROR, "Got unexpected AddressU %#x.\n", sampler_desc.AddressU);
     hr = s->lpVtbl->GetSampler(s, 1, &sampler);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10SamplerState_GetDesc(sampler, &sampler_desc);
     ok(sampler_desc.AddressU == D3D10_TEXTURE_ADDRESS_MIRROR, "Got unexpected AddressU %#x.\n", sampler_desc.AddressU);
     ID3D10SamplerState_Release(sampler);
@@ -4531,14 +4552,14 @@ static void test_effect_state_groups(void)
     ok(blend_desc.RenderTargetWriteMask[7] == 0x7, "Got unexpected RenderTargetWriteMask[7] %#x.\n",
             blend_desc.RenderTargetWriteMask[7]);
     hr = b->lpVtbl->GetBlendState(b, 0, &blend_state);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10BlendState_GetDesc(blend_state, &blend_desc);
     ok(blend_desc.SrcBlend == D3D10_BLEND_ONE, "Got unexpected SrcBlend %#x.\n", blend_desc.SrcBlend);
     ID3D10BlendState_Release(blend_state);
     b->lpVtbl->GetBackingStore(b, 1, &blend_desc);
     ok(blend_desc.SrcBlend == D3D10_BLEND_SRC_COLOR, "Got unexpected SrcBlend %#x.\n", blend_desc.SrcBlend);
     hr = b->lpVtbl->GetBlendState(b, 1, &blend_state);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10BlendState_GetDesc(blend_state, &blend_desc);
     /* We can't check the SrcBlend value from the ID3D10BlendState object
      * descriptor because BlendEnable[0] is effectively false, which forces
@@ -4574,14 +4595,14 @@ static void test_effect_state_groups(void)
     ok(ds_desc.BackFace.StencilFunc == D3D10_COMPARISON_GREATER_EQUAL, "Got unexpected BackFaceStencilFunc %#x.\n",
             ds_desc.BackFace.StencilFunc);
     hr = d->lpVtbl->GetDepthStencilState(d, 0, &ds_state);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10DepthStencilState_GetDesc(ds_state, &ds_desc);
     ok(ds_desc.DepthEnable, "Got unexpected DepthEnable %#x.\n", ds_desc.DepthEnable);
     ID3D10DepthStencilState_Release(ds_state);
     d->lpVtbl->GetBackingStore(d, 1, &ds_desc);
     ok(!ds_desc.DepthEnable, "Got unexpected DepthEnable %#x.\n", ds_desc.DepthEnable);
     hr = d->lpVtbl->GetDepthStencilState(d, 1, &ds_state);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10DepthStencilState_GetDesc(ds_state, &ds_desc);
     ok(!ds_desc.DepthEnable, "Got unexpected DepthEnable %#x.\n", ds_desc.DepthEnable);
     ID3D10DepthStencilState_Release(ds_state);
@@ -4603,7 +4624,7 @@ static void test_effect_state_groups(void)
     ok(rast_desc.AntialiasedLineEnable, "Got unexpected AntialiasedLineEnable %#x.\n",
             rast_desc.AntialiasedLineEnable);
     hr = r->lpVtbl->GetRasterizerState(r, 0, &rast_state);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10RasterizerState_GetDesc(rast_state, &rast_desc);
     ok(rast_desc.CullMode == D3D10_CULL_FRONT, "Got unexpected CullMode %#x.\n", rast_desc.CullMode);
     ID3D10RasterizerState_Release(rast_state);
@@ -4611,7 +4632,7 @@ static void test_effect_state_groups(void)
     r->lpVtbl->GetBackingStore(r, 1, &rast_desc);
     ok(rast_desc.CullMode == D3D10_CULL_BACK, "Got unexpected CullMode %#x.\n", rast_desc.CullMode);
     hr = r->lpVtbl->GetRasterizerState(r, 1, &rast_state);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10RasterizerState_GetDesc(rast_state, &rast_desc);
     ok(rast_desc.CullMode == D3D10_CULL_BACK, "Got unexpected CullMode %#x.\n", rast_desc.CullMode);
     ID3D10RasterizerState_Release(rast_state);
@@ -4621,7 +4642,7 @@ static void test_effect_state_groups(void)
     pass = technique->lpVtbl->GetPassByName(technique, "pass0");
     ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
     hr = pass->lpVtbl->GetDesc(pass, &pass_desc);
-    ok(SUCCEEDED(hr), "Failed to get pass desc, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(pass_desc.Name, "pass0"), "Got unexpected Name \"%s\".\n", pass_desc.Name);
     ok(!pass_desc.Annotations, "Got unexpected Annotations %#x.\n", pass_desc.Annotations);
     ok(!pass_desc.pIAInputSignature, "Got unexpected pIAInputSignature %p.\n", pass_desc.pIAInputSignature);
@@ -4633,9 +4654,9 @@ static void test_effect_state_groups(void)
     ok(pass_desc.BlendFactor[3] == 0.8f, "Got unexpected BlendFactor[3] %.8e.\n", pass_desc.BlendFactor[3]);
 
     hr = D3D10StateBlockMaskDisableAll(&mask);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     hr = pass->lpVtbl->ComputeStateBlockMask(pass, &mask);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ret = D3D10StateBlockMaskGetSetting(&mask, D3D10_DST_RS_RASTERIZER_STATE, 0);
     ok(ret, "Unexpected mask.\n");
     ret = D3D10StateBlockMaskGetSetting(&mask, D3D10_DST_OM_DEPTH_STENCIL_STATE, 0);
@@ -4644,7 +4665,7 @@ static void test_effect_state_groups(void)
     ok(ret, "Unexpected mask.\n");
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(SUCCEEDED(hr), "Failed to apply pass, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
     ID3D10BlendState_GetDesc(blend_state, &blend_desc);
@@ -4722,15 +4743,15 @@ static void test_effect_state_groups(void)
     create_effect_texture_resource(device, &srv0, &tex0);
 
     hr = D3D10StateBlockMaskDisableAll(&mask);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     hr = pass->lpVtbl->ComputeStateBlockMask(pass, &mask);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ret = D3D10StateBlockMaskGetSetting(&mask, D3D10_DST_VS_SHADER_RESOURCES, 0);
     ok(!ret, "Unexpected mask.\n");
 
     ID3D10Device_PSSetShaderResources(device, 0, 1, &srv0);
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_PSGetShaderResources(device, 0, 1, &srv1);
     ok(!srv1, "Unexpected resource pointer.\n");
 
@@ -4744,7 +4765,7 @@ static void test_effect_state_groups(void)
     ID3D10Device_OMSetDepthStencilState(device, ds_state, 0);
     ID3D10Device_OMSetBlendState(device, blend_state, NULL, 0);
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_OMGetDepthStencilState(device, &ds_state2, &stencil_ref);
     ok(!ds_state2, "Unexpected depth stencil state.\n");
     ID3D10Device_OMGetBlendState(device, &blend_state2, blend_factor, &sample_mask);
@@ -4755,7 +4776,7 @@ static void test_effect_state_groups(void)
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 #if 0
@@ -4810,6 +4831,7 @@ static void test_effect_state_group_defaults(void)
     ID3D10EffectPass *pass;
     ID3D10Effect *effect;
     ID3D10Device *device;
+    unsigned int idx;
     ULONG refcount;
     HRESULT hr;
 
@@ -4820,10 +4842,10 @@ static void test_effect_state_group_defaults(void)
     }
 
     hr = create_effect(fx_test_state_group_defaults, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create effect, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(effect_desc.ConstantBuffers == 0, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -4847,10 +4869,8 @@ static void test_effect_state_group_defaults(void)
     ok(sampler_desc.MaxAnisotropy == 16, "Got unexpected MaxAnisotropy %#x.\n", sampler_desc.MaxAnisotropy);
     ok(sampler_desc.ComparisonFunc == D3D10_COMPARISON_NEVER, "Got unexpected ComparisonFunc %#x.\n",
             sampler_desc.ComparisonFunc);
-    ok(sampler_desc.BorderColor[0] == 0.0f, "Got unexpected BorderColor[0] %.8e.\n", sampler_desc.BorderColor[0]);
-    ok(sampler_desc.BorderColor[1] == 0.0f, "Got unexpected BorderColor[1] %.8e.\n", sampler_desc.BorderColor[1]);
-    ok(sampler_desc.BorderColor[2] == 0.0f, "Got unexpected BorderColor[2] %.8e.\n", sampler_desc.BorderColor[2]);
-    ok(sampler_desc.BorderColor[3] == 0.0f, "Got unexpected BorderColor[3] %.8e.\n", sampler_desc.BorderColor[3]);
+    for (idx = 0; idx < ARRAY_SIZE(sampler_desc.BorderColor); ++idx)
+        ok(sampler_desc.BorderColor[idx] == 0.0f, "Got unexpected BorderColor[%u] %.8e.\n", idx, sampler_desc.BorderColor[idx]);
     ok(sampler_desc.MinLOD == 0.0f, "Got unexpected MinLOD %.8e.\n", sampler_desc.MinLOD);
     ok(sampler_desc.MaxLOD == FLT_MAX, "Got unexpected MaxLOD %.8e.\n", sampler_desc.MaxLOD);
 
@@ -4924,21 +4944,19 @@ static void test_effect_state_group_defaults(void)
     pass = technique->lpVtbl->GetPassByName(technique, "pass0");
     ok(pass->lpVtbl->IsValid(pass), "Failed to get pass.\n");
     hr = pass->lpVtbl->GetDesc(pass, &pass_desc);
-    ok(SUCCEEDED(hr), "Failed to get pass desc, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(pass_desc.Name, "pass0"), "Got unexpected Name \"%s\".\n", pass_desc.Name);
     ok(pass_desc.Annotations == 1, "Got unexpected Annotations %u.\n", pass_desc.Annotations);
     ok(!pass_desc.pIAInputSignature, "Got unexpected pIAInputSignature %p.\n", pass_desc.pIAInputSignature);
     ok(pass_desc.StencilRef == 0, "Got unexpected StencilRef %#x.\n", pass_desc.StencilRef);
     ok(pass_desc.SampleMask == 0, "Got unexpected SampleMask %#x.\n", pass_desc.SampleMask);
-    ok(pass_desc.BlendFactor[0] == 0.0f, "Got unexpected BlendFactor[0] %.8e.\n", pass_desc.BlendFactor[0]);
-    ok(pass_desc.BlendFactor[1] == 0.0f, "Got unexpected BlendFactor[1] %.8e.\n", pass_desc.BlendFactor[1]);
-    ok(pass_desc.BlendFactor[2] == 0.0f, "Got unexpected BlendFactor[2] %.8e.\n", pass_desc.BlendFactor[2]);
-    ok(pass_desc.BlendFactor[3] == 0.0f, "Got unexpected BlendFactor[3] %.8e.\n", pass_desc.BlendFactor[3]);
+    for (idx = 0; idx < ARRAY_SIZE(pass_desc.BlendFactor); ++idx)
+        ok(pass_desc.BlendFactor[idx] == 0.0f, "Got unexpected BlendFactor[%u] %.8e.\n", idx, pass_desc.BlendFactor[idx]);
 
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 /*
@@ -4987,68 +5005,68 @@ static void test_scalar_methods(ID3D10EffectScalarVariable *var, D3D10_SHADER_VA
     HRESULT hr;
 
     hr = var->lpVtbl->SetFloat(var, 5.0f);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloat(var, &ret_f);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_f = type == D3D10_SVT_BOOL ? -1.0f : 5.0f;
     ok(ret_f == expected_f, "Variable %s, got unexpected value %.8e.\n", name, ret_f);
 
     hr = var->lpVtbl->GetInt(var, &ret_i);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_i = type == D3D10_SVT_BOOL ? -1 : 5;
     ok(ret_i == expected_i, "Variable %s, got unexpected value %#x.\n", name, ret_i);
 
     hr = var->lpVtbl->GetBool(var, &ret_b);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     ok(ret_b == -1, "Variable %s, got unexpected value %#x.\n", name, ret_b);
 
     hr = var->lpVtbl->SetInt(var, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloat(var, &ret_f);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_f = type == D3D10_SVT_BOOL ? -1.0f : 2.0f;
     ok(ret_f == expected_f, "Variable %s, got unexpected value %.8e.\n", name, ret_f);
 
     hr = var->lpVtbl->GetInt(var, &ret_i);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_i = type == D3D10_SVT_BOOL ? -1 : 2;
     ok(ret_i == expected_i, "Variable %s, got unexpected value %#x.\n", name, ret_i);
 
     hr = var->lpVtbl->GetBool(var, &ret_b);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     ok(ret_b == -1, "Variable %s, got unexpected value %#x.\n", name, ret_b);
 
     hr = var->lpVtbl->SetBool(var, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloat(var, &ret_f);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     ok(ret_f == -1.0f, "Variable %s, got unexpected value %.8e.\n", name, ret_f);
 
     hr = var->lpVtbl->GetInt(var, &ret_i);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     ok(ret_i == -1, "Variable %s, got unexpected value %#x.\n", name, ret_i);
 
     hr = var->lpVtbl->GetBool(var, &ret_b);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_b = type == D3D10_SVT_BOOL ? 1 : -1;
     ok(ret_b == expected_b, "Variable %s, got unexpected value %#x.\n", name, ret_b);
 
     hr = var->lpVtbl->SetBool(var, 32);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloat(var, &ret_f);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     ok(ret_f == -1.0f, "Variable %s, got unexpected value %.8e.\n", name, ret_f);
 
     hr = var->lpVtbl->GetInt(var, &ret_i);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     ok(ret_i == -1, "Variable %s, got unexpected value %#x.\n", name, ret_i);
 
     hr = var->lpVtbl->GetBool(var, &ret_b);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_b = type == D3D10_SVT_BOOL ? 32 : -1;
     ok(ret_b == expected_b, "Variable %s, got unexpected value %#x.\n", name, ret_b);
 }
@@ -5064,10 +5082,10 @@ static void test_scalar_array_methods(ID3D10EffectScalarVariable *var, D3D10_SHA
 
     set_f[0] = 10.0f; set_f[1] = 20.0f;
     hr = var->lpVtbl->SetFloatArray(var, set_f, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatArray(var, ret_f, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
     {
         expected_f = type == D3D10_SVT_BOOL ? -1.0f : set_f[i];
@@ -5075,7 +5093,7 @@ static void test_scalar_array_methods(ID3D10EffectScalarVariable *var, D3D10_SHA
     }
 
     hr = var->lpVtbl->GetIntArray(var, ret_i, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
     {
         expected_i = type == D3D10_SVT_BOOL ? -1 : (int)set_f[i];
@@ -5083,16 +5101,16 @@ static void test_scalar_array_methods(ID3D10EffectScalarVariable *var, D3D10_SHA
     }
 
     hr = var->lpVtbl->GetBoolArray(var, ret_b, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
         ok(ret_b[i] == -1, "Variable %s, got unexpected value %#x.\n", name, ret_b[i]);
 
     set_i[0] = 5; set_i[1] = 6;
     hr = var->lpVtbl->SetIntArray(var, set_i, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatArray(var, ret_f, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
     {
         expected_f = type == D3D10_SVT_BOOL ? -1.0f : (float)set_i[i];
@@ -5100,7 +5118,7 @@ static void test_scalar_array_methods(ID3D10EffectScalarVariable *var, D3D10_SHA
     }
 
     hr = var->lpVtbl->GetIntArray(var, ret_i, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
     {
         expected_i = type == D3D10_SVT_BOOL ? -1 : set_i[i];
@@ -5108,26 +5126,26 @@ static void test_scalar_array_methods(ID3D10EffectScalarVariable *var, D3D10_SHA
     }
 
     hr = var->lpVtbl->GetBoolArray(var, ret_b, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
         ok(ret_b[i] == -1, "Variable %s, got unexpected value %#x.\n", name, ret_b[i]);
 
     set_b[0] = 1; set_b[1] = 1;
     hr = var->lpVtbl->SetBoolArray(var, set_b, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatArray(var, ret_f, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
         ok(ret_f[i] == -1.0f, "Variable %s, got unexpected value %.8e.\n", name, ret_f[i]);
 
     hr = var->lpVtbl->GetIntArray(var, ret_i, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
         ok(ret_i[i] == -1, "Variable %s, got unexpected value %#x.\n", name, ret_i[i]);
 
     hr = var->lpVtbl->GetBoolArray(var, ret_b, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
     {
         expected_b = type == D3D10_SVT_BOOL ? 1 : -1;
@@ -5136,20 +5154,20 @@ static void test_scalar_array_methods(ID3D10EffectScalarVariable *var, D3D10_SHA
 
     set_b[0] = 10; set_b[1] = 20;
     hr = var->lpVtbl->SetBoolArray(var, set_b, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatArray(var, ret_f, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
         ok(ret_f[i] == -1.0f, "Variable %s, got unexpected value %.8e.\n", name, ret_f[i]);
 
     hr = var->lpVtbl->GetIntArray(var, ret_i, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
         ok(ret_i[i] == -1, "Variable %s, got unexpected value %#x.\n", name, ret_i[i]);
 
     hr = var->lpVtbl->GetBoolArray(var, ret_b, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < 2; ++i)
     {
         expected_b = type == D3D10_SVT_BOOL ? set_b[i] : -1;
@@ -5159,15 +5177,15 @@ static void test_scalar_array_methods(ID3D10EffectScalarVariable *var, D3D10_SHA
     /* Array offset tests. Offset argument goes unused for scalar arrays. */
     set_i[0] = 0; set_i[1] = 0;
     hr = var->lpVtbl->SetIntArray(var, set_i, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     /* After this, if offset is in use, return should be { 0, 5 }. */
     set_i[0] = 5;
     hr = var->lpVtbl->SetIntArray(var, set_i, 1, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetIntArray(var, ret_i, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_b_a[0] = -1; expected_b_a[1] = 0;
     expected_i_a[0] =  5; expected_i_a[1] = 0;
     for (i = 0; i < 2; ++i)
@@ -5179,29 +5197,29 @@ static void test_scalar_array_methods(ID3D10EffectScalarVariable *var, D3D10_SHA
     /* Test the offset on GetArray methods. If offset was in use, we'd get
      * back 5 given that the variable was previously set to { 0, 5 }. */
     hr = var->lpVtbl->GetIntArray(var, ret_i, 1, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_i = type == D3D10_SVT_BOOL ? -1 : 5;
     ok(ret_i[0] == expected_i, "Variable %s, got unexpected value %#x.\n", name, ret_i[0]);
 
     /* Try setting offset larger than number of elements. */
     set_i[0] = 0; set_i[1] = 0;
     hr = var->lpVtbl->SetIntArray(var, set_i, 0, 2);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     set_i[0] = 1;
     hr = var->lpVtbl->SetIntArray(var, set_i, 6, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     /* Since offset goes unused, a larger offset than the number of elements
      * in the array should have no effect. */
     hr = var->lpVtbl->GetIntArray(var, ret_i, 0, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_i = type == D3D10_SVT_BOOL ? -1 : 1;
     ok(ret_i[0] == expected_i, "Variable %s, got unexpected value %#x.\n", name, ret_i[0]);
 
     memset(ret_i, 0, sizeof(ret_i));
     hr = var->lpVtbl->GetIntArray(var, ret_i, 6, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_i = type == D3D10_SVT_BOOL ? -1 : 1;
     ok(ret_i[0] == expected_i, "Variable %s, got unexpected value %#x.\n", name, ret_i[0]);
 
@@ -5211,11 +5229,11 @@ static void test_scalar_array_methods(ID3D10EffectScalarVariable *var, D3D10_SHA
          * ends up writing over into the adjacent variables in the local buffer. */
         set_i[0] = 1; set_i[1] = 2; set_i[2] = 3; set_i[3] = 4; set_i[4] = 5; set_i[5] = 6;
         hr = var->lpVtbl->SetIntArray(var, set_i, 0, 6);
-        ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+        ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
         memset(ret_i, 0, sizeof(ret_i));
         hr = var->lpVtbl->GetIntArray(var, ret_i, 0, 6);
-        ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+        ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
         expected_i_a[0] = 1; expected_i_a[1] = 2; expected_i_a[2] = 0; expected_i_a[3] = 0;
         expected_i_a[4] = 0; expected_i_a[5] = 0;
@@ -5234,19 +5252,18 @@ static void test_effect_scalar_variable(void)
     static const struct
     {
         const char *name;
-        D3D_SHADER_VARIABLE_TYPE type;
-        BOOL array;
+        D3D10_EFFECT_TYPE_DESC type;
     }
     tests[] =
     {
-        {"f0", D3D10_SVT_FLOAT},
-        {"i0", D3D10_SVT_INT},
-        {"i1", D3D10_SVT_UINT},
-        {"b0", D3D10_SVT_BOOL},
-        {"f_a", D3D10_SVT_FLOAT, TRUE},
-        {"i_a", D3D10_SVT_INT, TRUE},
-        {"i1_a", D3D10_SVT_UINT, TRUE},
-        {"b_a", D3D10_SVT_BOOL, TRUE},
+        { "f0",   { "float", D3D10_SVC_SCALAR, D3D10_SVT_FLOAT, 0, 0, 1, 1, 4,  4, 16 } },
+        { "f_a",  { "float", D3D10_SVC_SCALAR, D3D10_SVT_FLOAT, 2, 0, 1, 1, 8, 20, 16 } },
+        { "i0",   { "int",   D3D10_SVC_SCALAR, D3D10_SVT_INT,   0, 0, 1, 1, 4,  4, 16 } },
+        { "i_a",  { "int",   D3D10_SVC_SCALAR, D3D10_SVT_INT,   2, 0, 1, 1, 8, 20, 16 } },
+        { "b0",   { "bool",  D3D10_SVC_SCALAR, D3D10_SVT_BOOL,  0, 0, 1, 1, 4,  4, 16 } },
+        { "b_a",  { "bool",  D3D10_SVC_SCALAR, D3D10_SVT_BOOL,  2, 0, 1, 1, 8, 20, 16 } },
+        { "i1",   { "uint",  D3D10_SVC_SCALAR, D3D10_SVT_UINT,  0, 0, 1, 1, 4,  4, 16 } },
+        { "i1_a", { "uint",  D3D10_SVC_SCALAR, D3D10_SVT_UINT,  2, 0, 1, 1, 8, 20, 16 } },
     };
     ID3D10EffectScalarVariable *s_v, *s_v2;
     ID3D10EffectVariable *var, *var2;
@@ -5267,10 +5284,10 @@ static void test_effect_scalar_variable(void)
     }
 
     hr = create_effect(fx_test_scalar_variable, 0, device, NULL, &effect);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(effect_desc.ConstantBuffers == 1, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -5287,38 +5304,54 @@ static void test_effect_scalar_variable(void)
      * as what we set it to. */
     for (i = 0; i < ARRAY_SIZE(tests); ++i)
     {
+        const D3D10_EFFECT_TYPE_DESC *t = &tests[i].type;
+
+        winetest_push_context("Variable %s", tests[i].name);
+
         var = effect->lpVtbl->GetVariableByName(effect, tests[i].name);
         type = var->lpVtbl->GetType(var);
         hr = type->lpVtbl->GetDesc(type, &type_desc);
-        ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", tests[i].name, hr);
-        ok(type_desc.Type == tests[i].type, "Variable %s, got unexpected type %#x.\n",
-                tests[i].name, type_desc.Type);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+        ok(!strcmp(type_desc.TypeName, t->TypeName), "Unexpected type name %s.\n", type_desc.TypeName);
+        ok(type_desc.Class == t->Class, "Unexpected type class %u.\n", type_desc.Class);
+        ok(type_desc.Type == t->Type, "Unexpected type %u.\n", type_desc.Type);
+        ok(type_desc.Elements == t->Elements, "Unexpected elements count %u.\n", type_desc.Elements);
+        ok(type_desc.Members == t->Members, "Unexpected members count %u.\n", type_desc.Members);
+        ok(type_desc.Rows == t->Rows, "Unexpected rows count %u.\n", type_desc.Rows);
+        ok(type_desc.Columns == t->Columns, "Unexpected columns count %u.\n", type_desc.Columns);
+        ok(type_desc.PackedSize == t->PackedSize, "Unexpected packed size %u.\n", type_desc.PackedSize);
+        ok(type_desc.UnpackedSize == t->UnpackedSize, "Unexpected unpacked size %u.\n", type_desc.UnpackedSize);
+        ok(type_desc.Stride == t->Stride, "Unexpected stride %u.\n", type_desc.Stride);
+
         s_v = var->lpVtbl->AsScalar(var);
-        test_scalar_methods(s_v, tests[i].type, tests[i].name);
-        if (tests[i].array)
-            test_scalar_array_methods(s_v, tests[i].type, tests[i].name);
+        test_scalar_methods(s_v, t->Type, tests[i].name);
+        if (t->Elements)
+            test_scalar_array_methods(s_v, t->Type, tests[i].name);
+
+        winetest_pop_context();
     }
 
     /* Verify that offsets are working correctly between array elements and adjacent data. */
     var = effect->lpVtbl->GetVariableByName(effect, "f0");
     s_v = var->lpVtbl->AsScalar(var);
     hr = s_v->lpVtbl->SetFloat(s_v, 1.0f);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     var2 = effect->lpVtbl->GetVariableByName(effect, "f_a");
     var2 = var2->lpVtbl->GetElement(var2, 0);
     s_v2 = var->lpVtbl->AsScalar(var2);
     hr = s_v2->lpVtbl->SetFloat(s_v2, 2.0f);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = s_v->lpVtbl->GetFloat(s_v, &f);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(f == 1.0f, "Unexpected value %f.\n", f);
 
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 /*
@@ -5379,12 +5412,12 @@ static void test_vector_methods(ID3D10EffectVectorVariable *var, D3D10_SHADER_VA
     unsigned int i;
     HRESULT hr;
 
-    set_f[0] = 1.0f; set_f[1] = 2.0f; set_f[2] = 3.0f; set_f[3] = 4.0f;
+    set_vec4(set_f, 1.0f, 2.0f, 3.0f, 4.0f);
     hr = var->lpVtbl->SetFloatVector(var, set_f);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatVector(var, ret_f);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
     {
         expected_f = type == D3D10_SVT_BOOL ? -1.0f : set_f[i];
@@ -5392,7 +5425,7 @@ static void test_vector_methods(ID3D10EffectVectorVariable *var, D3D10_SHADER_VA
     }
 
     hr = var->lpVtbl->GetIntVector(var, ret_i);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
     {
         expected_i = type == D3D10_SVT_BOOL ? -1 : (int)set_f[i];
@@ -5400,16 +5433,16 @@ static void test_vector_methods(ID3D10EffectVectorVariable *var, D3D10_SHADER_VA
     }
 
     hr = var->lpVtbl->GetBoolVector(var, ret_b);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
         ok(ret_b[i] == -1, "Variable %s, got unexpected value %#x.\n", name, ret_b[i]);
 
-    set_i[0] = 5; set_i[1] = 6; set_i[2] = 7; set_i[3] = 8;
+    set_int4(set_i, 5, 6, 7, 8);
     hr = var->lpVtbl->SetIntVector(var, set_i);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatVector(var, ret_f);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
     {
         expected_f = type == D3D10_SVT_BOOL ? -1.0f : (float)set_i[i];
@@ -5417,7 +5450,7 @@ static void test_vector_methods(ID3D10EffectVectorVariable *var, D3D10_SHADER_VA
     }
 
     hr = var->lpVtbl->GetIntVector(var, ret_i);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
     {
         expected_i = type == D3D10_SVT_BOOL ? -1 : set_i[i];
@@ -5425,28 +5458,28 @@ static void test_vector_methods(ID3D10EffectVectorVariable *var, D3D10_SHADER_VA
     }
 
     hr = var->lpVtbl->GetBoolVector(var, ret_b);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
         ok(ret_b[i] == -1, "Variable %s, got unexpected value %#x.\n", name, ret_b[i]);
 
     set_b[0] = 1; set_b[1] = 0; set_b[2] = 1; set_b[3] = 0;
     hr = var->lpVtbl->SetBoolVector(var, set_b);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatVector(var, ret_f);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_f_v[0] = -1.0f; expected_f_v[1] = 0.0f; expected_f_v[2] = -1.0f; expected_f_v[3] = 0.0f;
     for (i = 0; i < components; ++i)
         ok(ret_f[i] == expected_f_v[i], "Variable %s, got unexpected value %.8e.\n", name, ret_f[i]);
 
     hr = var->lpVtbl->GetIntVector(var, ret_i);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_i_v[0] = -1; expected_i_v[1] = 0; expected_i_v[2] = -1; expected_i_v[3] = 0;
     for (i = 0; i < components; ++i)
         ok(ret_i[i] == expected_i_v[i], "Variable %s, got unexpected value %#x.\n", name, ret_i[i]);
 
     hr = var->lpVtbl->GetBoolVector(var, ret_b);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
     {
         expected_b = type == D3D10_SVT_BOOL ? set_b[i] : expected_i_v[i];
@@ -5455,20 +5488,20 @@ static void test_vector_methods(ID3D10EffectVectorVariable *var, D3D10_SHADER_VA
 
     set_b[0] = 5; set_b[1] = 10; set_b[2] = 15; set_b[3] = 20;
     hr = var->lpVtbl->SetBoolVector(var, set_b);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatVector(var, ret_f);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
         ok(ret_f[i] == -1.0f, "Variable %s, got unexpected value %.8e.\n", name, ret_f[i]);
 
     hr = var->lpVtbl->GetIntVector(var, ret_i);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
         ok(ret_i[i] == -1, "Variable %s, got unexpected value %#x.\n", name, ret_i[i]);
 
     hr = var->lpVtbl->GetBoolVector(var, ret_b);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
     {
         expected_b = type == D3D10_SVT_BOOL ? set_b[i] : -1;
@@ -5489,10 +5522,10 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
     set_f[4] = 5.0f; set_f[5] = 6.0f; set_f[6] = 7.0f; set_f[7] = 8.0f;
     set_f[8] = 9.0f;
     hr = var->lpVtbl->SetFloatVectorArray(var, set_f, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatVectorArray(var, ret_f, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components * elements; ++i)
     {
         expected_f = type == D3D10_SVT_BOOL ? -1.0f : set_f[i];
@@ -5500,7 +5533,7 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
     }
 
     hr = var->lpVtbl->GetIntVectorArray(var, ret_i, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components * elements; ++i)
     {
         expected_i = type == D3D10_SVT_BOOL ? -1 : (int)set_f[i];
@@ -5508,7 +5541,7 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
     }
 
     hr = var->lpVtbl->GetBoolVectorArray(var, ret_b, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components * elements; ++i)
         ok(ret_b[i] == -1, "Variable %s, got unexpected value %#x.\n", name, ret_b[i]);
 
@@ -5516,10 +5549,10 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
     set_i[4] = 14; set_i[5] = 15; set_i[6] = 16; set_i[7] = 17;
     set_i[8] = 18;
     hr = var->lpVtbl->SetIntVectorArray(var, set_i, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatVectorArray(var, ret_f, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components * elements; ++i)
     {
         expected_f = type == D3D10_SVT_BOOL ? -1.0f : (float)set_i[i];
@@ -5527,7 +5560,7 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
     }
 
     hr = var->lpVtbl->GetIntVectorArray(var, ret_i, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components * elements; ++i)
     {
         expected_i = type == D3D10_SVT_BOOL ? -1 : set_i[i];
@@ -5535,7 +5568,7 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
     }
 
     hr = var->lpVtbl->GetBoolVectorArray(var, ret_b, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components * elements; ++i)
         ok(ret_b[i] == -1, "Variable %s, got unexpected value %#x.\n", name, ret_b[i]);
 
@@ -5543,10 +5576,10 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
     set_b[4] = 1; set_b[5] = 0; set_b[6] = 0; set_b[7] = 1;
     set_b[8] = 1;
     hr = var->lpVtbl->SetBoolVectorArray(var, set_b, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatVectorArray(var, ret_f, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_f_a[0] = -1.0f; expected_f_a[1] = 0.0f; expected_f_a[2] = -1.0f; expected_f_a[3] = -1.0f;
     expected_f_a[4] = -1.0f; expected_f_a[5] = 0.0f; expected_f_a[6] =  0.0f; expected_f_a[7] = -1.0f;
     expected_f_a[8] = -1.0f;
@@ -5554,7 +5587,7 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
         ok(ret_f[i] == expected_f_a[i], "Variable %s, got unexpected value %.8e.\n", name, ret_f[i]);
 
     hr = var->lpVtbl->GetIntVectorArray(var, ret_i, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     expected_i_a[0] = -1; expected_i_a[1] = 0; expected_i_a[2] = -1; expected_i_a[3] = -1;
     expected_i_a[4] = -1; expected_i_a[5] = 0; expected_i_a[6] =  0; expected_i_a[7] = -1;
     expected_i_a[8] = -1;
@@ -5562,7 +5595,7 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
         ok(ret_i[i] == expected_i_a[i], "Variable %s, got unexpected value %#x.\n", name, ret_i[i]);
 
     hr = var->lpVtbl->GetBoolVectorArray(var, ret_b, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components * elements; ++i)
     {
         expected_b = type == D3D10_SVT_BOOL ? set_b[i] : expected_i_a[i];
@@ -5573,20 +5606,20 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
     set_b[4] = 25; set_b[5] = 30; set_b[6] = 35; set_b[7] = 40;
     set_b[8] = 45;
     hr = var->lpVtbl->SetBoolVectorArray(var, set_b, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetFloatVectorArray(var, ret_f, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components * elements; ++i)
         ok(ret_f[i] == -1.0f, "Variable %s, got unexpected value %.8e.\n", name, ret_f[i]);
 
     hr = var->lpVtbl->GetIntVectorArray(var, ret_i, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components * elements; ++i)
         ok(ret_i[i] == -1, "Variable %s, got unexpected value %#x.\n", name, ret_i[i]);
 
     hr = var->lpVtbl->GetBoolVectorArray(var, ret_b, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components * elements; ++i)
     {
         expected_b = type == D3D10_SVT_BOOL ? set_b[i] : -1;
@@ -5600,43 +5633,43 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
     set_b[4] = 0; set_b[5] = 0; set_b[6] = 0; set_b[7] = 0;
     set_b[8] = 0;
     hr = var->lpVtbl->SetBoolVectorArray(var, set_b, 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     set_b[0] = 1; set_b[1] = 1; set_b[2] = 1; set_b[3] = 1;
     hr = var->lpVtbl->SetBoolVectorArray(var, set_b, 1, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     /* If the previous offset of 1 worked, then the first vector value of the
      * array should still be false. */
     hr = var->lpVtbl->GetFloatVectorArray(var, ret_f, 0, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
         ok(ret_f[i] == 0, "Variable %s, got unexpected value %.8e.\n", name, ret_f[i]);
 
     hr = var->lpVtbl->GetIntVectorArray(var, ret_i, 0, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
         ok(ret_i[i] == 0, "Variable %s, got unexpected value %#x.\n", name, ret_i[i]);
 
     hr = var->lpVtbl->GetBoolVectorArray(var, ret_b, 0, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
         ok(!ret_b[i], "Variable %s, got unexpected value %#x.\n", name, ret_b[i]);
 
     /* Test the GetFloatVectorArray offset argument. If it works, we should
      * get a vector with all values set to true. */
     hr = var->lpVtbl->GetFloatVectorArray(var, ret_f, 1, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
         ok(ret_f[i] == -1.0f, "Variable %s, got unexpected value %.8e.\n", name, ret_f[i]);
 
     hr = var->lpVtbl->GetIntVectorArray(var, ret_i, 1, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
         ok(ret_i[i] == -1, "Variable %s, got unexpected value %#x.\n", name, ret_i[i]);
 
     hr = var->lpVtbl->GetBoolVectorArray(var, ret_b, 1, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < components; ++i)
     {
         expected_b = type == D3D10_SVT_BOOL ? 1 : -1;
@@ -5648,10 +5681,10 @@ static void test_vector_array_methods(ID3D10EffectVectorVariable *var, D3D10_SHA
         /* Windows array setting function has no bounds checking on offset values
          * either, so this ends up writing into adjacent variables. */
         hr = var->lpVtbl->SetBoolVectorArray(var, set_b, elements + 1, 1);
-        ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+        ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
         hr = var->lpVtbl->GetBoolVectorArray(var, ret_b, elements + 1, 1);
-        ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+        ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
         for (i = 0; i < components; ++i)
         {
             expected_b = type == D3D10_SVT_BOOL ? 1 : -1;
@@ -5665,18 +5698,16 @@ static void test_effect_vector_variable(void)
     static const struct
     {
         const char *name;
-        D3D_SHADER_VARIABLE_TYPE type;
-        unsigned int components;
-        unsigned int elements;
+        D3D10_EFFECT_TYPE_DESC type;
     }
     tests[] =
     {
-        {"v_f0", D3D10_SVT_FLOAT, 4, 1},
-        {"v_i0", D3D10_SVT_INT, 3, 1},
-        {"v_b0", D3D10_SVT_BOOL, 2, 1},
-        {"v_f_a", D3D10_SVT_FLOAT, 4, 2},
-        {"v_i_a", D3D10_SVT_INT, 3, 3},
-        {"v_b_a", D3D10_SVT_BOOL, 2, 4},
+        { "v_f0",  { "float4", D3D10_SVC_VECTOR, D3D10_SVT_FLOAT, 0, 0, 1, 4, 16, 16, 16 } },
+        { "v_f_a", { "float4", D3D10_SVC_VECTOR, D3D10_SVT_FLOAT, 2, 0, 1, 4, 32, 32, 16 } },
+        { "v_i0",  { "int3",   D3D10_SVC_VECTOR, D3D10_SVT_INT,   0, 0, 1, 3, 12, 12, 16 } },
+        { "v_i_a", { "int3",   D3D10_SVC_VECTOR, D3D10_SVT_INT,   3, 0, 1, 3, 36, 44, 16 } },
+        { "v_b0",  { "bool2",  D3D10_SVC_VECTOR, D3D10_SVT_BOOL,  0, 0, 1, 2,  8,  8, 16 } },
+        { "v_b_a", { "bool2",  D3D10_SVC_VECTOR, D3D10_SVT_BOOL,  4, 0, 1, 2, 32, 56, 16 } },
     };
     ID3D10EffectVectorVariable *v_var;
     D3D10_EFFECT_TYPE_DESC type_desc;
@@ -5696,10 +5727,10 @@ static void test_effect_vector_variable(void)
     }
 
     hr = create_effect(fx_test_vector_variable, 0, device, NULL, &effect);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(effect_desc.ConstantBuffers == 1, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -5713,22 +5744,38 @@ static void test_effect_vector_variable(void)
 
     for (i = 0; i < ARRAY_SIZE(tests); ++i)
     {
+        const D3D10_EFFECT_TYPE_DESC *t = &tests[i].type;
+
+        winetest_push_context("Variable %s", tests[i].name);
+
         var = effect->lpVtbl->GetVariableByName(effect, tests[i].name);
         type = var->lpVtbl->GetType(var);
         hr = type->lpVtbl->GetDesc(type, &type_desc);
-        ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", tests[i].name, hr);
-        ok(type_desc.Type == tests[i].type, "Variable %s, got unexpected type %#x.\n",
-                tests[i].name, type_desc.Type);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+        ok(!strcmp(type_desc.TypeName, t->TypeName), "Unexpected type name %s.\n", type_desc.TypeName);
+        ok(type_desc.Class == t->Class, "Unexpected type class %u.\n", type_desc.Class);
+        ok(type_desc.Type == t->Type, "Unexpected type %u.\n", type_desc.Type);
+        ok(type_desc.Elements == t->Elements, "Unexpected elements count %u.\n", type_desc.Elements);
+        ok(type_desc.Members == t->Members, "Unexpected members count %u.\n", type_desc.Members);
+        ok(type_desc.Rows == t->Rows, "Unexpected rows count %u.\n", type_desc.Rows);
+        ok(type_desc.Columns == t->Columns, "Unexpected columns count %u.\n", type_desc.Columns);
+        ok(type_desc.PackedSize == t->PackedSize, "Unexpected packed size %u.\n", type_desc.PackedSize);
+        ok(type_desc.UnpackedSize == t->UnpackedSize, "Unexpected unpacked size %u.\n", type_desc.UnpackedSize);
+        ok(type_desc.Stride == t->Stride, "Unexpected stride %u.\n", type_desc.Stride);
+
         v_var = var->lpVtbl->AsVector(var);
-        test_vector_methods(v_var, tests[i].type, tests[i].name, tests[i].components);
-        if (tests[i].elements > 1)
-            test_vector_array_methods(v_var, tests[i].type, tests[i].name, tests[i].components, tests[i].elements);
+        test_vector_methods(v_var, t->Type, tests[i].name, t->Rows);
+        if (t->Elements)
+            test_vector_array_methods(v_var, t->Type, tests[i].name, t->Rows, t->Elements);
+
+        winetest_pop_context();
     }
 
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 /*
@@ -5888,31 +5935,31 @@ static void test_matrix_methods(ID3D10EffectMatrixVariable *var, D3D10_SHADER_VA
     set_test_matrix(&m_set, type, row_count, col_count, 1);
 
     hr = var->lpVtbl->SetMatrix(var, &m_set.m[0][0]);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     memset(&m_ret.m[0][0], 0, sizeof(m_ret));
     hr = var->lpVtbl->GetMatrix(var, &m_ret.m[0][0]);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     compare_matrix(name, __LINE__, &m_set, &m_ret, row_count, col_count, FALSE);
 
     memset(&m_ret.m[0][0], 0, sizeof(m_ret));
     hr = var->lpVtbl->GetMatrixTranspose(var, &m_ret.m[0][0]);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     compare_matrix(name, __LINE__, &m_set, &m_ret, row_count, col_count, TRUE);
 
     hr = var->lpVtbl->SetMatrixTranspose(var, &m_set.m[0][0]);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     memset(&m_ret.m[0][0], 0, sizeof(m_ret));
     hr = var->lpVtbl->GetMatrix(var, &m_ret.m[0][0]);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     compare_matrix(name, __LINE__, &m_ret, &m_set, row_count, col_count, TRUE);
 
     memset(&m_ret.m[0][0], 0, sizeof(m_ret));
     memset(&m_expected.m[0][0], 0, sizeof(m_expected));
     hr = var->lpVtbl->GetMatrixTranspose(var, &m_ret.m[0][0]);
     transpose_matrix(&m_set, &m_expected, row_count, col_count);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     compare_matrix(name, __LINE__, &m_expected, &m_ret, row_count, col_count, TRUE);
 }
 
@@ -5926,33 +5973,33 @@ static void test_matrix_array_methods(ID3D10EffectMatrixVariable *var, D3D10_SHA
     set_test_matrix(&m_set[0], type, row_count, col_count, elements);
 
     hr = var->lpVtbl->SetMatrixArray(var, &m_set[0].m[0][0], 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     memset(m_ret, 0, sizeof(m_ret));
     hr = var->lpVtbl->GetMatrixArray(var, &m_ret[0].m[0][0], 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < elements; ++i)
         compare_matrix(name, __LINE__, &m_set[i], &m_ret[i], row_count, col_count, FALSE);
 
     memset(m_ret, 0, sizeof(m_ret));
     hr = var->lpVtbl->GetMatrixTransposeArray(var, &m_ret[0].m[0][0], 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < elements; ++i)
         compare_matrix(name, __LINE__, &m_set[i], &m_ret[i], row_count, col_count, TRUE);
 
     hr = var->lpVtbl->SetMatrixTransposeArray(var, &m_set[0].m[0][0], 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     memset(m_ret, 0, sizeof(m_ret));
     hr = var->lpVtbl->GetMatrixArray(var, &m_ret[0].m[0][0], 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < elements; ++i)
         compare_matrix(name, __LINE__, &m_ret[i], &m_set[i], row_count, col_count, TRUE);
 
     memset(m_ret, 0, sizeof(m_ret));
     memset(&m_expected, 0, sizeof(m_expected));
     hr = var->lpVtbl->GetMatrixTransposeArray(var, &m_ret[0].m[0][0], 0, elements);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     for (i = 0; i < elements; ++i)
     {
         memset(&m_expected, 0, sizeof(m_expected));
@@ -5965,21 +6012,21 @@ static void test_matrix_array_methods(ID3D10EffectMatrixVariable *var, D3D10_SHA
     hr = var->lpVtbl->SetMatrixArray(var, &m_ret[0].m[0][0], 0, elements);
 
     hr = var->lpVtbl->SetMatrixArray(var, &m_set[0].m[0][0], 1, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     hr = var->lpVtbl->GetMatrixArray(var, &m_ret[0].m[0][0], 1, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     compare_matrix(name, __LINE__, &m_ret[0], &m_set[0], row_count, col_count, FALSE);
 
     memset(m_ret, 0, sizeof(m_ret));
     hr = var->lpVtbl->SetMatrixArray(var, &m_ret[0].m[0][0], 0, elements);
 
     hr = var->lpVtbl->SetMatrixTransposeArray(var, &m_set[0].m[0][0], 1, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
     memset(&m_expected, 0, sizeof(m_expected));
     hr = var->lpVtbl->GetMatrixTransposeArray(var, &m_ret[0].m[0][0], 1, 1);
-    ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+    ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
     transpose_matrix(&m_set[0], &m_expected, row_count, col_count);
     compare_matrix(name, __LINE__, &m_expected, &m_ret[0], row_count, col_count, TRUE);
 
@@ -5988,19 +6035,19 @@ static void test_matrix_array_methods(ID3D10EffectMatrixVariable *var, D3D10_SHA
         /* Like vector array functions, matrix array functions will allow for
          * writing out of bounds into adjacent memory. */
         hr = var->lpVtbl->SetMatrixArray(var, &m_set[0].m[0][0], elements + 1, 1);
-        ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+        ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
         memset(m_ret, 0, sizeof(m_ret));
         hr = var->lpVtbl->GetMatrixArray(var, &m_ret[0].m[0][0], elements + 1, 1);
-        ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+        ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
         compare_matrix(name, __LINE__, &m_expected, &m_ret[0], row_count, col_count, TRUE);
 
         hr = var->lpVtbl->SetMatrixTransposeArray(var, &m_set[0].m[0][0], elements + 1, 1);
-        ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+        ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
 
         memset(&m_expected, 0, sizeof(m_expected));
         hr = var->lpVtbl->GetMatrixTransposeArray(var, &m_ret[0].m[0][0], elements + 1, 1);
-        ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", name, hr);
+        ok(hr == S_OK, "Variable %s, got unexpected hr %#lx.\n", name, hr);
         transpose_matrix(&m_set[0], &m_expected, row_count, col_count);
         compare_matrix(name, __LINE__, &m_expected, &m_ret[0], row_count, col_count, TRUE);
     }
@@ -6011,18 +6058,15 @@ static void test_effect_matrix_variable(void)
     static const struct
     {
         const char *name;
-        D3D_SHADER_VARIABLE_TYPE type;
-        unsigned int rows;
-        unsigned int columns;
-        unsigned int elements;
+        D3D10_EFFECT_TYPE_DESC type;
     }
     tests[] =
     {
-        {"m_f0", D3D10_SVT_FLOAT, 4, 4, 1},
-        {"m_i0", D3D10_SVT_INT, 2, 3, 1},
-        {"m_b0", D3D10_SVT_BOOL, 3, 2, 1},
-        {"m_f_a", D3D10_SVT_FLOAT, 4, 4, 2},
-        {"m_b_a", D3D10_SVT_BOOL, 3, 2, 2},
+        { "m_f0",  { "float4x4", D3D10_SVC_MATRIX_COLUMNS, D3D10_SVT_FLOAT, 0, 0, 4, 4,  64,  64, 64 } },
+        { "m_i0",  { "int2x3",   D3D10_SVC_MATRIX_ROWS,    D3D10_SVT_INT,   0, 0, 2, 3,  24,  28, 32 } },
+        { "m_b0",  { "bool3x2",  D3D10_SVC_MATRIX_COLUMNS, D3D10_SVT_BOOL,  0, 0, 3, 2,  24,  28, 32 } },
+        { "m_f_a", { "float4x4", D3D10_SVC_MATRIX_COLUMNS, D3D10_SVT_FLOAT, 2, 0, 4, 4, 128, 128, 64 } },
+        { "m_b_a", { "bool3x2",  D3D10_SVC_MATRIX_COLUMNS, D3D10_SVT_BOOL,  2, 0, 3, 2,  48,  60, 32 } },
     };
     ID3D10EffectMatrixVariable *m_var;
     D3D10_EFFECT_TYPE_DESC type_desc;
@@ -6042,10 +6086,10 @@ static void test_effect_matrix_variable(void)
     }
 
     hr = create_effect(fx_test_matrix_variable, 0, device, NULL, &effect);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(effect_desc.ConstantBuffers == 1, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -6059,23 +6103,38 @@ static void test_effect_matrix_variable(void)
 
     for (i = 0; i < ARRAY_SIZE(tests); ++i)
     {
+        const D3D10_EFFECT_TYPE_DESC *t = &tests[i].type;
+
+        winetest_push_context("Variable %s", tests[i].name);
+
         var = effect->lpVtbl->GetVariableByName(effect, tests[i].name);
         type = var->lpVtbl->GetType(var);
         hr = type->lpVtbl->GetDesc(type, &type_desc);
-        ok(hr == S_OK, "Variable %s, got unexpected hr %#x.\n", tests[i].name, hr);
-        ok(type_desc.Type == tests[i].type, "Variable %s, got unexpected type %#x.\n",
-                tests[i].name, type_desc.Type);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+        ok(!strcmp(type_desc.TypeName, t->TypeName), "Unexpected type name %s.\n", type_desc.TypeName);
+        ok(type_desc.Class == t->Class, "Unexpected type class %u.\n", type_desc.Class);
+        ok(type_desc.Type == t->Type, "Unexpected type %u.\n", type_desc.Type);
+        ok(type_desc.Elements == t->Elements, "Unexpected elements count %u.\n", type_desc.Elements);
+        ok(type_desc.Members == t->Members, "Unexpected members count %u.\n", type_desc.Members);
+        ok(type_desc.Rows == t->Rows, "Unexpected rows count %u.\n", type_desc.Rows);
+        ok(type_desc.Columns == t->Columns, "Unexpected columns count %u.\n", type_desc.Columns);
+        ok(type_desc.PackedSize == t->PackedSize, "Unexpected packed size %u.\n", type_desc.PackedSize);
+        ok(type_desc.UnpackedSize == t->UnpackedSize, "Unexpected unpacked size %u.\n", type_desc.UnpackedSize);
+        ok(type_desc.Stride == t->Stride, "Unexpected stride %u.\n", type_desc.Stride);
+
         m_var = var->lpVtbl->AsMatrix(var);
-        test_matrix_methods(m_var, tests[i].type, tests[i].name, tests[i].rows, tests[i].columns);
-        if (tests[i].elements > 1)
-            test_matrix_array_methods(m_var, tests[i].type, tests[i].name, tests[i].rows, tests[i].columns,
-                    tests[i].elements);
+        test_matrix_methods(m_var, t->Type, tests[i].name, t->Rows, t->Columns);
+        if (t->Elements)
+            test_matrix_array_methods(m_var, t->Type, tests[i].name, t->Rows, t->Columns, t->Elements);
+
+        winetest_pop_context();
     }
 
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 /*
@@ -6225,7 +6284,7 @@ static ID3D10EffectShaderResourceVariable *get_effect_shader_resource_variable_(
     type = var->lpVtbl->GetType(var);
     ok_(__FILE__, line)(!!type, "Got unexpected type %p.\n", type);
     hr = type->lpVtbl->GetDesc(type, &type_desc);
-    ok_(__FILE__, line)(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok_(__FILE__, line)(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok_(__FILE__, line)(type_desc.Type == D3D10_SVT_TEXTURE2D, "Type is %x, expected %x.\n",
             type_desc.Type, D3D10_SVT_TEXTURE2D);
     return var->lpVtbl->AsShaderResource(var);
@@ -6257,10 +6316,10 @@ static void test_effect_resource_variable(void)
     }
 
     hr = create_effect(fx_test_resource_variable, 0, device, NULL, &effect);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->GetDesc(effect, &effect_desc);
-    ok(SUCCEEDED(hr), "Failed to get effect description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!effect_desc.IsChildEffect, "Unexpected IsChildEffect.\n");
     ok(effect_desc.ConstantBuffers == 0, "Unexpected constant buffers count %u.\n",
             effect_desc.ConstantBuffers);
@@ -6278,19 +6337,19 @@ static void test_effect_resource_variable(void)
     var = effect->lpVtbl->GetVariableByName(effect, "dummy name");
     t0 = var->lpVtbl->AsShaderResource(var);
     hr = t0->lpVtbl->SetResource(t0, srv0);
-    ok(hr == E_FAIL, "Got unexpected hr %#x.\n", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     var = effect->lpVtbl->GetVariableByName(effect, "t0");
     t0 = get_effect_shader_resource_variable(var);
     hr = t0->lpVtbl->SetResource(t0, srv0);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     var = effect->lpVtbl->GetVariableByName(effect, "t_a");
     t_a = get_effect_shader_resource_variable(var);
     for (i = 0; i < 2; ++i)
         create_effect_texture_resource(device, &srv_a[i], &tex_a[i]);
     hr = t_a->lpVtbl->SetResourceArray(t_a, srv_a, 0, 2);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     /* Apply the pass to bind the resource to the shader. */
     technique = effect->lpVtbl->GetTechniqueByName(effect, "rsrc_test");
@@ -6298,13 +6357,13 @@ static void test_effect_resource_variable(void)
     pass = technique->lpVtbl->GetPassByName(technique, "p0");
     ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
     hr = pass->lpVtbl->GetDesc(pass, &pass_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!!pass_desc.pIAInputSignature, "Unexpected input signature.\n");
-    ok(pass_desc.IAInputSignatureSize == 88, "Unexpected input signature size %lu.\n",
+    ok(pass_desc.IAInputSignatureSize == 88, "Got unexpected input signature size %Iu.\n",
             pass_desc.IAInputSignatureSize);
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ID3D10Device_PSGetShaderResources(device, 0, 1, &srv_tmp[0]);
     ok(srv_tmp[0] == srv0, "Got unexpected shader resource view %p.\n", srv_tmp[0]);
@@ -6321,10 +6380,10 @@ static void test_effect_resource_variable(void)
     var = t_a->lpVtbl->GetElement(t_a, 1);
     t_a_0 = get_effect_shader_resource_variable(var);
     hr = t_a_0->lpVtbl->SetResource(t_a_0, srv0);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ID3D10Device_PSGetShaderResources(device, 1, 2, srv_tmp);
     ok(srv_tmp[0] == srv_a[0], "Got unexpected shader resource view %p.\n", srv_tmp[0]);
@@ -6334,10 +6393,10 @@ static void test_effect_resource_variable(void)
 
     /* Test offset. */
     hr = t_a->lpVtbl->SetResourceArray(t_a, srv_a, 1, 1);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ID3D10Device_PSGetShaderResources(device, 1, 2, srv_tmp);
     ok(srv_tmp[0] == srv_a[0], "Got unexpected shader resource view %p.\n", srv_tmp[0]);
@@ -6349,7 +6408,7 @@ static void test_effect_resource_variable(void)
     {
         /* This crashes on Windows. */
         hr = t_a->lpVtbl->SetResourceArray(t_a, srv_a, 2, 2);
-        ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     }
 
     ID3D10ShaderResourceView_Release(srv0);
@@ -6363,7 +6422,7 @@ static void test_effect_resource_variable(void)
     effect->lpVtbl->Release(effect);
 
     hr = create_effect(fx_test_resource_variable2, 0, device, NULL, &effect);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     technique = effect->lpVtbl->GetTechniqueByName(effect, "rsrc_test");
     ok(technique->lpVtbl->IsValid(technique), "Expected valid technique.\n");
@@ -6377,12 +6436,12 @@ static void test_effect_resource_variable(void)
     ok(s->lpVtbl->IsValid(s), "Expected valid sample variable.\n");
 
     hr = s->lpVtbl->GetSampler(s, 0, &sampler[0]);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     hr = s->lpVtbl->GetSampler(s, 1, &sampler[1]);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ID3D10Device_PSGetSamplers(device, 0, ARRAY_SIZE(samplers), samplers);
     for (i = 0; i < ARRAY_SIZE(samplers); ++i)
@@ -6402,7 +6461,7 @@ static void test_effect_resource_variable(void)
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 #if 0
@@ -6492,7 +6551,7 @@ static void test_effect_annotations(void)
     }
 
     hr = create_effect(fx_test_annotations, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create an effect.\n");
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     cb = effect->lpVtbl->GetConstantBufferByName(effect, "cb");
     a = cb->lpVtbl->GetAnnotationByName(cb, "s");
@@ -6505,7 +6564,7 @@ static void test_effect_annotations(void)
     {
         v = effect->lpVtbl->GetVariableByIndex(effect, i);
         hr = v->lpVtbl->GetDesc(v, &var_desc);
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
         ok(var_desc.Annotations == 1, "Unexpected annotations count %u.\n", var_desc.Annotations);
         v = v->lpVtbl->GetAnnotationByName(v, "s");
         ok(v->lpVtbl->IsValid(v), "Expected valid variable.\n");
@@ -6530,7 +6589,7 @@ static void test_effect_annotations(void)
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 static void test_effect_optimize(void)
@@ -6558,23 +6617,23 @@ static void test_effect_optimize(void)
     }
 
     hr = create_effect(fx_local_shader, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create an effect.\n");
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     tech = effect->lpVtbl->GetTechniqueByIndex(effect, 0);
     hr = tech->lpVtbl->GetDesc(tech, &tech_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(tech_desc.Name, "Render"), "Unexpected technique name %s.\n", tech_desc.Name);
 
     pass = tech->lpVtbl->GetPassByIndex(tech, 0);
     hr = pass->lpVtbl->GetDesc(pass, &pass_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(pass_desc.Name, "P0"), "Unexpected pass name %s.\n", pass_desc.Name);
 
     v = effect->lpVtbl->GetVariableByName(effect, "g_so");
 
     gs = v->lpVtbl->AsShader(v);
     hr = gs->lpVtbl->GetShaderDesc(gs, 0, &shaderdesc);
-    ok(hr == S_OK, "Failed to get shader description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!!shaderdesc.pInputSignature, "Expected input signature.\n");
     ok(!shaderdesc.IsInline, "Unexpected inline flag.\n");
     ok(!!shaderdesc.pBytecode, "Expected bytecode.\n");
@@ -6588,13 +6647,13 @@ static void test_effect_optimize(void)
     ok(!ret, "Unexpected return value.\n");
 
     hr = effect->lpVtbl->Optimize(effect);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ret = effect->lpVtbl->IsOptimized(effect);
     ok(ret, "Unexpected return value.\n");
 
     hr = gs->lpVtbl->GetShaderDesc(gs, 0, &shaderdesc);
-    ok(hr == S_OK, "Failed to get shader description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!!shaderdesc.pInputSignature, "Expected input signature.\n");
     ok(!shaderdesc.IsInline, "Unexpected inline flag.\n");
     ok(!shaderdesc.pBytecode, "Unexpected bytecode.\n");
@@ -6604,11 +6663,11 @@ static void test_effect_optimize(void)
     ok(!shaderdesc.NumOutputSignatureEntries, "Unexpected output signature count.\n");
 
     hr = tech->lpVtbl->GetDesc(tech, &tech_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!tech_desc.Name, "Unexpected technique name %p.\n", tech_desc.Name);
 
     hr = pass->lpVtbl->GetDesc(pass, &pass_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!pass_desc.Name, "Unexpected pass name %p.\n", pass_desc.Name);
 
     pass = tech->lpVtbl->GetPassByName(tech, "P0");
@@ -6622,17 +6681,17 @@ static void test_effect_optimize(void)
 
     /* Already optimized */
     hr = effect->lpVtbl->Optimize(effect);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     effect->lpVtbl->Release(effect);
 
     /* Annotations are stripped. */
     hr = create_effect(fx_test_annotations, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create an effect.\n");
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     cb = effect->lpVtbl->GetConstantBufferByName(effect, "cb");
     hr = cb->lpVtbl->GetDesc(cb, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(var_desc.Annotations == 1, "Unexpected annotations count %u.\n", var_desc.Annotations);
     v = cb->lpVtbl->GetAnnotationByName(cb, "s");
     ok(v->lpVtbl->IsValid(v), "Expected valid variable.\n");
@@ -6643,7 +6702,7 @@ static void test_effect_optimize(void)
     {
         v = effect->lpVtbl->GetVariableByIndex(effect, i);
         hr = v->lpVtbl->GetDesc(v, &var_desc);
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
         ok(var_desc.Annotations == 1, "Unexpected annotations count %u.\n", var_desc.Annotations);
         v = v->lpVtbl->GetAnnotationByName(v, "s");
         ok(v->lpVtbl->IsValid(v), "Expected valid variable.\n");
@@ -6651,7 +6710,7 @@ static void test_effect_optimize(void)
 
     tech = effect->lpVtbl->GetTechniqueByIndex(effect, 0);
     hr = tech->lpVtbl->GetDesc(tech, &tech_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(tech_desc.Annotations == 1, "Unexpected annotations count %u.\n", tech_desc.Annotations);
     v = tech->lpVtbl->GetAnnotationByName(tech, "s");
     ok(v->lpVtbl->IsValid(v), "Expected valid variable.\n");
@@ -6659,17 +6718,17 @@ static void test_effect_optimize(void)
     pass = tech->lpVtbl->GetPassByIndex(tech, 0);
     ok(pass->lpVtbl->IsValid(pass), "Expected valid technique.\n");
     hr = pass->lpVtbl->GetDesc(pass, &pass_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pass_desc.Annotations == 1, "Unexpected annotations count %u.\n", pass_desc.Annotations);
     v = pass->lpVtbl->GetAnnotationByName(pass, "s");
     ok(v->lpVtbl->IsValid(v), "Expected valid variable.\n");
 
     hr = effect->lpVtbl->Optimize(effect);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     cb = effect->lpVtbl->GetConstantBufferByIndex(effect, 0);
     hr = cb->lpVtbl->GetDesc(cb, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 todo_wine {
     ok(!var_desc.Annotations, "Unexpected annotations count %u.\n", var_desc.Annotations);
     v = cb->lpVtbl->GetAnnotationByName(cb, "s");
@@ -6682,7 +6741,7 @@ todo_wine {
     {
         v = effect->lpVtbl->GetVariableByIndex(effect, i);
         hr = v->lpVtbl->GetDesc(v, &var_desc);
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     todo_wine {
         ok(!var_desc.Annotations, "Unexpected annotations count %u.\n", var_desc.Annotations);
         v = v->lpVtbl->GetAnnotationByName(v, "s");
@@ -6692,7 +6751,7 @@ todo_wine {
 
     tech = effect->lpVtbl->GetTechniqueByIndex(effect, 0);
     hr = tech->lpVtbl->GetDesc(tech, &tech_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 todo_wine {
     ok(!tech_desc.Annotations, "Unexpected annotations count %u.\n", tech_desc.Annotations);
     v = tech->lpVtbl->GetAnnotationByName(tech, "s");
@@ -6702,7 +6761,7 @@ todo_wine {
     pass = tech->lpVtbl->GetPassByIndex(tech, 0);
     ok(pass->lpVtbl->IsValid(pass), "Expected valid technique.\n");
     hr = pass->lpVtbl->GetDesc(pass, &pass_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 todo_wine {
     ok(!pass_desc.Annotations, "Unexpected annotations count %u.\n", pass_desc.Annotations);
     v = pass->lpVtbl->GetAnnotationByName(pass, "s");
@@ -6712,7 +6771,7 @@ todo_wine {
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 static void test_effect_shader_description(void)
@@ -6732,40 +6791,40 @@ static void test_effect_shader_description(void)
     }
 
     hr = create_effect(fx_local_shader, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create an effect.\n");
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     v = effect->lpVtbl->GetVariableByName(effect, "v0");
 
     /* GetShaderDesc() is indexing through all shaders in the effect.*/
     s = v->lpVtbl->AsShader(v);
     hr = s->lpVtbl->GetShaderDesc(s, 0, &shaderdesc);
-    ok(hr == S_OK, "Failed to get shader description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!shaderdesc.BytecodeLength, "Unexpected bytecode length %u.\n", shaderdesc.BytecodeLength);
     hr = s->lpVtbl->GetShaderDesc(s, 1, &shaderdesc);
-    ok(hr == S_OK, "Failed to get shader description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!shaderdesc.BytecodeLength, "Unexpected bytecode length %u.\n", shaderdesc.BytecodeLength);
     hr = s->lpVtbl->GetShaderDesc(s, 2, &shaderdesc);
-    ok(hr == S_OK, "Failed to get shader description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!shaderdesc.BytecodeLength, "Unexpected bytecode length %u.\n", shaderdesc.BytecodeLength);
     hr = s->lpVtbl->GetShaderDesc(s, 3, &shaderdesc);
-    ok(hr == S_OK, "Failed to get shader description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(shaderdesc.BytecodeLength == 424, "Unexpected bytecode length %u.\n",
             shaderdesc.BytecodeLength);
     hr = s->lpVtbl->GetShaderDesc(s, 4, &shaderdesc);
-    ok(hr == S_OK, "Failed to get shader description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(shaderdesc.BytecodeLength == 424, "Unexpected bytecode length %u.\n",
             shaderdesc.BytecodeLength);
     hr = s->lpVtbl->GetShaderDesc(s, 5, &shaderdesc);
-    ok(hr == S_OK, "Failed to get shader description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(shaderdesc.BytecodeLength == 420, "Unexpected bytecode length %u.\n",
             shaderdesc.BytecodeLength);
     hr = s->lpVtbl->GetShaderDesc(s, 6, &shaderdesc);
-    ok(hr == S_OK, "Failed to get shader description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(shaderdesc.BytecodeLength == 516, "Unexpected bytecode length %u.\n",
             shaderdesc.BytecodeLength);
     ok(!shaderdesc.SODecl, "Unexpected SO declaration %p.\n", shaderdesc.SODecl);
     hr = s->lpVtbl->GetShaderDesc(s, 7, &shaderdesc);
-    ok(hr == S_OK, "Failed to get shader description, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(shaderdesc.BytecodeLength == 516, "Unexpected bytecode length %u.\n",
             shaderdesc.BytecodeLength);
     ok(!strcmp(shaderdesc.SODecl, "SV_POSITION.x; $Skip.x; SV_POSITION.gb"),
@@ -6774,7 +6833,7 @@ static void test_effect_shader_description(void)
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 static void test_effect_shader_object(void)
@@ -6796,7 +6855,7 @@ static void test_effect_shader_object(void)
     }
 
     hr = create_effect(fx_local_shader, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create an effect!\n");
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     v = effect->lpVtbl->GetVariableByName(effect, "v0");
 
@@ -6804,108 +6863,108 @@ static void test_effect_shader_object(void)
 
     vs = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetVertexShader(s, 0, &vs);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!vs, "Unexpected shader object.\n");
 
     vs = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetVertexShader(s, 1, &vs);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
     ok(!vs, "Unexpected shader object.\n");
 
     vs = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetVertexShader(s, 2, &vs);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
     ok(!vs, "Unexpected shader object.\n");
 
     vs = NULL;
     hr = s->lpVtbl->GetVertexShader(s, 3, &vs);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!!vs, "Unexpected shader object.\n");
     ID3D10VertexShader_Release(vs);
 
     vs = NULL;
     hr = s->lpVtbl->GetVertexShader(s, 4, &vs);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!!vs, "Unexpected shader object.\n");
     ID3D10VertexShader_Release(vs);
 
     ps = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetPixelShader(s, 0, &ps);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
     ok(!ps, "Unexpected shader object.\n");
 
     ps = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetPixelShader(s, 1, &ps);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!ps, "Unexpected shader object.\n");
 
     ps = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetPixelShader(s, 2, &ps);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
     ok(!ps, "Unexpected shader object.\n");
 
     ps = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetPixelShader(s, 3, &ps);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
     ok(!ps, "Unexpected shader object.\n");
 
     ps = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetPixelShader(s, 4, &ps);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
     ok(!ps, "Unexpected shader object.\n");
 
     ps = NULL;
     hr = s->lpVtbl->GetPixelShader(s, 5, &ps);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!!ps, "Unexpected shader object.\n");
     ID3D10PixelShader_Release(ps);
 
     gs = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetGeometryShader(s, 0, &gs);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
     ok(!gs, "Unexpected shader object.\n");
 
     gs = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetGeometryShader(s, 1, &gs);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
     ok(!gs, "Unexpected shader object.\n");
 
     gs = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetGeometryShader(s, 2, &gs);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!gs, "Unexpected shader object.\n");
 
     gs = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetGeometryShader(s, 3, &gs);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
     ok(!gs, "Unexpected shader object.\n");
 
     gs = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetGeometryShader(s, 4, &gs);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
     ok(!gs, "Unexpected shader object.\n");
 
     gs = (void *)0xdeadbeef;
     hr = s->lpVtbl->GetGeometryShader(s, 5, &gs);
-    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#x.\n", hr);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
     ok(!gs, "Unexpected shader object.\n");
 
     gs = NULL;
     hr = s->lpVtbl->GetGeometryShader(s, 6, &gs);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!!gs, "Unexpected shader object.\n");
     ID3D10GeometryShader_Release(gs);
 
     gs = NULL;
     hr = s->lpVtbl->GetGeometryShader(s, 7, &gs);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!!gs, "Unexpected shader object.\n");
     ID3D10GeometryShader_Release(gs);
 
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 #if 0
@@ -7114,45 +7173,47 @@ static void test_effect_pool(void)
     ok(!!device2, "Failed to create d3d device.\n");
 
     hr = D3D10CreateEffectPoolFromMemory(NULL, 0, 0, device, &pool);
-    todo_wine
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
+
+    hr = create_effect_pool(fx_test_pool, NULL, &pool);
+    ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
 
     hr = create_effect_pool(fx_test_pool, device, &pool);
-    ok(hr == S_OK, "Failed to create effect pool, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     refcount = get_refcount(pool);
-    ok(refcount == 1, "Unexpected refcount %u.\n", refcount);
+    ok(refcount == 1, "Got unexpected refcount %lu.\n", refcount);
     effect = pool->lpVtbl->AsEffect(pool);
     ok(!!effect, "Expected effect pointer.\n");
 
     effect->lpVtbl->AddRef(effect);
     refcount = get_refcount(pool);
-    ok(refcount == 2, "Unexpected refcount %u.\n", refcount);
+    ok(refcount == 2, "Got unexpected refcount %lu.\n", refcount);
     effect->lpVtbl->Release(effect);
 
     hr = pool->lpVtbl->QueryInterface(pool, &IID_IUnknown, (void **)&unk);
     todo_wine
-    ok(hr == E_NOINTERFACE, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_NOINTERFACE, "Got unexpected hr %#lx.\n", hr);
     if (SUCCEEDED(hr)) IUnknown_Release(unk);
 
     hr = pool->lpVtbl->QueryInterface(pool, &IID_ID3D10Effect, (void **)&unk);
-    ok(hr == E_NOINTERFACE, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_NOINTERFACE, "Got unexpected hr %#lx.\n", hr);
 
     hr = pool->lpVtbl->QueryInterface(pool, &IID_ID3D10EffectPool, (void **)&unk);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(unk == (IUnknown *)pool, "Unexpected pointer.\n");
     IUnknown_Release(unk);
 
     hr = effect->lpVtbl->QueryInterface(effect, &IID_IUnknown, (void **)&unk);
     todo_wine
-    ok(hr == E_NOINTERFACE, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_NOINTERFACE, "Got unexpected hr %#lx.\n", hr);
     if (SUCCEEDED(hr)) IUnknown_Release(unk);
 
     hr = effect->lpVtbl->QueryInterface(effect, &IID_ID3D10Effect, (void **)&unk);
-    ok(hr == E_NOINTERFACE, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_NOINTERFACE, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect->lpVtbl->QueryInterface(effect, &IID_ID3D10EffectPool, (void **)&pool2);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pool2 == pool, "Unexpected pool pointer.\n");
     pool2->lpVtbl->Release(pool2);
 
@@ -7160,7 +7221,7 @@ static void test_effect_pool(void)
     ok(ret, "Expected pool.\n");
 
     hr = effect->lpVtbl->GetDesc(effect, &desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!desc.IsChildEffect, "Unexpected child flag.\n");
     ok(desc.ConstantBuffers == 1, "Unexpected buffer count %u.\n", desc.ConstantBuffers);
     ok(!desc.SharedConstantBuffers, "Unexpected shared buffer count %u.\n",
@@ -7171,13 +7232,13 @@ static void test_effect_pool(void)
 
     cb = effect->lpVtbl->GetConstantBufferByIndex(effect, 0);
     hr = cb->lpVtbl->GetDesc(cb, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "s_cb"), "Unexpected name %s.\n", var_desc.Name);
     ok(var_desc.Flags == D3D10_EFFECT_VARIABLE_POOLED, "Unexpected flags %#x.\n", var_desc.Flags);
     a = cb->lpVtbl->GetAnnotationByIndex(cb, 0);
     ok(a->lpVtbl->IsValid(a), "Expected valid annotation.\n");
     hr = a->lpVtbl->GetDesc(a, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "s"), "Unexpected name %s.\n", var_desc.Name);
     ok(var_desc.Flags == (D3D10_EFFECT_VARIABLE_POOLED | D3D10_EFFECT_VARIABLE_ANNOTATION),
             "Unexpected flags %#x.\n", var_desc.Flags);
@@ -7186,70 +7247,68 @@ static void test_effect_pool(void)
     pass = t->lpVtbl->GetPassByName(t, "P1");
     ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
     hr = pass->lpVtbl->GetVertexShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     hr = shader_desc.pShaderVariable->lpVtbl->GetDesc(shader_desc.pShaderVariable, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "$Anonymous"), "Unexpected name %s.\n", var_desc.Name);
     ok(!var_desc.Flags, "Unexpected flags %#x.\n", var_desc.Flags);
 
     v = effect->lpVtbl->GetVariableByName(effect, "s_blendstate");
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "s_blendstate"), "Unexpected name %s.\n", var_desc.Name);
     ok(var_desc.Flags == D3D10_EFFECT_VARIABLE_POOLED, "Unexpected flags %#x.\n", var_desc.Flags);
 
     v = effect->lpVtbl->GetVariableByName(effect, "s_texture");
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "s_texture"), "Unexpected name %s.\n", var_desc.Name);
     ok(var_desc.Flags == D3D10_EFFECT_VARIABLE_POOLED, "Unexpected flags %#x.\n", var_desc.Flags);
 
     v = effect->lpVtbl->GetVariableByName(effect, "ps");
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "ps"), "Unexpected name %s.\n", var_desc.Name);
     ok(var_desc.Flags == D3D10_EFFECT_VARIABLE_POOLED, "Unexpected flags %#x.\n", var_desc.Flags);
 
     t = effect->lpVtbl->GetTechniqueByIndex(effect, 0);
     pass = t->lpVtbl->GetPassByIndex(t, 0);
     hr = pass->lpVtbl->GetVertexShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     sv = shader_desc.pShaderVariable;
     hr = sv->lpVtbl->GetDesc(sv, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "$Anonymous"), "Unexpected name %s.\n", var_desc.Name);
     ok(!var_desc.Flags, "Unexpected flags %#x.\n", var_desc.Flags);
 
     /* Create standalone effect from the same blob used for pool,  */
     hr = create_effect(fx_test_pool, D3D10_EFFECT_COMPILE_CHILD_EFFECT, device, NULL, &child_effect);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
 
     hr = create_effect(fx_test_pool, 0, device, NULL, &effect2);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = effect2->lpVtbl->QueryInterface(effect2, &IID_IUnknown, (void **)&unk);
     todo_wine
-    ok(hr == E_NOINTERFACE, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_NOINTERFACE, "Got unexpected hr %#lx.\n", hr);
     if (SUCCEEDED(hr)) IUnknown_Release(unk);
 
     hr = effect2->lpVtbl->QueryInterface(effect2, &IID_ID3D10Effect, (void **)&unk);
     todo_wine
-    ok(hr == E_NOINTERFACE, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_NOINTERFACE, "Got unexpected hr %#lx.\n", hr);
     if (SUCCEEDED(hr)) IUnknown_Release(unk);
 
     /* For regular effects querying for ID3D10EffectPool is broken */
     hr = effect2->lpVtbl->QueryInterface(effect2, &IID_ID3D10EffectPool, (void **)&unk);
-todo_wine {
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
-    ok(unk == (IUnknown *)effect2, "Unexpected pointer.\n");
-}
+    todo_wine ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    todo_wine ok(unk == (IUnknown *)effect2, "Got unexpected pointer %p.\n", unk);
     if (SUCCEEDED(hr)) IUnknown_Release(unk);
 
     ret = effect2->lpVtbl->IsPool(effect2);
     ok(!ret, "Unexpected pool.\n");
 
     hr = effect2->lpVtbl->GetDesc(effect2, &desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!desc.IsChildEffect, "Unexpected child flag.\n");
     ok(desc.ConstantBuffers == 1, "Unexpected buffer count %u.\n", desc.ConstantBuffers);
     ok(!desc.SharedConstantBuffers, "Unexpected shared buffer count %u.\n",
@@ -7260,7 +7319,7 @@ todo_wine {
 
     cb = effect2->lpVtbl->GetConstantBufferByIndex(effect2, 0);
     hr = cb->lpVtbl->GetDesc(cb, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "s_cb"), "Unexpected name %s.\n", var_desc.Name);
     ok(!var_desc.Flags, "Unexpected flags %#x.\n", var_desc.Flags);
 
@@ -7268,13 +7327,13 @@ todo_wine {
 
     /* Pool and child that use different devices. */
     hr = create_effect_pool(fx_test_pool, device2, &pool2);
-    ok(hr == S_OK, "Failed to create an effect pool, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = create_effect(fx_test_pool_child, D3D10_EFFECT_COMPILE_CHILD_EFFECT, device, pool2, &child_effect);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = child_effect->lpVtbl->GetDevice(child_effect, &device3);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(device3 == device, "Unexpected device.\n");
     ID3D10Device_Release(device3);
 
@@ -7282,7 +7341,7 @@ todo_wine {
     ok(cb->lpVtbl->IsValid(cb), "Expected valid constant buffer.\n");
 
     hr = cb->lpVtbl->GetConstantBuffer(cb, &buffer);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Buffer_GetDevice(buffer, &device3);
     ok(device3 == device2, "Unexpected device.\n");
     ID3D10Device_Release(device3);
@@ -7293,22 +7352,22 @@ todo_wine {
 
     /* When pool is specified, corresponding flag has to be set. */
     hr = create_effect(fx_test_pool_child, 0, device, pool, &child_effect);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
 
     hr = create_effect(fx_test_pool_child, D3D10_EFFECT_COMPILE_CHILD_EFFECT, device, NULL, &child_effect);
-    ok(hr == E_INVALIDARG, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
 
     refcount = get_refcount(pool);
-    ok(refcount == 1, "Unexpected refcount %u.\n", refcount);
+    ok(refcount == 1, "Got unexpected refcount %lu.\n", refcount);
 
     hr = create_effect(fx_test_pool_child, D3D10_EFFECT_COMPILE_CHILD_EFFECT, device, pool, &child_effect);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     refcount = get_refcount(pool);
-    ok(refcount == 2, "Unexpected refcount %u.\n", refcount);
+    ok(refcount == 2, "Got unexpected refcount %lu.\n", refcount);
 
     hr = child_effect->lpVtbl->GetDesc(child_effect, &desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(desc.IsChildEffect, "Unexpected child flag.\n");
     ok(desc.ConstantBuffers == 2, "Unexpected buffer count %u.\n", desc.ConstantBuffers);
     ok(desc.SharedConstantBuffers == 1, "Unexpected shared buffer count %u.\n",
@@ -7323,7 +7382,7 @@ todo_wine {
     ok(ret, "Unexpected invalid variable.\n");
 
     hr = cb->lpVtbl->GetDesc(cb, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "l_cb"), "Unexpected name %s.\n", var_desc.Name);
     ok(!var_desc.Flags, "Unexpected flags %#x.\n", var_desc.Flags);
 
@@ -7332,7 +7391,7 @@ todo_wine {
     ok(ret, "Unexpected invalid variable.\n");
 
     hr = cb->lpVtbl->GetDesc(cb, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "l_cb2"), "Unexpected name %s.\n", var_desc.Name);
     ok(!var_desc.Flags, "Unexpected flags %#x.\n", var_desc.Flags);
 
@@ -7341,7 +7400,7 @@ todo_wine {
     ok(ret, "Unexpected invalid variable.\n");
 
     hr = cb->lpVtbl->GetDesc(cb, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "s_cb"), "Unexpected name %s.\n", var_desc.Name);
     ok(var_desc.Flags == D3D10_EFFECT_VARIABLE_POOLED, "Unexpected flags %#x.\n", var_desc.Flags);
 
@@ -7355,49 +7414,49 @@ todo_wine {
     /* Local variables first */
     v = child_effect->lpVtbl->GetVariableByIndex(child_effect, 0);
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "f0"), "Unexpected name %s.\n", var_desc.Name);
     ok(!var_desc.Flags, "Unexpected flags %#x.\n", var_desc.Flags);
 
     v = child_effect->lpVtbl->GetVariableByIndex(child_effect, 1);
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "f3"), "Unexpected name %s.\n", var_desc.Name);
     ok(!var_desc.Flags, "Unexpected flags %#x.\n", var_desc.Flags);
 
     v = child_effect->lpVtbl->GetVariableByIndex(child_effect, 2);
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "vs"), "Unexpected name %s.\n", var_desc.Name);
     ok(!var_desc.Flags, "Unexpected flags %#x.\n", var_desc.Flags);
 
     v = child_effect->lpVtbl->GetVariableByIndex(child_effect, 3);
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "f1"), "Unexpected name %s.\n", var_desc.Name);
     ok(var_desc.Flags == D3D10_EFFECT_VARIABLE_POOLED, "Unexpected flags %#x.\n", var_desc.Flags);
 
     v = child_effect->lpVtbl->GetVariableByIndex(child_effect, 4);
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "f2"), "Unexpected name %s.\n", var_desc.Name);
     ok(var_desc.Flags == D3D10_EFFECT_VARIABLE_POOLED, "Unexpected flags %#x.\n", var_desc.Flags);
 
     v = child_effect->lpVtbl->GetVariableByName(child_effect, "s_texture");
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "s_texture"), "Unexpected name %s.\n", var_desc.Name);
     ok(var_desc.Flags == D3D10_EFFECT_VARIABLE_POOLED, "Unexpected flags %#x.\n", var_desc.Flags);
 
     v = child_effect->lpVtbl->GetVariableBySemantic(child_effect, "COLOR0");
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "f0"), "Unexpected name %s.\n", var_desc.Name);
     ok(!var_desc.Flags, "Unexpected flags %#x.\n", var_desc.Flags);
 
     v = child_effect->lpVtbl->GetVariableBySemantic(child_effect, "COLOR1");
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!strcmp(var_desc.Name, "f2"), "Unexpected name %s.\n", var_desc.Name);
     ok(var_desc.Flags == D3D10_EFFECT_VARIABLE_POOLED, "Unexpected flags %#x.\n", var_desc.Flags);
 
@@ -7406,10 +7465,10 @@ todo_wine {
     pool->lpVtbl->Release(pool);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 
     refcount = ID3D10Device_Release(device2);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 #if 0
@@ -7495,13 +7554,13 @@ static void test_effect_default_variable_value(void)
     }
 
     hr = create_effect(fx_test_default_variable_value, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "D3D10CreateEffectFromMemory failed (%x)\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     memset(float_v, 0, sizeof(float_v));
     v = effect->lpVtbl->GetVariableByName(effect, "f4");
     vector = v->lpVtbl->AsVector(v);
     hr = vector->lpVtbl->GetFloatVector(vector, float_v);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(float_v[0] == 1.0f && float_v[1] == 2.0f && float_v[2] == 3.0f && float_v[3] == 4.0f,
             "Unexpected vector {%.8e,%.8e,%.8e,%.8e}\n", float_v[0], float_v[1], float_v[2], float_v[3]);
 
@@ -7510,7 +7569,7 @@ static void test_effect_default_variable_value(void)
     v = effect->lpVtbl->GetVariableByName(effect, "f2");
     vector = v->lpVtbl->AsVector(v);
     hr = vector->lpVtbl->GetFloatVector(vector, float_v);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(float_v[0] == 1.0f && float_v[1] == 2.0f && float_v[2] == 5.0f && float_v[3] == 5.0f,
             "Unexpected vector {%.8e,%.8e,%.8e,%.8e}\n", float_v[0], float_v[1], float_v[2], float_v[3]);
 
@@ -7519,7 +7578,7 @@ static void test_effect_default_variable_value(void)
     v = effect->lpVtbl->GetVariableByName(effect, "f1");
     vector = v->lpVtbl->AsVector(v);
     hr = vector->lpVtbl->GetFloatVector(vector, float_v);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(float_v[0] == 1.0f && float_v[1] == 5.0f && float_v[2] == 5.0f && float_v[3] == 5.0f,
             "Unexpected vector {%.8e,%.8e,%.8e,%.8e}\n", float_v[0], float_v[1], float_v[2], float_v[3]);
 
@@ -7527,32 +7586,32 @@ static void test_effect_default_variable_value(void)
     v = effect->lpVtbl->GetVariableByName(effect, "i");
     scalar = v->lpVtbl->AsScalar(v);
     hr = scalar->lpVtbl->GetInt(scalar, &int_s);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(int_s == 10, "Unexpected value %d.\n", int_s);
 
     memset(int_v, 0, sizeof(int_v));
     v = effect->lpVtbl->GetVariableByName(effect, "i2");
     scalar = v->lpVtbl->AsScalar(v);
     hr = scalar->lpVtbl->GetIntArray(scalar, int_v, 0, 2);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(int_v[0] == 9 && int_v[1] == 12, "Unexpected vector {%d,%d}\n", int_v[0], int_v[1]);
     hr = v->lpVtbl->GetDesc(v, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(var_desc.BufferOffset == 32, "Unexpected offset %u.\n", var_desc.BufferOffset);
     v2 = v->lpVtbl->GetElement(v, 0);
     hr = v2->lpVtbl->GetDesc(v2, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(var_desc.BufferOffset == 32, "Unexpected offset %u.\n", var_desc.BufferOffset);
     v2 = v->lpVtbl->GetElement(v, 1);
     hr = v2->lpVtbl->GetDesc(v2, &var_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(var_desc.BufferOffset == 48, "Unexpected offset %u.\n", var_desc.BufferOffset);
 
     float_s = 0.0f;
     v = effect->lpVtbl->GetVariableByName(effect, "f");
     scalar = v->lpVtbl->AsScalar(v);
     hr = scalar->lpVtbl->GetFloat(scalar, &float_s);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(float_s == 0.2f, "Unexpected value %.8e.\n", float_s);
 
     /* Matrix */
@@ -7561,7 +7620,7 @@ static void test_effect_default_variable_value(void)
     ok(matrix->lpVtbl->IsValid(matrix), "Expected valid matrix.\n");
     memset(&m_ret, 0, sizeof(m_ret));
     hr = matrix->lpVtbl->GetMatrix(matrix, &m_ret.m[0][0]);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     set_test_matrix(&m_set, D3D10_SVT_INT, 2, 3, 1);
     compare_matrix("m1", __LINE__, &m_set, &m_ret, 2, 3, FALSE);
@@ -7571,7 +7630,7 @@ static void test_effect_default_variable_value(void)
     ok(matrix->lpVtbl->IsValid(matrix), "Expected valid matrix.\n");
     memset(&m_ret, 0, sizeof(m_ret));
     hr = matrix->lpVtbl->GetMatrix(matrix, &m_ret.m[0][0]);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     set_test_matrix(&m_set, D3D10_SVT_INT, 2, 3, 1);
     compare_matrix("m2", __LINE__, &m_set, &m_ret, 2, 3, FALSE);
@@ -7581,7 +7640,7 @@ static void test_effect_default_variable_value(void)
     ok(matrix->lpVtbl->IsValid(matrix), "Expected valid matrix.\n");
     memset(&m_ret, 0, sizeof(m_ret));
     hr = matrix->lpVtbl->GetMatrix(matrix, &m_ret.m[0][0]);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     memset(&m_set, 0, sizeof(m_set));
     *(unsigned int *)&m_set.m[0][0] = 1;
@@ -7597,7 +7656,7 @@ static void test_effect_default_variable_value(void)
     ok(matrix->lpVtbl->IsValid(matrix), "Expected valid matrix.\n");
     memset(&m_ret, 0, sizeof(m_ret));
     hr = matrix->lpVtbl->GetMatrix(matrix, &m_ret.m[0][0]);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     set_test_matrix(&m_set, D3D10_SVT_FLOAT, 2, 2, 1);
     compare_matrix("m4", __LINE__, &m_set, &m_ret, 2, 2, FALSE);
@@ -7610,27 +7669,27 @@ static void test_effect_default_variable_value(void)
     ok(m->lpVtbl->IsValid(m), "Expected valid variable.\n");
     scalar = m->lpVtbl->AsScalar(m);
     hr = scalar->lpVtbl->GetBool(scalar, &ret);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(ret == 1, "Unexpected value.\n");
 
     m = v->lpVtbl->GetMemberByName(v, "f2");
     ok(m->lpVtbl->IsValid(m), "Expected valid variable.\n");
     scalar = m->lpVtbl->AsScalar(m);
     hr = scalar->lpVtbl->GetFloat(scalar, &float_s);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(float_s == -0.2f, "Unexpected value %f.\n", float_s);
 
     m = v->lpVtbl->GetMemberByName(v, "b2");
     ok(m->lpVtbl->IsValid(m), "Expected valid variable.\n");
     scalar = m->lpVtbl->AsScalar(m);
     hr = scalar->lpVtbl->GetBool(scalar, &ret);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!ret, "Unexpected value.\n");
 
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 static void test_effect_raw_value(void)
@@ -7652,29 +7711,29 @@ static void test_effect_raw_value(void)
     }
 
     hr = create_effect(fx_test_default_variable_value, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create an effect, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     /* Read 1 float at a time, from float4 vector. */
     v = effect->lpVtbl->GetVariableByName(effect, "f4");
     for (i = 0; i < 4; ++i)
     {
         hr = v->lpVtbl->GetRawValue(v, &f, sizeof(f) * i, sizeof(f));
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
         ok(f == i + 1.0f, "Unexpected value %f.\n", f);
     }
     /* Offset outside of variable storage, returns adjacent memory contents. */
     hr = v->lpVtbl->GetRawValue(v, &f, 16, sizeof(f));
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(f == 1.0f, "Unexpected value %f.\n", f);
     hr = v->lpVtbl->GetRawValue(v, &f, 20, sizeof(f));
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(f == 2.0f, "Unexpected value %f.\n", f);
 
     /* Array */
     v = effect->lpVtbl->GetVariableByName(effect, "i2");
     ok(v->lpVtbl->IsValid(v), "Expected valid variable.\n");
     hr = v->lpVtbl->GetRawValue(v, i_v, 0, 8 * sizeof(float));
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(i_v[0] == 9,  "Unexpected value %d.\n", i_v[0]);
     ok(i_v[1] == 0,  "Unexpected value %d.\n", i_v[1]);
     ok(i_v[2] == 0,  "Unexpected value %d.\n", i_v[2]);
@@ -7682,7 +7741,7 @@ static void test_effect_raw_value(void)
     ok(i_v[4] == 12, "Unexpected value %d.\n", i_v[4]);
 
     hr = v->lpVtbl->GetRawValue(v, &f, 20, sizeof(f));
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(f == 0.2f, "Unexpected value %f.\n", f);
 
     /* Matrix */
@@ -7715,25 +7774,25 @@ static void test_effect_raw_value(void)
     for (i = 0; i < 4; ++i)
     {
         hr = cb->lpVtbl->GetRawValue(cb, &f, sizeof(f) * i, sizeof(f));
-        ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+        ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
         ok(f == i + 1.0f, "Unexpected value %f.\n", f);
     }
     hr = cb->lpVtbl->GetRawValue(cb, &f, 16, sizeof(f));
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(f == 1.0f, "Unexpected value %f.\n", f);
     hr = cb->lpVtbl->GetRawValue(cb, &f, 20, sizeof(f));
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(f == 2.0f, "Unexpected value %f.\n", f);
 
     /* Invalid variable */
     v = effect->lpVtbl->GetVariableByName(effect, "invalid");
     hr = v->lpVtbl->GetRawValue(v, &f, 0, sizeof(f));
-    ok(hr == E_FAIL, "Unexpected hr %#x.\n", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 #if 0
@@ -7757,13 +7816,17 @@ technique10 tech
         SetBlendState(NULL, fv1_a[1], i2_a[1]);
         SetDepthStencilState(NULL, i1_a[1]);
     }
+    pass P2
+    {
+        SetBlendState(NULL, f1, 0);
+    }
 }
 #endif
 static DWORD fx_test_effect_dynamic_numeric_field[] =
 {
-    0x43425844, 0xc53c7634, 0x9d90c190, 0x5a0b43ea, 0x77aab553, 0x00000001, 0x000003af, 0x00000001,
-    0x00000024, 0x30315846, 0x00000383, 0xfeff1001, 0x00000001, 0x00000007, 0x00000000, 0x00000000,
-    0x00000000, 0x00000000, 0x00000001, 0x00000197, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x43425844, 0xec585518, 0x7c866383, 0xf6e767fd, 0x019e1f41, 0x00000001, 0x00000562, 0x00000001,
+    0x00000024, 0x30315846, 0x00000536, 0xfeff1001, 0x00000001, 0x00000007, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000001, 0x0000030e, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
     0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x6f6c4724,
     0x736c6162, 0x6e697500, 0x000d0074, 0x00010000, 0x00000000, 0x00040000, 0x00100000, 0x00040000,
     0x09190000, 0x31690000, 0x00000d00, 0x00000100, 0x00000200, 0x00001400, 0x00001000, 0x00000800,
@@ -7777,20 +7840,34 @@ static DWORD fx_test_effect_dynamic_numeric_field[] =
     0x00000000, 0x00000400, 0x00001000, 0x00000400, 0x00090900, 0x00316600, 0x3e99999a, 0x68636574,
     0x00305000, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0xa5003150,
     0x04000000, 0x0e000000, 0x04000001, 0x01000000, 0x02000000, 0x00000000, 0x4d000000, 0x04000000,
-    0x01000000, 0x02000000, 0x00000000, 0x04000000, 0x90000000, 0x00000000, 0x07000000, 0xff000000,
-    0x00ffffff, 0x2e000000, 0x12000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-    0x4d000000, 0x31000000, 0x00000000, 0x10000000, 0x00000000, 0x00000000, 0x00000000, 0x75000000,
-    0x59000000, 0x00000000, 0x30000000, 0x79000000, 0x00000000, 0x00000000, 0xa5000000, 0x89000000,
-    0x00000000, 0x40000000, 0xab000000, 0x00000000, 0x00000000, 0xeb000000, 0xcf000000, 0x00000000,
-    0x60000000, 0xee000000, 0x00000000, 0x00000000, 0x0e000000, 0xf2000001, 0x00000000, 0x70000000,
-    0x13000000, 0x00000001, 0x00000000, 0x3d000000, 0x21000001, 0x00000001, 0x84000000, 0x40000000,
-    0x00000001, 0x00000000, 0x44000000, 0x02000001, 0x00000000, 0x49000000, 0x05000001, 0x00000000,
-    0x0a000000, 0x00000000, 0x02000000, 0x75000000, 0x0b000000, 0x00000000, 0x02000000, 0xeb000000,
-    0x02000000, 0x00000000, 0x01000000, 0x4c000000, 0x09000001, 0x00000000, 0x02000000, 0x2e000000,
-    0x01000000, 0x00000000, 0x01000000, 0x58000000, 0x64000001, 0x05000001, 0x00000000, 0x0a000000,
-    0x00000000, 0x03000000, 0x67000000, 0x0b000001, 0x00000000, 0x03000000, 0x6f000000, 0x02000001,
-    0x00000000, 0x01000000, 0x77000000, 0x09000001, 0x00000000, 0x03000000, 0x83000000, 0x01000001,
-    0x00000000, 0x01000000, 0x8b000000, 0x00000001,
+    0x01000000, 0x02000000, 0x00000000, 0x50000000, 0x01580032, 0x58440000, 0x4df04342, 0xad7a0608,
+    0xb4963c34, 0xe74c5ab9, 0x000151a3, 0x01580000, 0x00030000, 0x002c0000, 0x00b40000, 0x00c00000,
+    0x54430000, 0x00804241, 0x001c0000, 0x00570000, 0x04000000, 0x00014658, 0x001c0000, 0x01000000,
+    0x00540000, 0x00300000, 0x00020000, 0x00010000, 0x00340000, 0x00440000, 0x31660000, 0x0000ab00,
+    0x00010003, 0x00010001, 0x00000000, 0x999a0000, 0x00003e99, 0x00000000, 0x00000000, 0x78740000,
+    0x63694d00, 0x6f736f72, 0x28207466, 0x48202952, 0x204c534c, 0x64616853, 0x43207265, 0x69706d6f,
+    0x2072656c, 0x312e3031, 0x4c43ab00, 0x00043449, 0x00000000, 0x58460000, 0x0090434c, 0x00040000,
+    0x00010000, 0x00011000, 0x00000000, 0x00020000, 0x00000000, 0x00000000, 0x00040000, 0x00000000,
+    0x00010000, 0x00011000, 0x00000000, 0x00020000, 0x00000000, 0x00000000, 0x00040000, 0x00010000,
+    0x00010000, 0x00011000, 0x00000000, 0x00020000, 0x00000000, 0x00000000, 0x00040000, 0x00020000,
+    0x00010000, 0x00011000, 0x00000000, 0x00020000, 0x00000000, 0x00000000, 0x00040000, 0x00030000,
+    0xf0f00000, 0x0f0ff0f0, 0xffff0f0f, 0x00010000, 0x00020000, 0x00000000, 0x00010000, 0x00020000,
+    0x00000000, 0x00040000, 0x00900000, 0x00000000, 0x00070000, 0xffff0000, 0x0000ffff, 0x002e0000,
+    0x00120000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x004d0000, 0x00310000,
+    0x00000000, 0x00100000, 0x00000000, 0x00000000, 0x00000000, 0x00750000, 0x00590000, 0x00000000,
+    0x00300000, 0x00790000, 0x00000000, 0x00000000, 0x00a50000, 0x00890000, 0x00000000, 0x00400000,
+    0x00ab0000, 0x00000000, 0x00000000, 0x00eb0000, 0x00cf0000, 0x00000000, 0x00600000, 0x00ee0000,
+    0x00000000, 0x00000000, 0x010e0000, 0x00f20000, 0x00000000, 0x00700000, 0x01130000, 0x00000000,
+    0x00000000, 0x013d0000, 0x01210000, 0x00000000, 0x00840000, 0x01400000, 0x00000000, 0x00000000,
+    0x01440000, 0x00030000, 0x00000000, 0x01490000, 0x00050000, 0x00000000, 0x000a0000, 0x00000000,
+    0x00020000, 0x00750000, 0x000b0000, 0x00000000, 0x00020000, 0x00eb0000, 0x00020000, 0x00000000,
+    0x00010000, 0x014c0000, 0x00090000, 0x00000000, 0x00020000, 0x002e0000, 0x00010000, 0x00000000,
+    0x00010000, 0x01580000, 0x01640000, 0x00050000, 0x00000000, 0x000a0000, 0x00000000, 0x00030000,
+    0x01670000, 0x000b0000, 0x00000000, 0x00030000, 0x016f0000, 0x00020000, 0x00000000, 0x00010000,
+    0x01770000, 0x00090000, 0x00000000, 0x00030000, 0x01830000, 0x00010000, 0x00000000, 0x00010000,
+    0x018b0000, 0x01970000, 0x00030000, 0x00000000, 0x000a0000, 0x00000000, 0x00060000, 0x019a0000,
+    0x000b0000, 0x00000000, 0x00010000, 0x02f60000, 0x00020000, 0x00000000, 0x00010000, 0x03020000,
+    0x00000000,
 };
 
 static void test_effect_dynamic_numeric_field(void)
@@ -7806,6 +7883,7 @@ static void test_effect_dynamic_numeric_field(void)
     float blend_factor[4];
     ID3D10Effect *effect;
     ID3D10Device *device;
+    unsigned int idx;
     ULONG refcount;
     HRESULT hr;
 
@@ -7816,7 +7894,7 @@ static void test_effect_dynamic_numeric_field(void)
     }
 
     hr = create_effect(fx_test_effect_dynamic_numeric_field, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create an effect, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     tech = effect->lpVtbl->GetTechniqueByIndex(effect, 0);
     ok(tech->lpVtbl->IsValid(tech), "Expected valid technique.\n");
@@ -7828,7 +7906,7 @@ static void test_effect_dynamic_numeric_field(void)
     memset(blend_factor, 0, sizeof(blend_factor));
     ID3D10Device_OMSetBlendState(device, NULL, blend_factor, 0);
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_OMGetDepthStencilState(device, &ds_state, &stencil_ref);
     ok(!stencil_ref, "Unexpected stencil ref value %#x.\n", stencil_ref);
     ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
@@ -7841,17 +7919,17 @@ static void test_effect_dynamic_numeric_field(void)
     v = effect->lpVtbl->GetVariableByName(effect, "i1");
     scalar = v->lpVtbl->AsScalar(v);
     hr = scalar->lpVtbl->SetInt(scalar, 2);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_OMGetDepthStencilState(device, &ds_state, &stencil_ref);
     ok(stencil_ref == 0x2, "Unexpected stencil ref value %#x.\n", stencil_ref);
 
     hr = scalar->lpVtbl->SetInt(scalar, 3);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     hr = pass->lpVtbl->GetDesc(pass, &pass_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(pass_desc.StencilRef == 0x3, "Unexpected stencil ref value %#x.\n", stencil_ref);
     ID3D10Device_OMGetDepthStencilState(device, &ds_state, &stencil_ref);
     ok(stencil_ref == 0x2, "Unexpected stencil ref value %#x.\n", stencil_ref);
@@ -7862,13 +7940,13 @@ static void test_effect_dynamic_numeric_field(void)
     v = v->lpVtbl->GetElement(v, 1);
     scalar = v->lpVtbl->AsScalar(v);
     hr = scalar->lpVtbl->SetInt(scalar, 4);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ID3D10Device_OMSetDepthStencilState(device, NULL, 0x1);
     memset(blend_factor, 0, sizeof(blend_factor));
     ID3D10Device_OMSetBlendState(device, NULL, blend_factor, 0);
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_OMGetDepthStencilState(device, &ds_state, &stencil_ref);
     ok(stencil_ref == 0x4, "Unexpected stencil ref value %#x.\n", stencil_ref);
     ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
@@ -7878,10 +7956,28 @@ static void test_effect_dynamic_numeric_field(void)
     ok(blend_factor[3] == 0.4f, "Got unexpected blend_factor[3] %.8e.\n", blend_factor[3]);
     ok(sample_mask == 0x2, "Unexpected sample mask %#x.\n", sample_mask);
 
+    pass = tech->lpVtbl->GetPassByName(tech, "P2");
+
+    v = effect->lpVtbl->GetVariableByName(effect, "f1");
+    scalar = v->lpVtbl->AsScalar(v);
+    hr = scalar->lpVtbl->SetFloat(scalar, 0.123f);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    memset(blend_factor, 0, sizeof(blend_factor));
+    ID3D10Device_OMSetBlendState(device, NULL, blend_factor, 0);
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+    ID3D10Device_OMGetDepthStencilState(device, &ds_state, &stencil_ref);
+    ok(stencil_ref == 0x4, "Unexpected stencil ref value %#x.\n", stencil_ref);
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 0.123f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Unexpected sample mask %#x.\n", sample_mask);
+
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 #if 0
@@ -7970,14 +8066,6 @@ static DWORD fx_test_index_expression[] =
     0x00000005, 0x00000488, 0x00000008, 0x00000000, 0x00000005, 0x00000580,
 };
 
-static void set_vec4(float *v, float x, float y, float z, float w)
-{
-    v[0] = x;
-    v[1] = y;
-    v[2] = z;
-    v[3] = w;
-}
-
 static void test_effect_index_expression(void)
 {
     D3D10_PASS_SHADER_DESC shader_desc;
@@ -8000,13 +8088,13 @@ static void test_effect_index_expression(void)
     }
 
     hr = create_effect(fx_test_index_expression, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create an effect, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     /* Initial index */
     tech = effect->lpVtbl->GetTechniqueByIndex(effect, 0);
     pass = tech->lpVtbl->GetPassByIndex(tech, 0);
     hr = pass->lpVtbl->GetPixelShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!shader_desc.ShaderIndex, "Unexpected shader index.\n");
 
     v = effect->lpVtbl->GetVariableByName(effect, "g_var");
@@ -8014,14 +8102,14 @@ static void test_effect_index_expression(void)
 
     set_vec4(val, 0.0f, 0.0f, 1.0f, 0.0f);
     hr = vector->lpVtbl->SetFloatVector(vector, val);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->GetPixelShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(shader_desc.ShaderIndex == 1, "Unexpected shader index %#x.\n", shader_desc.ShaderIndex);
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_OMGetBlendState(device, &bs, NULL, NULL);
     ID3D10BlendState_GetDesc(bs, &bs_desc);
     ok(bs_desc.SrcBlend == D3D10_BLEND_INV_SRC_COLOR, "Unexpected blend state parameter %u.\n", bs_desc.SrcBlend);
@@ -8029,10 +8117,10 @@ static void test_effect_index_expression(void)
 
     set_vec4(val, 0.0f, 0.0f, 1.0f, 1.0f);
     hr = vector->lpVtbl->SetFloatVector(vector, val);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_OMGetBlendState(device, &bs, NULL, NULL);
     ID3D10BlendState_GetDesc(bs, &bs_desc);
     ok(bs_desc.SrcBlend == D3D10_BLEND_SRC_COLOR, "Unexpected blend state parameter %u.\n", bs_desc.SrcBlend);
@@ -8041,14 +8129,14 @@ static void test_effect_index_expression(void)
     /* Out of bounds index */
     set_vec4(val, 0.0f, 0.0f, 2.0f, 2.0f);
     hr = vector->lpVtbl->SetFloatVector(vector, val);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->GetPixelShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!shader_desc.ShaderIndex, "Unexpected shader index %#x.\n", shader_desc.ShaderIndex);
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_OMGetBlendState(device, &bs, NULL, NULL);
     ID3D10BlendState_GetDesc(bs, &bs_desc);
     ok(bs_desc.SrcBlend == D3D10_BLEND_INV_SRC_COLOR, "Unexpected blend state parameter %u.\n", bs_desc.SrcBlend);
@@ -8056,14 +8144,14 @@ static void test_effect_index_expression(void)
 
     set_vec4(val, 0.0f, 0.0f, 3.0f, 3.0f);
     hr = vector->lpVtbl->SetFloatVector(vector, val);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->GetPixelShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!shader_desc.ShaderIndex, "Unexpected shader index %#x.\n", shader_desc.ShaderIndex);
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_OMGetBlendState(device, &bs, NULL, NULL);
     ID3D10BlendState_GetDesc(bs, &bs_desc);
     ok(bs_desc.SrcBlend == D3D10_BLEND_INV_SRC_COLOR, "Unexpected blend state parameter %u.\n", bs_desc.SrcBlend);
@@ -8071,14 +8159,14 @@ static void test_effect_index_expression(void)
 
     set_vec4(val, 0.0f, 0.0f, -1.0f, -1.0f);
     hr = vector->lpVtbl->SetFloatVector(vector, val);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->GetPixelShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!shader_desc.ShaderIndex, "Unexpected shader index %#x.\n", shader_desc.ShaderIndex);
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_OMGetBlendState(device, &bs, NULL, NULL);
     ID3D10BlendState_GetDesc(bs, &bs_desc);
     ok(bs_desc.SrcBlend == D3D10_BLEND_INV_SRC_COLOR, "Unexpected blend state parameter %u.\n", bs_desc.SrcBlend);
@@ -8086,113 +8174,830 @@ static void test_effect_index_expression(void)
 
     set_vec4(val, 0.0f, 0.0f, -11.0f, 0.0f);
     hr = vector->lpVtbl->SetFloatVector(vector, val);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->GetPixelShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!shader_desc.ShaderIndex, "Unexpected shader index %#x.\n", shader_desc.ShaderIndex);
 
     hr = pass->lpVtbl->Apply(pass, 0);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ID3D10Device_OMGetBlendState(device, &bs, NULL, NULL);
     ID3D10BlendState_GetDesc(bs, &bs_desc);
     ok(bs_desc.SrcBlend == D3D10_BLEND_INV_SRC_COLOR, "Unexpected blend state parameter %u.\n", bs_desc.SrcBlend);
     ID3D10BlendState_Release(bs);
 
     hr = pass->lpVtbl->GetVertexShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!shader_desc.ShaderIndex, "Unexpected shader index %#x.\n", shader_desc.ShaderIndex);
 
     set_vec4(val, 0.9f, 0.0f, 1.0f, 0.0f);
     hr = vector->lpVtbl->SetFloatVector(vector, val);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->GetVertexShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(shader_desc.ShaderIndex == 1, "Unexpected shader index %#x.\n", shader_desc.ShaderIndex);
 
     v = effect->lpVtbl->GetVariableByName(effect, "g_var2");
     vector = v->lpVtbl->AsVector(v);
 
     hr = pass->lpVtbl->GetGeometryShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(!shader_desc.ShaderIndex, "Unexpected shader index %#x.\n", shader_desc.ShaderIndex);
 
     set_vec4(val, 0.0f, 1.0f, 0.0f, 0.0f);
     hr = vector->lpVtbl->SetFloatVector(vector, val);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = pass->lpVtbl->GetGeometryShaderDesc(pass, &shader_desc);
-    ok(hr == S_OK, "Unexpected hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(shader_desc.ShaderIndex == 1, "Unexpected shader index %#x.\n", shader_desc.ShaderIndex);
 
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
 
 #if 0
 float4 g_var;
 float4 g_var2;
+int4 g_var3;
+uint4 g_var4;
+
+DepthStencilState ds_state
+{
+    StencilEnable = g_var.x;
+};
+
 technique10 tech
 {
     pass p0
     {
-        SetBlendState( NULL, g_var + 0.1f + g_var2, 0 );
+        SetBlendState( NULL, -g_var + sin(g_var.x) + cos(g_var.y) + 0.1f + g_var2 * 2.1f, 0 );
     }
     pass p1
     {
         SetBlendState( NULL, g_var.x + g_var2 + g_var.y, 0 );
     }
+    pass p2
+    {
+        SetBlendState( NULL, min(g_var.x, g_var2.x) + max(g_var.y, g_var2.y) + min(g_var, g_var2) + max(g_var, g_var2), 0 );
+    }
+    pass p3
+    {
+        SetBlendState( NULL, min(g_var.x, g_var2), 0 );
+    }
+    pass p4
+    {
+        SetBlendState( NULL, max(g_var.x, g_var2), 0 );
+    }
+    pass p5
+    {
+        SetBlendState( NULL, g_var.x / g_var, 0 );
+    }
+    pass p6
+    {
+        SetBlendState( NULL, 1.0f / g_var, 0 );
+    }
+    pass p7
+    {
+        SetBlendState( NULL, frac(g_var), 0 );
+    }
+    pass p8
+    {
+        SetBlendState( NULL, 0.1 * -max(g_var3.x, g_var3.y), 0 );
+    }
+    pass p9
+    {
+        SetBlendState( NULL, g_var4.x / g_var4.y, 0 );
+    }
+    pass p10
+    {
+        SetBlendState( NULL, g_var.x ? g_var.y : g_var.z, 0 );
+    }
+    pass p11
+    {
+        SetBlendState( NULL, min(g_var4.x, g_var4.y), 0 );
+    }
+    pass p12
+    {
+        SetBlendState( NULL, max(g_var4.x, g_var4.y), 0 );
+    }
+    pass p13
+    {
+        SetBlendState( NULL, min(g_var3.x, g_var3.y), 0 );
+    }
+    pass p14
+    {
+        SetBlendState( NULL, g_var4.x + g_var4.y, 0 );
+    }
+    pass p15
+    {
+        SetBlendState( NULL, asin(g_var.x), 0 );
+    }
+    pass p16
+    {
+        SetBlendState( NULL, acos(g_var.x), 0 );
+    }
+    pass p17
+    {
+        SetBlendState( NULL, atan(g_var.x), 0 );
+    }
+    pass p18
+    {
+        SetBlendState( NULL, atan2(g_var.x, g_var.y), 0 );
+    }
+    pass p19
+    {
+        SetBlendState( NULL, g_var3.x / g_var3.y, 0 );
+    }
+    pass p20
+    {
+        SetBlendState( NULL, g_var3.x < g_var3.y ? (g_var3.x >= g_var3.z ? 0 : 1 ) :
+                (g_var3.x != g_var3.z ? g_var3.z == g_var3.w : 2), 0 );
+    }
+    pass p21
+    {
+        SetBlendState( NULL, g_var4.x >= g_var4.y ? 0 : (g_var4.y < g_var4.z ? 1 : 2), 0 );
+    }
+    pass p22
+    {
+        SetBlendState( NULL, ceil(g_var), 0 );
+    }
+    pass p23
+    {
+        SetBlendState( NULL, floor(g_var), 0 );
+    }
+    pass p24
+    {
+        SetBlendState( NULL, dot(g_var, g_var2), 0 );
+    }
+    pass p25
+    {
+        SetBlendState( NULL, dot(g_var.xyz, g_var2.xyz), 0 );
+    }
+    pass p26
+    {
+        SetBlendState( NULL, dot(g_var.zyxw, g_var2.yzwx), 0 );
+    }
+    pass p27
+    {
+        SetBlendState( NULL, dot(g_var.zyx, g_var2.yzw), 0 );
+    }
+    pass p28
+    {
+        SetBlendState( NULL, g_var3.x * g_var3.y, 0 );
+    }
+    pass p29
+    {
+        SetBlendState( NULL, sqrt(g_var), 0 );
+    }
+    pass p30
+    {
+        SetBlendState( NULL, rsqrt(g_var), 0 );
+    }
+    pass p31
+    {
+        SetBlendState( NULL, log(g_var), 0 );
+    }
+    pass p32
+    {
+        SetBlendState( NULL, exp(g_var), 0 );
+    }
+    pass p33
+    {
+        SetBlendState( NULL, ~g_var3, 0 );
+    }
+    pass p34
+    {
+        SetBlendState( NULL, g_var4 | g_var3, 0 );
+    }
+    pass p35
+    {
+        SetBlendState( NULL, float4(g_var3.x >> g_var3.y, g_var3.z << g_var3.w, g_var4.x >> g_var4.y, 0), 0 );
+    }
+    pass p36
+    {
+        SetBlendState( NULL, float4(log2(g_var.x), log10(g_var.y), exp2(g_var.z), 0.0), 0 );
+    }
 }
 #endif
 static DWORD fx_test_value_expression[] =
 {
-    0x43425844, 0xe517f17c, 0xe44eaede, 0xe4fd1240, 0xc67d5084, 0x00000001, 0x0000047c, 0x00000001,
-    0x00000024, 0x30315846, 0x00000450, 0xfeff1001, 0x00000001, 0x00000002, 0x00000000, 0x00000000,
-    0x00000000, 0x00000000, 0x00000001, 0x00000330, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x43425844, 0xf55b96f2, 0x76722813, 0x530fae3e, 0x4cd9c847, 0x00000001, 0x00004964, 0x00000001,
+    0x00000024, 0x30315846, 0x00004938, 0xfeff1001, 0x00000001, 0x00000004, 0x00000001, 0x00000000,
+    0x00000000, 0x00000000, 0x00000001, 0x00003f84, 0x00000000, 0x00000000, 0x00000001, 0x00000000,
     0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x6f6c4724,
     0x736c6162, 0x6f6c6600, 0x00347461, 0x0000000d, 0x00000001, 0x00000000, 0x00000010, 0x00000010,
-    0x00000010, 0x0000210a, 0x61765f67, 0x5f670072, 0x32726176, 0x63657400, 0x30700068, 0x00016000,
-    0x42584400, 0x312ce543, 0xc3ebc897, 0xea47c0a2, 0x8a710323, 0x000001d2, 0x00016000, 0x00000300,
-    0x00002c00, 0x0000d400, 0x0000f000, 0x41544300, 0x0000a042, 0x00001c00, 0x00007700, 0x58040000,
-    0x00000246, 0x00001c00, 0x00010000, 0x00007400, 0x00004400, 0x00000200, 0x00000100, 0x00004c00,
-    0x00000000, 0x00005c00, 0x01000200, 0x00000100, 0x00006400, 0x00000000, 0x765f6700, 0xab007261,
-    0x030001ab, 0x04000100, 0x00000100, 0x00000000, 0x765f6700, 0x00327261, 0x030001ab, 0x04000100,
-    0x00000100, 0x00000000, 0x00787400, 0x7263694d, 0x666f736f, 0x52282074, 0x4c482029, 0x53204c53,
-    0x65646168, 0x6f432072, 0x6c69706d, 0x31207265, 0x00312e30, 0x494c43ab, 0x00001434, 0x00000400,
-    0xcccccd00, 0x0000003d, 0x00000000, 0x00000000, 0x4c584600, 0x00006843, 0x00000200, 0x40000400,
-    0x00000220, 0x00000000, 0x00000200, 0x00000000, 0x00000000, 0x00000200, 0x00000400, 0x00000000,
-    0x00000700, 0x00000000, 0x40000400, 0x000002a0, 0x00000000, 0x00000100, 0x00000000, 0x00000000,
-    0x00000700, 0x00000000, 0x00000000, 0x00000400, 0x00000000, 0xf0f0f000, 0x0f0f0ff0, 0x00ffff0f,
-    0x00000100, 0x00000200, 0x00000000, 0x00000100, 0x00000200, 0x00000000, 0x00317000, 0x00000150,
-    0x43425844, 0xc6a29e4c, 0x6292ed35, 0xd90bb8cb, 0x50dcd25f, 0x00000001, 0x00000150, 0x00000003,
+    0x00000010, 0x0000210a, 0x61765f67, 0x5f670072, 0x32726176, 0x746e6900, 0x003d0034, 0x00010000,
+    0x00000000, 0x00100000, 0x00100000, 0x00100000, 0x21120000, 0x5f670000, 0x33726176, 0x6e697500,
+    0x65003474, 0x01000000, 0x00000000, 0x10000000, 0x10000000, 0x10000000, 0x1a000000, 0x67000021,
+    0x7261765f, 0x65440034, 0x53687470, 0x636e6574, 0x74536c69, 0x00657461, 0x0000008e, 0x00000002,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000003, 0x735f7364, 0x65746174, 0x0000ec00,
+    0x42584400, 0x12544043, 0xf05fca79, 0x55a99c90, 0xe16165fe, 0x00000145, 0x0000ec00, 0x00000300,
+    0x00002c00, 0x0000a800, 0x0000b400, 0x41544300, 0x00007442, 0x00001c00, 0x00004b00, 0x58040000,
+    0x00000146, 0x00001c00, 0x00010000, 0x00004800, 0x00003000, 0x00000200, 0x00000100, 0x00003800,
+    0x00000000, 0x765f6700, 0xab007261, 0x030001ab, 0x04000100, 0x00000100, 0x00000000, 0x00787400,
+    0x7263694d, 0x666f736f, 0x52282074, 0x4c482029, 0x53204c53, 0x65646168, 0x6f432072, 0x6c69706d,
+    0x31207265, 0x00312e30, 0x494c43ab, 0x00000434, 0x00000000, 0x4c584600, 0x00003043, 0x00000100,
+    0x70000100, 0x00000113, 0x00000000, 0x00000200, 0x00000000, 0x00000000, 0x00000400, 0x00000000,
+    0xf0f0f000, 0x0f0f0ff0, 0x00ffff0f, 0x63657400, 0x30700068, 0x00024400, 0x42584400, 0xff104243,
+    0xa078c06f, 0xb9d7d003, 0x421eb8c7, 0x0000014c, 0x00024400, 0x00000300, 0x00002c00, 0x0000d400,
+    0x0000f000, 0x41544300, 0x0000a042, 0x00001c00, 0x00007700, 0x58040000, 0x00000246, 0x00001c00,
+    0x00010000, 0x00007400, 0x00004400, 0x00000200, 0x00000100, 0x00004c00, 0x00000000, 0x00005c00,
+    0x01000200, 0x00000100, 0x00006400, 0x00000000, 0x765f6700, 0xab007261, 0x030001ab, 0x04000100,
+    0x00000100, 0x00000000, 0x765f6700, 0x00327261, 0x030001ab, 0x04000100, 0x00000100, 0x00000000,
+    0x00787400, 0x7263694d, 0x666f736f, 0x52282074, 0x4c482029, 0x53204c53, 0x65646168, 0x6f432072,
+    0x6c69706d, 0x31207265, 0x00312e30, 0x494c43ab, 0x00001434, 0x00000400, 0xcccccd00, 0x0666663d,
+    0x00000040, 0x00000000, 0x4c584600, 0x00014c43, 0x00000800, 0x10000400, 0x00000110, 0x00000000,
+    0x00000200, 0x00000000, 0x00000000, 0x00000700, 0x00000000, 0x80000100, 0x00000110, 0x00000000,
+    0x00000200, 0x00000000, 0x00000000, 0x00000700, 0x00000400, 0x40000400, 0x000002a0, 0x00000000,
+    0x00000700, 0x00000400, 0x00000000, 0x00000700, 0x00000000, 0x00000000, 0x00000700, 0x00000800,
+    0x90000100, 0x00000110, 0x00000000, 0x00000200, 0x00000100, 0x00000000, 0x00000700, 0x00000000,
+    0x40000400, 0x000002a0, 0x00000000, 0x00000700, 0x00000000, 0x00000000, 0x00000700, 0x00000800,
+    0x00000000, 0x00000700, 0x00000400, 0x40000400, 0x000002a0, 0x00000000, 0x00000100, 0x00000000,
+    0x00000000, 0x00000700, 0x00000400, 0x00000000, 0x00000700, 0x00000000, 0x50000400, 0x000002a0,
+    0x00000000, 0x00000100, 0x00000100, 0x00000000, 0x00000200, 0x00000400, 0x00000000, 0x00000700,
+    0x00000400, 0x40000400, 0x00000220, 0x00000000, 0x00000700, 0x00000000, 0x00000000, 0x00000700,
+    0x00000400, 0x00000000, 0x00000400, 0x00000000, 0xf0f0f000, 0x0f0f0ff0, 0x00ffff0f, 0x00000100,
+    0x00000200, 0x00000000, 0x00000100, 0x00000200, 0x00000000, 0x00317000, 0x00000150, 0x43425844,
+    0xc6a29e4c, 0x6292ed35, 0xd90bb8cb, 0x50dcd25f, 0x00000001, 0x00000150, 0x00000003, 0x0000002c,
+    0x000000d4, 0x000000e0, 0x42415443, 0x000000a0, 0x0000001c, 0x00000077, 0x46580400, 0x00000002,
+    0x0000001c, 0x00000100, 0x00000074, 0x00000044, 0x00000002, 0x00000001, 0x0000004c, 0x00000000,
+    0x0000005c, 0x00010002, 0x00000001, 0x00000064, 0x00000000, 0x61765f67, 0xabab0072, 0x00030001,
+    0x00040001, 0x00000001, 0x00000000, 0x61765f67, 0xab003272, 0x00030001, 0x00040001, 0x00000001,
+    0x00000000, 0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461,
+    0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846,
+    0x00000068, 0x00000002, 0xa0400004, 0x00000002, 0x00000000, 0x00000002, 0x00000000, 0x00000000,
+    0x00000002, 0x00000004, 0x00000000, 0x00000007, 0x00000000, 0xa0400004, 0x00000002, 0x00000000,
+    0x00000002, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000000,
+    0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002,
+    0x00000000, 0x2c003270, 0x44000002, 0x9e434258, 0xfae994e0, 0xb641b826, 0x0bac8f3a, 0x019d4eb7,
+    0x2c000000, 0x03000002, 0x2c000000, 0xd4000000, 0xe0000000, 0x43000000, 0xa0424154, 0x1c000000,
+    0x77000000, 0x00000000, 0x02465804, 0x1c000000, 0x00000000, 0x74000001, 0x44000000, 0x02000000,
+    0x01000000, 0x4c000000, 0x00000000, 0x5c000000, 0x02000000, 0x01000100, 0x64000000, 0x00000000,
+    0x67000000, 0x7261765f, 0x01abab00, 0x01000300, 0x01000400, 0x00000000, 0x67000000, 0x7261765f,
+    0x01ab0032, 0x01000300, 0x01000400, 0x00000000, 0x74000000, 0x694d0078, 0x736f7263, 0x2074666f,
+    0x20295228, 0x4c534c48, 0x61685320, 0x20726564, 0x706d6f43, 0x72656c69, 0x2e303120, 0x43ab0031,
+    0x0434494c, 0x00000000, 0x46000000, 0x44434c58, 0x07000001, 0x01000000, 0x02200000, 0x00000000,
+    0x02000000, 0x00000000, 0x00000000, 0x02000000, 0x04000000, 0x00000000, 0x07000000, 0x00000000,
+    0x01000000, 0x02201000, 0x00000000, 0x02000000, 0x01000000, 0x00000000, 0x02000000, 0x05000000,
+    0x00000000, 0x07000000, 0x01000000, 0x01000000, 0x02204000, 0x00000000, 0x07000000, 0x01000000,
+    0x00000000, 0x07000000, 0x00000000, 0x00000000, 0x07000000, 0x04000000, 0x04000000, 0x02200000,
+    0x00000000, 0x02000000, 0x00000000, 0x00000000, 0x02000000, 0x04000000, 0x00000000, 0x07000000,
+    0x00000000, 0x04000000, 0x02a04000, 0x00000000, 0x07000000, 0x04000000, 0x00000000, 0x07000000,
+    0x00000000, 0x00000000, 0x07000000, 0x08000000, 0x04000000, 0x02201000, 0x00000000, 0x02000000,
+    0x00000000, 0x00000000, 0x02000000, 0x04000000, 0x00000000, 0x07000000, 0x00000000, 0x04000000,
+    0x02204000, 0x00000000, 0x07000000, 0x00000000, 0x00000000, 0x07000000, 0x08000000, 0x00000000,
+    0x04000000, 0x00000000, 0xf0000000, 0x0ff0f0f0, 0xff0f0f0f, 0x010000ff, 0x02000000, 0x00000000,
+    0x01000000, 0x02000000, 0x00000000, 0x70000000, 0x01240033, 0x58440000, 0xf4c54342, 0x070658ce,
+    0xcabd2023, 0x24d22fca, 0x00010f0c, 0x01240000, 0x00030000, 0x002c0000, 0x00d40000, 0x00e00000,
+    0x54430000, 0x00a04241, 0x001c0000, 0x00770000, 0x04000000, 0x00024658, 0x001c0000, 0x01000000,
+    0x00740000, 0x00440000, 0x00020000, 0x00010000, 0x004c0000, 0x00000000, 0x005c0000, 0x00020000,
+    0x00010001, 0x00640000, 0x00000000, 0x5f670000, 0x00726176, 0x0001abab, 0x00010003, 0x00010004,
+    0x00000000, 0x5f670000, 0x32726176, 0x0001ab00, 0x00010003, 0x00010004, 0x00000000, 0x78740000,
+    0x63694d00, 0x6f736f72, 0x28207466, 0x48202952, 0x204c534c, 0x64616853, 0x43207265, 0x69706d6f,
+    0x2072656c, 0x312e3031, 0x4c43ab00, 0x00043449, 0x00000000, 0x58460000, 0x003c434c, 0x00010000,
+    0x00040000, 0x0002a000, 0x00000000, 0x00020000, 0x00000000, 0x00000000, 0x00020000, 0x00040000,
+    0x00000000, 0x00040000, 0x00000000, 0xf0f00000, 0x0f0ff0f0, 0xffff0f0f, 0x00010000, 0x00020000,
+    0x00000000, 0x00010000, 0x00020000, 0x00000000, 0x34700000, 0x00012400, 0x42584400, 0xc902bb43,
+    0xafcba635, 0xa383ff89, 0xed53a9f6, 0x000001f8, 0x00012400, 0x00000300, 0x00002c00, 0x0000d400,
+    0x0000e000, 0x41544300, 0x0000a042, 0x00001c00, 0x00007700, 0x58040000, 0x00000246, 0x00001c00,
+    0x00010000, 0x00007400, 0x00004400, 0x00000200, 0x00000100, 0x00004c00, 0x00000000, 0x00005c00,
+    0x01000200, 0x00000100, 0x00006400, 0x00000000, 0x765f6700, 0xab007261, 0x030001ab, 0x04000100,
+    0x00000100, 0x00000000, 0x765f6700, 0x00327261, 0x030001ab, 0x04000100, 0x00000100, 0x00000000,
+    0x00787400, 0x7263694d, 0x666f736f, 0x52282074, 0x4c482029, 0x53204c53, 0x65646168, 0x6f432072,
+    0x6c69706d, 0x31207265, 0x00312e30, 0x494c43ab, 0x00000434, 0x00000000, 0x4c584600, 0x00003c43,
+    0x00000100, 0x10000400, 0x000002a0, 0x00000000, 0x00000200, 0x00000000, 0x00000000, 0x00000200,
+    0x00000400, 0x00000000, 0x00000400, 0x00000000, 0xf0f0f000, 0x0f0f0ff0, 0x00ffff0f, 0x00000100,
+    0x00000200, 0x00000000, 0x00000100, 0x00000200, 0x00000000, 0x00357000, 0x000000f8, 0x43425844,
+    0xf74bf893, 0x3d094d0b, 0xf013f99e, 0x99d86fff, 0x00000001, 0x000000f8, 0x00000003, 0x0000002c,
+    0x000000a8, 0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001,
+    0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000,
+    0x61765f67, 0xabab0072, 0x00030001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369,
+    0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072,
+    0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x0000003c, 0x00000001, 0xa0800004,
+    0x00000002, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000002, 0x00000000, 0x00000000,
+    0x00000004, 0x00000000, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000,
+    0x00000001, 0x00000002, 0x00000000, 0x4c003670, 0x44000001, 0x0f434258, 0xd38746b5, 0x34bf74fe,
+    0x9d061641, 0x01dbbd02, 0x4c000000, 0x03000001, 0x2c000000, 0xa8000000, 0xb4000000, 0x43000000,
+    0x74424154, 0x1c000000, 0x4b000000, 0x00000000, 0x01465804, 0x1c000000, 0x00000000, 0x48000001,
+    0x30000000, 0x02000000, 0x01000000, 0x38000000, 0x00000000, 0x67000000, 0x7261765f, 0x01abab00,
+    0x01000300, 0x01000400, 0x00000000, 0x74000000, 0x694d0078, 0x736f7263, 0x2074666f, 0x20295228,
+    0x4c534c48, 0x61685320, 0x20726564, 0x706d6f43, 0x72656c69, 0x2e303120, 0x43ab0031, 0x0434494c,
+    0x00000000, 0x46000000, 0x90434c58, 0x04000000, 0x01000000, 0x01103000, 0x00000000, 0x02000000,
+    0x00000000, 0x00000000, 0x04000000, 0x00000000, 0x01000000, 0x01103000, 0x00000000, 0x02000000,
+    0x01000000, 0x00000000, 0x04000000, 0x01000000, 0x01000000, 0x01103000, 0x00000000, 0x02000000,
+    0x02000000, 0x00000000, 0x04000000, 0x02000000, 0x01000000, 0x01103000, 0x00000000, 0x02000000,
+    0x03000000, 0x00000000, 0x04000000, 0x03000000, 0xf0000000, 0x0ff0f0f0, 0xff0f0f0f, 0x010000ff,
+    0x02000000, 0x00000000, 0x01000000, 0x02000000, 0x00000000, 0x70000000, 0x00ec0037, 0x58440000,
+    0xaa424342, 0x4a779667, 0x419ccee2, 0x743a2086, 0x0001e1df, 0x00ec0000, 0x00030000, 0x002c0000,
+    0x00a80000, 0x00b40000, 0x54430000, 0x00744241, 0x001c0000, 0x004b0000, 0x04000000, 0x00014658,
+    0x001c0000, 0x01000000, 0x00480000, 0x00300000, 0x00020000, 0x00010000, 0x00380000, 0x00000000,
+    0x5f670000, 0x00726176, 0x0001abab, 0x00010003, 0x00010004, 0x00000000, 0x78740000, 0x63694d00,
+    0x6f736f72, 0x28207466, 0x48202952, 0x204c534c, 0x64616853, 0x43207265, 0x69706d6f, 0x2072656c,
+    0x312e3031, 0x4c43ab00, 0x00043449, 0x00000000, 0x58460000, 0x0030434c, 0x00010000, 0x00040000,
+    0x00011040, 0x00000000, 0x00020000, 0x00000000, 0x00000000, 0x00040000, 0x00000000, 0xf0f00000,
+    0x0f0ff0f0, 0xffff0f0f, 0x00010000, 0x00020000, 0x00000000, 0x00010000, 0x00020000, 0x00000000,
+    0x38700000, 0x0001f800, 0x42584400, 0x6df99043, 0xe623cb12, 0xb7d81780, 0x4894a558, 0x000001ba,
+    0x0001f800, 0x00000300, 0x00002c00, 0x0000a800, 0x0000c400, 0x41544300, 0x00007442, 0x00001c00,
+    0x00004b00, 0x58040000, 0x00000146, 0x00001c00, 0x00010000, 0x00004800, 0x00003000, 0x00000200,
+    0x00000100, 0x00003800, 0x00000000, 0x765f6700, 0x00337261, 0x020001ab, 0x04000100, 0x00000100,
+    0x00000000, 0x00787400, 0x7263694d, 0x666f736f, 0x52282074, 0x4c482029, 0x53204c53, 0x65646168,
+    0x6f432072, 0x6c69706d, 0x31207265, 0x00312e30, 0x494c43ab, 0x00001434, 0x00000400, 0xcccccd00,
+    0x0000003d, 0x00000000, 0x00000000, 0x4c584600, 0x00012c43, 0x00000700, 0xe0000100, 0x00000221,
+    0x00000000, 0x00000200, 0x00000100, 0x00000000, 0x00000200, 0x00000000, 0x00000000, 0x00000700,
+    0x00000000, 0x00000100, 0x00000112, 0x00000000, 0x00000700, 0x00000000, 0x00000000, 0x00000700,
+    0x00000400, 0x00000100, 0x00000113, 0x00000000, 0x00000700, 0x00000400, 0x00000000, 0x00000700,
+    0x00000000, 0x50000100, 0x00000220, 0x00000000, 0x00000700, 0x00000000, 0x00000000, 0x00000100,
+    0x00000000, 0x00000000, 0x00000400, 0x00000000, 0x50000100, 0x00000220, 0x00000000, 0x00000700,
+    0x00000000, 0x00000000, 0x00000100, 0x00000000, 0x00000000, 0x00000400, 0x00000100, 0x50000100,
+    0x00000220, 0x00000000, 0x00000700, 0x00000000, 0x00000000, 0x00000100, 0x00000000, 0x00000000,
+    0x00000400, 0x00000200, 0x50000100, 0x00000220, 0x00000000, 0x00000700, 0x00000000, 0x00000000,
+    0x00000100, 0x00000000, 0x00000000, 0x00000400, 0x00000300, 0xf0f0f000, 0x0f0f0ff0, 0x00ffff0f,
+    0x00000100, 0x00000200, 0x00000000, 0x00000100, 0x00000200, 0x00000000, 0x00397000, 0x00000178,
+    0x43425844, 0x453449ff, 0x2e103a44, 0x8883c1ca, 0x78e0dcb1, 0x00000001, 0x00000178, 0x00000003,
+    0x0000002c, 0x000000a8, 0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400,
+    0x00000001, 0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038,
+    0x00000000, 0x61765f67, 0xab003472, 0x00020001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874,
+    0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970,
+    0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x000000bc, 0x00000005,
+    0x21a00001, 0x00000002, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000002, 0x00000001,
+    0x00000000, 0x00000007, 0x00000000, 0x13100001, 0x00000001, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000004, 0x00000000, 0x13100001, 0x00000001, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000004, 0x00000001, 0x13100001, 0x00000001, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000004, 0x00000002, 0x13100001, 0x00000001, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002,
+    0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00303170, 0x000001cc, 0x43425844, 0x18677c9b,
+    0xf5e472af, 0x9ba288a2, 0xcca43bb2, 0x00000001, 0x000001cc, 0x00000003, 0x0000002c, 0x000000a8,
+    0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001, 0x0000001c,
+    0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000, 0x61765f67,
+    0xabab0072, 0x00030001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73,
+    0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e,
+    0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x00000110, 0x00000005, 0x13700001, 0x00000001,
+    0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000007, 0x00000000, 0x30100001, 0x00000003,
+    0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000002,
+    0x00000002, 0x00000000, 0x00000004, 0x00000000, 0x30100001, 0x00000003, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000002, 0x00000002, 0x00000000,
+    0x00000004, 0x00000001, 0x30100001, 0x00000003, 0x00000000, 0x00000007, 0x00000000, 0x00000000,
+    0x00000002, 0x00000001, 0x00000000, 0x00000002, 0x00000002, 0x00000000, 0x00000004, 0x00000002,
+    0x30100001, 0x00000003, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000002, 0x00000001,
+    0x00000000, 0x00000002, 0x00000002, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f,
+    0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00313170,
+    0x00000178, 0x43425844, 0xb2dec0d7, 0x6d936ace, 0x1e31a035, 0x7de038f5, 0x00000001, 0x00000178,
+    0x00000003, 0x0000002c, 0x000000a8, 0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b,
+    0x46580400, 0x00000001, 0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001,
+    0x00000038, 0x00000000, 0x61765f67, 0xab003472, 0x00020001, 0x00040001, 0x00000001, 0x00000000,
+    0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320,
+    0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x000000bc,
+    0x00000005, 0x21f00001, 0x00000002, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000002,
+    0x00000000, 0x00000000, 0x00000007, 0x00000000, 0x13100001, 0x00000001, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000004, 0x00000000, 0x13100001, 0x00000001, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000004, 0x00000001, 0x13100001, 0x00000001, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000004, 0x00000002, 0x13100001, 0x00000001, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001,
+    0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00323170, 0x00000178, 0x43425844,
+    0x0334f480, 0xa1c4caca, 0x9e1735e8, 0x1d8a5fb0, 0x00000001, 0x00000178, 0x00000003, 0x0000002c,
+    0x000000a8, 0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001,
+    0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000,
+    0x61765f67, 0xab003472, 0x00020001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369,
+    0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072,
+    0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x000000bc, 0x00000005, 0x22000001,
+    0x00000002, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000,
+    0x00000007, 0x00000000, 0x13100001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000,
+    0x00000004, 0x00000000, 0x13100001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000,
+    0x00000004, 0x00000001, 0x13100001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000,
+    0x00000004, 0x00000002, 0x13100001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000,
+    0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000,
+    0x00000001, 0x00000002, 0x00000000, 0x00333170, 0x00000178, 0x43425844, 0x98cbead4, 0xa96cee69,
+    0xfa67fbf6, 0x10832177, 0x00000001, 0x00000178, 0x00000003, 0x0000002c, 0x000000a8, 0x000000b4,
+    0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001, 0x0000001c, 0x00000100,
+    0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000, 0x61765f67, 0xab003372,
+    0x00020001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73, 0x29522820,
+    0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e, 0x34494c43,
+    0x00000004, 0x00000000, 0x434c5846, 0x000000bc, 0x00000005, 0x21d00001, 0x00000002, 0x00000000,
+    0x00000002, 0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000007, 0x00000000,
+    0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000000,
+    0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000001,
+    0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000002,
+    0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000003,
+    0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002,
+    0x00000000, 0x00343170, 0x00000178, 0x43425844, 0xd7c8865b, 0xe0b95177, 0xcad7d001, 0x106ac5ac,
+    0x00000001, 0x00000178, 0x00000003, 0x0000002c, 0x000000a8, 0x000000b4, 0x42415443, 0x00000074,
+    0x0000001c, 0x0000004b, 0x46580400, 0x00000001, 0x0000001c, 0x00000100, 0x00000048, 0x00000030,
+    0x00000002, 0x00000001, 0x00000038, 0x00000000, 0x61765f67, 0xab003472, 0x00020001, 0x00040001,
+    0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c,
+    0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000,
+    0x434c5846, 0x000000bc, 0x00000005, 0x21600001, 0x00000002, 0x00000000, 0x00000002, 0x00000001,
+    0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000007, 0x00000000, 0x13100001, 0x00000001,
+    0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000000, 0x13100001, 0x00000001,
+    0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000001, 0x13100001, 0x00000001,
+    0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000002, 0x13100001, 0x00000001,
+    0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f,
+    0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00353170,
+    0x0000014c, 0x43425844, 0x858202fa, 0x6eea0ef1, 0x035697d7, 0x8937d809, 0x00000001, 0x0000014c,
+    0x00000003, 0x0000002c, 0x000000a8, 0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b,
+    0x46580400, 0x00000001, 0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001,
+    0x00000038, 0x00000000, 0x61765f67, 0xabab0072, 0x00030001, 0x00040001, 0x00000001, 0x00000000,
+    0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320,
+    0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x00000090,
+    0x00000004, 0x10a00001, 0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000004,
+    0x00000000, 0x10a00001, 0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000004,
+    0x00000001, 0x10a00001, 0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000004,
+    0x00000002, 0x10a00001, 0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000004,
+    0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001,
+    0x00000002, 0x00000000, 0x00363170, 0x0000014c, 0x43425844, 0x27003e76, 0x45cf2121, 0x9b3336ae,
+    0xca07856b, 0x00000001, 0x0000014c, 0x00000003, 0x0000002c, 0x000000a8, 0x000000b4, 0x42415443,
+    0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001, 0x0000001c, 0x00000100, 0x00000048,
+    0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000, 0x61765f67, 0xabab0072, 0x00030001,
+    0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820,
+    0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000004,
+    0x00000000, 0x434c5846, 0x00000090, 0x00000004, 0x10b00001, 0x00000001, 0x00000000, 0x00000002,
+    0x00000000, 0x00000000, 0x00000004, 0x00000000, 0x10b00001, 0x00000001, 0x00000000, 0x00000002,
+    0x00000000, 0x00000000, 0x00000004, 0x00000001, 0x10b00001, 0x00000001, 0x00000000, 0x00000002,
+    0x00000000, 0x00000000, 0x00000004, 0x00000002, 0x10b00001, 0x00000001, 0x00000000, 0x00000002,
+    0x00000000, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001,
+    0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00373170, 0x0000014c, 0x43425844,
+    0x7a9aaef0, 0xcc3049d9, 0x1c45c020, 0xa01af792, 0x00000001, 0x0000014c, 0x00000003, 0x0000002c,
+    0x000000a8, 0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001,
+    0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000,
+    0x61765f67, 0xabab0072, 0x00030001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369,
+    0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072,
+    0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x00000090, 0x00000004, 0x10c00001,
+    0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000004, 0x00000000, 0x10c00001,
+    0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000004, 0x00000001, 0x10c00001,
+    0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000004, 0x00000002, 0x10c00001,
+    0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0,
+    0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000,
+    0x00383170, 0x0000017c, 0x43425844, 0xb9755ca9, 0x574af4c2, 0x92daa707, 0xdab0053b, 0x00000001,
+    0x0000017c, 0x00000003, 0x0000002c, 0x000000a8, 0x000000b4, 0x42415443, 0x00000074, 0x0000001c,
+    0x0000004b, 0x46580400, 0x00000001, 0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002,
+    0x00000001, 0x00000038, 0x00000000, 0x61765f67, 0xabab0072, 0x00030001, 0x00040001, 0x00000001,
+    0x00000000, 0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461,
+    0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846,
+    0x000000c0, 0x00000004, 0x20600001, 0x00000002, 0x00000000, 0x00000002, 0x00000000, 0x00000000,
+    0x00000002, 0x00000001, 0x00000000, 0x00000004, 0x00000000, 0x20600001, 0x00000002, 0x00000000,
+    0x00000002, 0x00000000, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000004, 0x00000001,
+    0x20600001, 0x00000002, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000002, 0x00000001,
+    0x00000000, 0x00000004, 0x00000002, 0x20600001, 0x00000002, 0x00000000, 0x00000002, 0x00000000,
+    0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f,
+    0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00393170,
+    0x000002d0, 0x43425844, 0xca0a64ed, 0x1e48bebb, 0x50b61480, 0x81af66f1, 0x00000001, 0x000002d0,
+    0x00000003, 0x0000002c, 0x000000a8, 0x000000c4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b,
+    0x46580400, 0x00000001, 0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001,
+    0x00000038, 0x00000000, 0x61765f67, 0xab003372, 0x00020001, 0x00040001, 0x00000001, 0x00000000,
+    0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320,
+    0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000014, 0x00000004, 0x80000000, 0x00000000,
+    0x00000000, 0x00000000, 0x434c5846, 0x00000204, 0x0000000d, 0x12000001, 0x00000001, 0x00000000,
+    0x00000002, 0x00000000, 0x00000000, 0x00000007, 0x00000000, 0x21e00001, 0x00000002, 0x00000000,
+    0x00000007, 0x00000000, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000007, 0x00000004,
+    0x12000001, 0x00000001, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000007, 0x00000000,
+    0x21e00001, 0x00000002, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000002, 0x00000001,
+    0x00000000, 0x00000007, 0x00000005, 0x21a00001, 0x00000002, 0x00000000, 0x00000007, 0x00000004,
+    0x00000000, 0x00000007, 0x00000005, 0x00000000, 0x00000007, 0x00000000, 0x12000001, 0x00000001,
+    0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000007, 0x00000004, 0x23300001, 0x00000002,
+    0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000007,
+    0x00000001, 0x23000001, 0x00000002, 0x00000000, 0x00000007, 0x00000001, 0x00000000, 0x00000001,
+    0x00000000, 0x00000000, 0x00000007, 0x00000005, 0x30100001, 0x00000003, 0x00000000, 0x00000007,
+    0x00000005, 0x00000000, 0x00000007, 0x00000004, 0x00000000, 0x00000007, 0x00000000, 0x00000000,
+    0x00000007, 0x00000008, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000008, 0x00000000,
+    0x00000004, 0x00000000, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000008, 0x00000000,
+    0x00000004, 0x00000001, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000008, 0x00000000,
+    0x00000004, 0x00000002, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000008, 0x00000000,
+    0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000,
+    0x00000001, 0x00000002, 0x00000000, 0x00303270, 0x000002e0, 0x43425844, 0x561ee53c, 0x9807d928,
+    0x8a3e8c4e, 0x78f7bcb7, 0x00000001, 0x000002e0, 0x00000003, 0x0000002c, 0x000000a8, 0x000000c4,
+    0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001, 0x0000001c, 0x00000100,
+    0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000, 0x61765f67, 0xab003372,
+    0x00020001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73, 0x29522820,
+    0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e, 0x34494c43,
+    0x00000014, 0x00000004, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x434c5846, 0x00000214,
+    0x0000000c, 0x21200001, 0x00000002, 0x00000000, 0x00000002, 0x00000003, 0x00000000, 0x00000002,
+    0x00000002, 0x00000000, 0x00000007, 0x00000000, 0x23000001, 0x00000002, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000001, 0x00000001, 0x00000000, 0x00000007, 0x00000004, 0x21300001,
+    0x00000002, 0x00000000, 0x00000002, 0x00000002, 0x00000000, 0x00000002, 0x00000000, 0x00000000,
+    0x00000007, 0x00000000, 0x30100001, 0x00000003, 0x00000000, 0x00000007, 0x00000000, 0x00000000,
+    0x00000007, 0x00000004, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00000007, 0x00000008,
+    0x21100001, 0x00000002, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000002, 0x00000002,
+    0x00000000, 0x00000007, 0x00000000, 0x30100001, 0x00000003, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000001, 0x00000000, 0x00000000, 0x00000001, 0x00000001, 0x00000000, 0x00000007,
+    0x00000004, 0x21000001, 0x00000002, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000002,
+    0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x30100001, 0x00000003, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000007, 0x00000004, 0x00000000, 0x00000007, 0x00000008, 0x00000000,
+    0x00000007, 0x0000000c, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x0000000c, 0x00000000,
+    0x00000004, 0x00000000, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x0000000c, 0x00000000,
+    0x00000004, 0x00000001, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x0000000c, 0x00000000,
+    0x00000004, 0x00000002, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x0000000c, 0x00000000,
+    0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000,
+    0x00000001, 0x00000002, 0x00000000, 0x00313270, 0x0000024c, 0x43425844, 0x2c53dbe2, 0x46a9f629,
+    0xb72e1a1a, 0xf1302ff3, 0x00000001, 0x0000024c, 0x00000003, 0x0000002c, 0x000000a8, 0x000000c4,
+    0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001, 0x0000001c, 0x00000100,
+    0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000, 0x61765f67, 0xab003472,
+    0x00020001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73, 0x29522820,
+    0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e, 0x34494c43,
+    0x00000014, 0x00000004, 0x3f800000, 0x40000000, 0x00000000, 0x00000000, 0x434c5846, 0x00000180,
+    0x00000007, 0x21500001, 0x00000002, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000002,
+    0x00000002, 0x00000000, 0x00000007, 0x00000000, 0x30100001, 0x00000003, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000001, 0x00000000, 0x00000000, 0x00000001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000004, 0x21400001, 0x00000002, 0x00000000, 0x00000002, 0x00000000, 0x00000000,
+    0x00000002, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x30100001, 0x00000003, 0x00000000,
+    0x00000007, 0x00000000, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00000007, 0x00000004,
+    0x00000000, 0x00000004, 0x00000000, 0x30100001, 0x00000003, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00000007, 0x00000004, 0x00000000, 0x00000004,
+    0x00000001, 0x30100001, 0x00000003, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000001,
+    0x00000002, 0x00000000, 0x00000007, 0x00000004, 0x00000000, 0x00000004, 0x00000002, 0x30100001,
+    0x00000003, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000001, 0x00000002, 0x00000000,
+    0x00000007, 0x00000004, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff,
+    0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00323270, 0x000000ec,
+    0x43425844, 0xc95f99d5, 0x429f3bc7, 0xe63b88c0, 0x6af83630, 0x00000001, 0x000000ec, 0x00000003,
+    0x0000002c, 0x000000a8, 0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400,
+    0x00000001, 0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038,
+    0x00000000, 0x61765f67, 0xabab0072, 0x00030001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874,
+    0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970,
+    0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x00000030, 0x00000001,
+    0x13a00004, 0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000004, 0x00000000,
+    0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002,
+    0x00000000, 0x00333270, 0x000000ec, 0x43425844, 0x522b9c04, 0xb45214ce, 0x80b49b27, 0x3c625e1f,
+    0x00000001, 0x000000ec, 0x00000003, 0x0000002c, 0x000000a8, 0x000000b4, 0x42415443, 0x00000074,
+    0x0000001c, 0x0000004b, 0x46580400, 0x00000001, 0x0000001c, 0x00000100, 0x00000048, 0x00000030,
+    0x00000002, 0x00000001, 0x00000038, 0x00000000, 0x61765f67, 0xabab0072, 0x00030001, 0x00040001,
+    0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c,
+    0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000,
+    0x434c5846, 0x00000030, 0x00000001, 0x13900004, 0x00000001, 0x00000000, 0x00000002, 0x00000000,
+    0x00000000, 0x00000004, 0x00000000, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002,
+    0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00343270, 0x000001a4, 0x43425844, 0x2d57898e,
+    0xcbaa523b, 0xa6a27e6f, 0xb91c2543, 0x00000001, 0x000001a4, 0x00000003, 0x0000002c, 0x000000d4,
+    0x000000e0, 0x42415443, 0x000000a0, 0x0000001c, 0x00000077, 0x46580400, 0x00000002, 0x0000001c,
+    0x00000100, 0x00000074, 0x00000044, 0x00000002, 0x00000001, 0x0000004c, 0x00000000, 0x0000005c,
+    0x00010002, 0x00000001, 0x00000064, 0x00000000, 0x61765f67, 0xabab0072, 0x00030001, 0x00040001,
+    0x00000001, 0x00000000, 0x61765f67, 0xab003272, 0x00030001, 0x00040001, 0x00000001, 0x00000000,
+    0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320,
+    0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x000000bc,
+    0x00000005, 0x50000004, 0x00000002, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000002,
+    0x00000004, 0x00000000, 0x00000007, 0x00000000, 0x10000001, 0x00000001, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000004, 0x00000000, 0x10000001, 0x00000001, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000004, 0x00000001, 0x10000001, 0x00000001, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000004, 0x00000002, 0x10000001, 0x00000001, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001,
+    0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00353270, 0x000001a4, 0x43425844,
+    0x290c4bc4, 0x2befa5b6, 0x3846720d, 0x91ce4617, 0x00000001, 0x000001a4, 0x00000003, 0x0000002c,
+    0x000000d4, 0x000000e0, 0x42415443, 0x000000a0, 0x0000001c, 0x00000077, 0x46580400, 0x00000002,
+    0x0000001c, 0x00000100, 0x00000074, 0x00000044, 0x00000002, 0x00000001, 0x0000004c, 0x00000000,
+    0x0000005c, 0x00010002, 0x00000001, 0x00000064, 0x00000000, 0x61765f67, 0xabab0072, 0x00030001,
+    0x00040001, 0x00000001, 0x00000000, 0x61765f67, 0xab003272, 0x00030001, 0x00040001, 0x00000001,
+    0x00000000, 0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461,
+    0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846,
+    0x000000bc, 0x00000005, 0x50000003, 0x00000002, 0x00000000, 0x00000002, 0x00000000, 0x00000000,
+    0x00000002, 0x00000004, 0x00000000, 0x00000007, 0x00000000, 0x10000001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000000, 0x10000001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000001, 0x10000001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000002, 0x10000001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff,
+    0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00363270, 0x000001ec,
+    0x43425844, 0xd1c3fbc0, 0xc234ebce, 0x0829e8d7, 0x81c3fc5c, 0x00000001, 0x000001ec, 0x00000003,
     0x0000002c, 0x000000d4, 0x000000e0, 0x42415443, 0x000000a0, 0x0000001c, 0x00000077, 0x46580400,
     0x00000002, 0x0000001c, 0x00000100, 0x00000074, 0x00000044, 0x00000002, 0x00000001, 0x0000004c,
     0x00000000, 0x0000005c, 0x00010002, 0x00000001, 0x00000064, 0x00000000, 0x61765f67, 0xabab0072,
     0x00030001, 0x00040001, 0x00000001, 0x00000000, 0x61765f67, 0xab003272, 0x00030001, 0x00040001,
     0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c,
     0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000,
-    0x434c5846, 0x00000068, 0x00000002, 0xa0400004, 0x00000002, 0x00000000, 0x00000002, 0x00000000,
-    0x00000000, 0x00000002, 0x00000004, 0x00000000, 0x00000007, 0x00000000, 0xa0400004, 0x00000002,
-    0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004,
+    0x434c5846, 0x00000104, 0x00000005, 0x70e00001, 0x00000008, 0x00000000, 0x00000002, 0x00000003,
+    0x00000000, 0x00000002, 0x00000002, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000002,
+    0x00000000, 0x00000000, 0x00000002, 0x00000004, 0x00000000, 0x00000002, 0x00000005, 0x00000000,
+    0x00000002, 0x00000006, 0x00000000, 0x00000002, 0x00000007, 0x00000000, 0x00000007, 0x00000000,
+    0x10000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000000,
+    0x10000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000001,
+    0x10000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000002,
+    0x10000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000003,
+    0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002,
+    0x00000000, 0x00373270, 0x000001d4, 0x43425844, 0x8d6a0e48, 0x9e27e0a9, 0x0f3eba37, 0x93932040,
+    0x00000001, 0x000001d4, 0x00000003, 0x0000002c, 0x000000d4, 0x000000e0, 0x42415443, 0x000000a0,
+    0x0000001c, 0x00000077, 0x46580400, 0x00000002, 0x0000001c, 0x00000100, 0x00000074, 0x00000044,
+    0x00000002, 0x00000001, 0x0000004c, 0x00000000, 0x0000005c, 0x00010002, 0x00000001, 0x00000064,
+    0x00000000, 0x61765f67, 0xabab0072, 0x00030001, 0x00040001, 0x00000001, 0x00000000, 0x61765f67,
+    0xab003272, 0x00030001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73,
+    0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e,
+    0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x000000ec, 0x00000005, 0x70e00001, 0x00000006,
+    0x00000000, 0x00000002, 0x00000002, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000002,
+    0x00000000, 0x00000000, 0x00000002, 0x00000005, 0x00000000, 0x00000002, 0x00000006, 0x00000000,
+    0x00000002, 0x00000007, 0x00000000, 0x00000007, 0x00000000, 0x10000001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000000, 0x10000001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000001, 0x10000001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000002, 0x10000001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff,
+    0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00383270, 0x00000178,
+    0x43425844, 0x40465071, 0x33ca1cb9, 0x8d1d7192, 0xedd86abd, 0x00000001, 0x00000178, 0x00000003,
+    0x0000002c, 0x000000a8, 0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400,
+    0x00000001, 0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038,
+    0x00000000, 0x61765f67, 0xab003372, 0x00020001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874,
+    0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970,
+    0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x000000bc, 0x00000005,
+    0x21900001, 0x00000002, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000002, 0x00000000,
+    0x00000000, 0x00000007, 0x00000000, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000004, 0x00000000, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000004, 0x00000001, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000004, 0x00000002, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002,
+    0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00393270, 0x000000ec, 0x43425844, 0xc5784377,
+    0x16c9ce18, 0x67a07021, 0xb9eaebe9, 0x00000001, 0x000000ec, 0x00000003, 0x0000002c, 0x000000a8,
+    0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001, 0x0000001c,
+    0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000, 0x61765f67,
+    0xabab0072, 0x00030001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73,
+    0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e,
+    0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x00000030, 0x00000001, 0x11200004, 0x00000001,
+    0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000004, 0x00000000, 0xf0f0f0f0, 0x0f0f0f0f,
+    0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00303370,
+    0x0000014c, 0x43425844, 0x36d77f1e, 0xfb12f04e, 0x9c616c93, 0x0ab9004d, 0x00000001, 0x0000014c,
+    0x00000003, 0x0000002c, 0x000000a8, 0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b,
+    0x46580400, 0x00000001, 0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001,
+    0x00000038, 0x00000000, 0x61765f67, 0xabab0072, 0x00030001, 0x00040001, 0x00000001, 0x00000000,
+    0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320,
+    0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x00000090,
+    0x00000004, 0x10700001, 0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000004,
+    0x00000000, 0x10700001, 0x00000001, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000004,
+    0x00000001, 0x10700001, 0x00000001, 0x00000000, 0x00000002, 0x00000002, 0x00000000, 0x00000004,
+    0x00000002, 0x10700001, 0x00000001, 0x00000000, 0x00000002, 0x00000003, 0x00000000, 0x00000004,
+    0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001,
+    0x00000002, 0x00000000, 0x00313370, 0x00000188, 0x43425844, 0xdadb15b4, 0x2d2e9c74, 0x5c105708,
+    0x9218f7c5, 0x00000001, 0x00000188, 0x00000003, 0x0000002c, 0x000000a8, 0x000000c4, 0x42415443,
+    0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001, 0x0000001c, 0x00000100, 0x00000048,
+    0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000, 0x61765f67, 0xabab0072, 0x00030001,
+    0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73, 0x29522820, 0x534c4820,
+    0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e, 0x34494c43, 0x00000014,
+    0x00000004, 0x3f317218, 0x00000000, 0x00000000, 0x00000000, 0x434c5846, 0x000000bc, 0x00000005,
+    0x10600001, 0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000007, 0x00000000,
+    0x10600001, 0x00000001, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000007, 0x00000001,
+    0x10600001, 0x00000001, 0x00000000, 0x00000002, 0x00000002, 0x00000000, 0x00000007, 0x00000002,
+    0x10600001, 0x00000001, 0x00000000, 0x00000002, 0x00000003, 0x00000000, 0x00000007, 0x00000003,
+    0xa0500004, 0x00000002, 0x00000000, 0x00000001, 0x00000000, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000004, 0x00000000, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002,
+    0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00323370, 0x00000188, 0x43425844, 0xcc3b2c7b,
+    0x0ab3141b, 0xea88d5b8, 0x99b314cc, 0x00000001, 0x00000188, 0x00000003, 0x0000002c, 0x000000a8,
+    0x000000c4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001, 0x0000001c,
+    0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000, 0x61765f67,
+    0xabab0072, 0x00030001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73,
+    0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e,
+    0x34494c43, 0x00000014, 0x00000004, 0x3fb8aa3b, 0x00000000, 0x00000000, 0x00000000, 0x434c5846,
+    0x000000bc, 0x00000005, 0xa0500004, 0x00000002, 0x00000000, 0x00000001, 0x00000000, 0x00000000,
+    0x00000002, 0x00000000, 0x00000000, 0x00000007, 0x00000000, 0x10500001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000000, 0x10500001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000001, 0x00000000, 0x00000004, 0x00000001, 0x10500001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000002, 0x00000000, 0x00000004, 0x00000002, 0x10500001, 0x00000001, 0x00000000,
+    0x00000007, 0x00000003, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff,
+    0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00333370, 0x0000010c,
+    0x43425844, 0x13228b05, 0x212f3cde, 0x9538c252, 0xedacc5f2, 0x00000001, 0x0000010c, 0x00000003,
+    0x0000002c, 0x000000a8, 0x000000b4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400,
+    0x00000001, 0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038,
+    0x00000000, 0x61765f67, 0xab003372, 0x00020001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874,
+    0x6f726369, 0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970,
+    0x30312072, 0xab00312e, 0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x00000050, 0x00000002,
+    0x12100004, 0x00000001, 0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000007, 0x00000000,
+    0x13000004, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000000,
+    0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002,
+    0x00000000, 0x00343370, 0x00000144, 0x43425844, 0x74c24633, 0x7c8b5796, 0x94f5cf48, 0x026f6022,
+    0x00000001, 0x00000144, 0x00000003, 0x0000002c, 0x000000d4, 0x000000e0, 0x42415443, 0x000000a0,
+    0x0000001c, 0x00000077, 0x46580400, 0x00000002, 0x0000001c, 0x00000100, 0x00000074, 0x00000044,
+    0x00000002, 0x00000001, 0x0000004c, 0x00000000, 0x0000005c, 0x00010002, 0x00000001, 0x00000064,
+    0x00000000, 0x61765f67, 0xab003372, 0x00020001, 0x00040001, 0x00000001, 0x00000000, 0x61765f67,
+    0xab003472, 0x00020001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369, 0x74666f73,
+    0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072, 0xab00312e,
+    0x34494c43, 0x00000004, 0x00000000, 0x434c5846, 0x0000005c, 0x00000002, 0x23100004, 0x00000002,
+    0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000002, 0x00000004, 0x00000000, 0x00000007,
+    0x00000000, 0x13100004, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004,
     0x00000000, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001,
-    0x00000002, 0x00000000, 0x00000004, 0x00000020, 0x00000000, 0x00000002, 0xffffffff, 0x00000000,
-    0x00000030, 0x00000014, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000036,
-    0x00000014, 0x00000000, 0x00000010, 0x00000000, 0x00000000, 0x00000000, 0x0000003d, 0x00000002,
-    0x00000000, 0x00000042, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x00000045,
-    0x0000000b, 0x00000000, 0x00000001, 0x000001a9, 0x00000002, 0x00000000, 0x00000001, 0x000001b5,
-    0x000001c1, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x000001c4, 0x0000000b,
-    0x00000000, 0x00000001, 0x00000318, 0x00000002, 0x00000000, 0x00000001, 0x00000324,
+    0x00000002, 0x00000000, 0x00353370, 0x0000020c, 0x43425844, 0xbc818fd3, 0x08f516ed, 0x45b19da0,
+    0x6741e36e, 0x00000001, 0x0000020c, 0x00000003, 0x0000002c, 0x000000d4, 0x000000f0, 0x42415443,
+    0x000000a0, 0x0000001c, 0x00000077, 0x46580400, 0x00000002, 0x0000001c, 0x00000100, 0x00000074,
+    0x00000044, 0x00000002, 0x00000001, 0x0000004c, 0x00000000, 0x0000005c, 0x00010002, 0x00000001,
+    0x00000064, 0x00000000, 0x61765f67, 0xab003372, 0x00020001, 0x00040001, 0x00000001, 0x00000000,
+    0x61765f67, 0xab003472, 0x00020001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369,
+    0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072,
+    0xab00312e, 0x34494c43, 0x00000014, 0x00000004, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x434c5846, 0x00000114, 0x00000007, 0x23600001, 0x00000002, 0x00000000, 0x00000002, 0x00000004,
+    0x00000000, 0x00000002, 0x00000005, 0x00000000, 0x00000007, 0x00000000, 0x13100001, 0x00000001,
+    0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004, 0x00000002, 0x23500001, 0x00000002,
+    0x00000000, 0x00000002, 0x00000000, 0x00000000, 0x00000002, 0x00000001, 0x00000000, 0x00000007,
+    0x00000000, 0x13000001, 0x00000001, 0x00000000, 0x00000007, 0x00000000, 0x00000000, 0x00000004,
+    0x00000000, 0x23400001, 0x00000002, 0x00000000, 0x00000002, 0x00000002, 0x00000000, 0x00000002,
+    0x00000003, 0x00000000, 0x00000007, 0x00000000, 0x13000001, 0x00000001, 0x00000000, 0x00000007,
+    0x00000000, 0x00000000, 0x00000004, 0x00000001, 0x10000001, 0x00000001, 0x00000000, 0x00000001,
+    0x00000000, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f, 0x0000ffff, 0x00000001,
+    0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00363370, 0x00000188, 0x43425844,
+    0x0fa50e48, 0x77568ea3, 0x5a5f1569, 0x9a0b8508, 0x00000001, 0x00000188, 0x00000003, 0x0000002c,
+    0x000000a8, 0x000000c4, 0x42415443, 0x00000074, 0x0000001c, 0x0000004b, 0x46580400, 0x00000001,
+    0x0000001c, 0x00000100, 0x00000048, 0x00000030, 0x00000002, 0x00000001, 0x00000038, 0x00000000,
+    0x61765f67, 0xabab0072, 0x00030001, 0x00040001, 0x00000001, 0x00000000, 0x4d007874, 0x6f726369,
+    0x74666f73, 0x29522820, 0x534c4820, 0x6853204c, 0x72656461, 0x6d6f4320, 0x656c6970, 0x30312072,
+    0xab00312e, 0x34494c43, 0x00000014, 0x00000004, 0x3e9a209b, 0x00000000, 0x00000000, 0x00000000,
+    0x434c5846, 0x000000bc, 0x00000005, 0x10600001, 0x00000001, 0x00000000, 0x00000002, 0x00000000,
+    0x00000000, 0x00000004, 0x00000000, 0x10600001, 0x00000001, 0x00000000, 0x00000002, 0x00000001,
+    0x00000000, 0x00000007, 0x00000000, 0x20500001, 0x00000002, 0x00000000, 0x00000007, 0x00000000,
+    0x00000000, 0x00000001, 0x00000000, 0x00000000, 0x00000004, 0x00000001, 0x10500001, 0x00000001,
+    0x00000000, 0x00000002, 0x00000002, 0x00000000, 0x00000004, 0x00000002, 0x10000001, 0x00000001,
+    0x00000000, 0x00000001, 0x00000001, 0x00000000, 0x00000004, 0x00000003, 0xf0f0f0f0, 0x0f0f0f0f,
+    0x0000ffff, 0x00000001, 0x00000002, 0x00000000, 0x00000001, 0x00000002, 0x00000000, 0x00000004,
+    0x00000040, 0x00000000, 0x00000004, 0xffffffff, 0x00000000, 0x00000030, 0x00000014, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000036, 0x00000014, 0x00000000, 0x00000010,
+    0x00000000, 0x00000000, 0x00000000, 0x0000005e, 0x00000042, 0x00000000, 0x00000020, 0x00000000,
+    0x00000000, 0x00000000, 0x00000087, 0x0000006b, 0x00000000, 0x00000030, 0x00000000, 0x00000000,
+    0x00000000, 0x000000bc, 0x000000a0, 0x00000000, 0xffffffff, 0x00000001, 0x00000019, 0x00000000,
+    0x00000006, 0x000000c5, 0x00000000, 0x000001b5, 0x00000025, 0x00000000, 0x000001ba, 0x00000003,
+    0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x000001bd, 0x0000000b, 0x00000000, 0x00000001,
+    0x00000405, 0x00000002, 0x00000000, 0x00000001, 0x00000411, 0x0000041d, 0x00000003, 0x00000000,
+    0x0000000a, 0x00000000, 0x00000006, 0x00000420, 0x0000000b, 0x00000000, 0x00000001, 0x00000574,
+    0x00000002, 0x00000000, 0x00000001, 0x00000580, 0x0000058c, 0x00000003, 0x00000000, 0x0000000a,
+    0x00000000, 0x00000006, 0x0000058f, 0x0000000b, 0x00000000, 0x00000001, 0x000007bf, 0x00000002,
+    0x00000000, 0x00000001, 0x000007cb, 0x000007d7, 0x00000003, 0x00000000, 0x0000000a, 0x00000000,
+    0x00000006, 0x000007da, 0x0000000b, 0x00000000, 0x00000001, 0x00000902, 0x00000002, 0x00000000,
+    0x00000001, 0x0000090e, 0x0000091a, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006,
+    0x0000091d, 0x0000000b, 0x00000000, 0x00000001, 0x00000a45, 0x00000002, 0x00000000, 0x00000001,
+    0x00000a51, 0x00000a5d, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x00000a60,
+    0x0000000b, 0x00000000, 0x00000001, 0x00000b5c, 0x00000002, 0x00000000, 0x00000001, 0x00000b68,
+    0x00000b74, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x00000b77, 0x0000000b,
+    0x00000000, 0x00000001, 0x00000cc7, 0x00000002, 0x00000000, 0x00000001, 0x00000cd3, 0x00000cdf,
+    0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x00000ce2, 0x0000000b, 0x00000000,
+    0x00000001, 0x00000dd2, 0x00000002, 0x00000000, 0x00000001, 0x00000dde, 0x00000dea, 0x00000003,
+    0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x00000ded, 0x0000000b, 0x00000000, 0x00000001,
+    0x00000fe9, 0x00000002, 0x00000000, 0x00000001, 0x00000ff5, 0x00001001, 0x00000003, 0x00000000,
+    0x0000000a, 0x00000000, 0x00000006, 0x00001004, 0x0000000b, 0x00000000, 0x00000001, 0x00001180,
+    0x00000002, 0x00000000, 0x00000001, 0x0000118c, 0x00001198, 0x00000003, 0x00000000, 0x0000000a,
+    0x00000000, 0x00000006, 0x0000119c, 0x0000000b, 0x00000000, 0x00000001, 0x0000136c, 0x00000002,
+    0x00000000, 0x00000001, 0x00001378, 0x00001384, 0x00000003, 0x00000000, 0x0000000a, 0x00000000,
+    0x00000006, 0x00001388, 0x0000000b, 0x00000000, 0x00000001, 0x00001504, 0x00000002, 0x00000000,
+    0x00000001, 0x00001510, 0x0000151c, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006,
+    0x00001520, 0x0000000b, 0x00000000, 0x00000001, 0x0000169c, 0x00000002, 0x00000000, 0x00000001,
+    0x000016a8, 0x000016b4, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x000016b8,
+    0x0000000b, 0x00000000, 0x00000001, 0x00001834, 0x00000002, 0x00000000, 0x00000001, 0x00001840,
+    0x0000184c, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x00001850, 0x0000000b,
+    0x00000000, 0x00000001, 0x000019cc, 0x00000002, 0x00000000, 0x00000001, 0x000019d8, 0x000019e4,
+    0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x000019e8, 0x0000000b, 0x00000000,
+    0x00000001, 0x00001b38, 0x00000002, 0x00000000, 0x00000001, 0x00001b44, 0x00001b50, 0x00000003,
+    0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x00001b54, 0x0000000b, 0x00000000, 0x00000001,
+    0x00001ca4, 0x00000002, 0x00000000, 0x00000001, 0x00001cb0, 0x00001cbc, 0x00000003, 0x00000000,
+    0x0000000a, 0x00000000, 0x00000006, 0x00001cc0, 0x0000000b, 0x00000000, 0x00000001, 0x00001e10,
+    0x00000002, 0x00000000, 0x00000001, 0x00001e1c, 0x00001e28, 0x00000003, 0x00000000, 0x0000000a,
+    0x00000000, 0x00000006, 0x00001e2c, 0x0000000b, 0x00000000, 0x00000001, 0x00001fac, 0x00000002,
+    0x00000000, 0x00000001, 0x00001fb8, 0x00001fc4, 0x00000003, 0x00000000, 0x0000000a, 0x00000000,
+    0x00000006, 0x00001fc8, 0x0000000b, 0x00000000, 0x00000001, 0x0000229c, 0x00000002, 0x00000000,
+    0x00000001, 0x000022a8, 0x000022b4, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006,
+    0x000022b8, 0x0000000b, 0x00000000, 0x00000001, 0x0000259c, 0x00000002, 0x00000000, 0x00000001,
+    0x000025a8, 0x000025b4, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x000025b8,
+    0x0000000b, 0x00000000, 0x00000001, 0x00002808, 0x00000002, 0x00000000, 0x00000001, 0x00002814,
+    0x00002820, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x00002824, 0x0000000b,
+    0x00000000, 0x00000001, 0x00002914, 0x00000002, 0x00000000, 0x00000001, 0x00002920, 0x0000292c,
+    0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x00002930, 0x0000000b, 0x00000000,
+    0x00000001, 0x00002a20, 0x00000002, 0x00000000, 0x00000001, 0x00002a2c, 0x00002a38, 0x00000003,
+    0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x00002a3c, 0x0000000b, 0x00000000, 0x00000001,
+    0x00002be4, 0x00000002, 0x00000000, 0x00000001, 0x00002bf0, 0x00002bfc, 0x00000003, 0x00000000,
+    0x0000000a, 0x00000000, 0x00000006, 0x00002c00, 0x0000000b, 0x00000000, 0x00000001, 0x00002da8,
+    0x00000002, 0x00000000, 0x00000001, 0x00002db4, 0x00002dc0, 0x00000003, 0x00000000, 0x0000000a,
+    0x00000000, 0x00000006, 0x00002dc4, 0x0000000b, 0x00000000, 0x00000001, 0x00002fb4, 0x00000002,
+    0x00000000, 0x00000001, 0x00002fc0, 0x00002fcc, 0x00000003, 0x00000000, 0x0000000a, 0x00000000,
+    0x00000006, 0x00002fd0, 0x0000000b, 0x00000000, 0x00000001, 0x000031a8, 0x00000002, 0x00000000,
+    0x00000001, 0x000031b4, 0x000031c0, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006,
+    0x000031c4, 0x0000000b, 0x00000000, 0x00000001, 0x00003340, 0x00000002, 0x00000000, 0x00000001,
+    0x0000334c, 0x00003358, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x0000335c,
+    0x0000000b, 0x00000000, 0x00000001, 0x0000344c, 0x00000002, 0x00000000, 0x00000001, 0x00003458,
+    0x00003464, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x00003468, 0x0000000b,
+    0x00000000, 0x00000001, 0x000035b8, 0x00000002, 0x00000000, 0x00000001, 0x000035c4, 0x000035d0,
+    0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x000035d4, 0x0000000b, 0x00000000,
+    0x00000001, 0x00003760, 0x00000002, 0x00000000, 0x00000001, 0x0000376c, 0x00003778, 0x00000003,
+    0x00000000, 0x0000000a, 0x00000000, 0x00000006, 0x0000377c, 0x0000000b, 0x00000000, 0x00000001,
+    0x00003908, 0x00000002, 0x00000000, 0x00000001, 0x00003914, 0x00003920, 0x00000003, 0x00000000,
+    0x0000000a, 0x00000000, 0x00000006, 0x00003924, 0x0000000b, 0x00000000, 0x00000001, 0x00003a34,
+    0x00000002, 0x00000000, 0x00000001, 0x00003a40, 0x00003a4c, 0x00000003, 0x00000000, 0x0000000a,
+    0x00000000, 0x00000006, 0x00003a50, 0x0000000b, 0x00000000, 0x00000001, 0x00003b98, 0x00000002,
+    0x00000000, 0x00000001, 0x00003ba4, 0x00003bb0, 0x00000003, 0x00000000, 0x0000000a, 0x00000000,
+    0x00000006, 0x00003bb4, 0x0000000b, 0x00000000, 0x00000001, 0x00003dc4, 0x00000002, 0x00000000,
+    0x00000001, 0x00003dd0, 0x00003ddc, 0x00000003, 0x00000000, 0x0000000a, 0x00000000, 0x00000006,
+    0x00003de0, 0x0000000b, 0x00000000, 0x00000001, 0x00003f6c, 0x00000002, 0x00000000, 0x00000001,
+    0x00003f78,
 };
+
+static float get_frc(float v)
+{
+    return v - floor(v);
+}
 
 static void test_effect_value_expression(void)
 {
+    ID3D10EffectVectorVariable *g_var, *g_var2, *g_var3, *g_var4;
+    ID3D10EffectDepthStencilVariable *ds;
+    D3D10_DEPTH_STENCIL_DESC ds_desc;
+    ID3D10BlendState *blend_state;
+    float f[4], blend_factor[4];
+    ID3D10EffectTechnique *t;
+    ID3D10EffectVariable *v;
+    ID3D10EffectPass *pass;
     ID3D10Effect *effect;
     ID3D10Device *device;
+    UINT sample_mask;
+    unsigned int idx;
     ULONG refcount;
     HRESULT hr;
+    int i[4];
 
     if (!(device = create_device()))
     {
@@ -8201,32 +9006,896 @@ static void test_effect_value_expression(void)
     }
 
     hr = create_effect(fx_test_value_expression, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create an effect, hr %#x.\n", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    t = effect->lpVtbl->GetTechniqueByName(effect, "tech");
+    ok(t->lpVtbl->IsValid(t), "Expected valid technique.\n");
+
+    v = effect->lpVtbl->GetVariableByName(effect, "g_var");
+    g_var = v->lpVtbl->AsVector(v);
+    ok(g_var->lpVtbl->IsValid(g_var), "Expected valid vector variable.\n");
+    v = effect->lpVtbl->GetVariableByName(effect, "g_var2");
+    g_var2 = v->lpVtbl->AsVector(v);
+    ok(g_var2->lpVtbl->IsValid(g_var2), "Expected valid vector variable.\n");
+    v = effect->lpVtbl->GetVariableByName(effect, "g_var3");
+    g_var3 = v->lpVtbl->AsVector(v);
+    ok(g_var3->lpVtbl->IsValid(g_var3), "Expected valid vector variable.\n");
+    v = effect->lpVtbl->GetVariableByName(effect, "g_var4");
+    g_var4 = v->lpVtbl->AsVector(v);
+    ok(g_var4->lpVtbl->IsValid(g_var4), "Expected valid vector variable.\n");
+
+    /* min/max */
+    pass = t->lpVtbl->GetPassByName(t, "p3");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 0.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_vec4(f, 1.0f, 2.0f, 3.0f, 4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    set_vec4(f, 2.0f, 1.1f, 0.1f, -3.0f);
+    hr = g_var2->lpVtbl->SetFloatVector(g_var2, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    ok(blend_factor[0] == 1.0f, "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+    ok(blend_factor[1] == 1.0f, "Got unexpected blend_factor[1] %.8e.\n", blend_factor[1]);
+    ok(blend_factor[2] == 0.1f, "Got unexpected blend_factor[2] %.8e.\n", blend_factor[2]);
+    ok(blend_factor[3] == -3.0f, "Got unexpected blend_factor[3] %.8e.\n", blend_factor[3]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    pass = t->lpVtbl->GetPassByName(t, "p4");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    ok(blend_factor[0] == 2.0f, "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+    ok(blend_factor[1] == 1.1f, "Got unexpected blend_factor[1] %.8e.\n", blend_factor[1]);
+    ok(blend_factor[2] == 1.0f, "Got unexpected blend_factor[2] %.8e.\n", blend_factor[2]);
+    ok(blend_factor[3] == 1.0f, "Got unexpected blend_factor[3] %.8e.\n", blend_factor[3]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* div */
+    pass = t->lpVtbl->GetPassByName(t, "p5");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 1.0f, 2.0f, 3.0f, 4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    ok(blend_factor[0] == 1.0f, "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+    ok(blend_factor[1] == 1.0f / 2.0f, "Got unexpected blend_factor[1] %.8e.\n", blend_factor[1]);
+    ok(blend_factor[2] == 1.0f / 3.0f, "Got unexpected blend_factor[2] %.8e.\n", blend_factor[2]);
+    ok(blend_factor[3] == 1.0f / 4.0f, "Got unexpected blend_factor[3] %.8e.\n", blend_factor[3]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* rcp */
+    pass = t->lpVtbl->GetPassByName(t, "p6");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 2.0f, 3.0f, 4.0f, 5.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    ok(blend_factor[0] == 1.0f / 2.0f, "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+    ok(blend_factor[1] == 1.0f / 3.0f, "Got unexpected blend_factor[1] %.8e.\n", blend_factor[1]);
+    ok(blend_factor[2] == 1.0f / 4.0f, "Got unexpected blend_factor[2] %.8e.\n", blend_factor[2]);
+    ok(blend_factor[3] == 1.0f / 5.0f, "Got unexpected blend_factor[3] %.8e.\n", blend_factor[3]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* frc */
+    pass = t->lpVtbl->GetPassByName(t, "p7");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 0.0f, 3.1f, -4.2f, 0.1f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == get_frc(f[idx]), "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* Mutable state objects. */
+    v = effect->lpVtbl->GetVariableByName(effect, "ds_state");
+    ds = v->lpVtbl->AsDepthStencil(v);
+
+    set_vec4(f, 1.0f, 2.0f, 3.0f, 4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ds->lpVtbl->GetBackingStore(ds, 0, &ds_desc);
+    ok(ds_desc.StencilEnable == 0xffffffff, "Got unexpected StencilEnable %#x.\n", ds_desc.StencilEnable);
+
+    set_vec4(f, 0.0f, 2.0f, 3.0f, 4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ds->lpVtbl->GetBackingStore(ds, 0, &ds_desc);
+    ok(!ds_desc.StencilEnable, "Got unexpected StencilEnable %#x.\n", ds_desc.StencilEnable);
+
+    set_vec4(f, -0.1f, 2.0f, 3.0f, 4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ds->lpVtbl->GetBackingStore(ds, 0, &ds_desc);
+    ok(ds_desc.StencilEnable == 0xffffffff, "Got unexpected StencilEnable %#x.\n", ds_desc.StencilEnable);
+
+    set_vec4(f, 0.0f, 2.0f, 3.0f, 4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ds->lpVtbl->GetBackingStore(ds, 0, &ds_desc);
+    ok(!ds_desc.StencilEnable, "Got unexpected StencilEnable %#x.\n", ds_desc.StencilEnable);
+
+    set_vec4(f, NAN, 2.0f, 3.0f, 4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ds->lpVtbl->GetBackingStore(ds, 0, &ds_desc);
+    ok(ds_desc.StencilEnable == 0xffffffff, "Got unexpected StencilEnable %#x.\n", ds_desc.StencilEnable);
+
+    /* itof */
+    pass = t->lpVtbl->GetPassByName(t, "p8");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, -4.0f, -3.0f, 3.0f, 4.0f);
+    hr = g_var3->lpVtbl->SetFloatVector(g_var3, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 0.3f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* udiv */
+    pass = t->lpVtbl->GetPassByName(t, "p9");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 2.0f, 0.0f, 3.0f, 4.0f);
+    hr = g_var3->lpVtbl->SetFloatVector(g_var3, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == (float)UINT_MAX, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* movc */
+    pass = t->lpVtbl->GetPassByName(t, "p10");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 0.0f, 1.1f, 2.2f, 4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 2.2f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_vec4(f, 0.1f, 0.1f, 0.2f, 4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 0.1f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* umin/umax */
+    pass = t->lpVtbl->GetPassByName(t, "p11");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_int4(i, 3, 2, 0, 0);
+    hr = g_var4->lpVtbl->SetIntVector(g_var4, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 2.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    pass = t->lpVtbl->GetPassByName(t, "p12");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_int4(i, 2, 5, 0, 0);
+    hr = g_var4->lpVtbl->SetIntVector(g_var4, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 5.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* imin */
+    pass = t->lpVtbl->GetPassByName(t, "p13");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_int4(i, 3, 5, 0, 0);
+    hr = g_var3->lpVtbl->SetIntVector(g_var3, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 3.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* iadd */
+    pass = t->lpVtbl->GetPassByName(t, "p14");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_int4(i, 3, 5, 0, 0);
+    hr = g_var4->lpVtbl->SetIntVector(g_var4, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 8.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* asin */
+    pass = t->lpVtbl->GetPassByName(t, "p15");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 0.1234567f, 0.0f, 0.0f, 0.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(blend_factor[0] == asinf(f[0]), "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+
+    /* acos */
+    pass = t->lpVtbl->GetPassByName(t, "p16");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 0.1234567f, 0.0f, 0.0f, 0.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(blend_factor[0] == acosf(f[0]), "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+
+    /* atan */
+    pass = t->lpVtbl->GetPassByName(t, "p17");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 0.1234567f, 0.0f, 0.0f, 0.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(blend_factor[0] == atanf(f[0]), "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+
+    /* atan2 */
+    pass = t->lpVtbl->GetPassByName(t, "p18");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 0.1234567f, 0.7654321f, 0.0f, 0.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(blend_factor[0] == atan2f(f[0], f[1]), "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+
+    /* Integer division */
+    pass = t->lpVtbl->GetPassByName(t, "p19");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_int4(i, 10, 5, 0, 0);
+    hr = g_var3->lpVtbl->SetIntVector(g_var3, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 2.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* Signed integer comparison. */
+    pass = t->lpVtbl->GetPassByName(t, "p20");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_int4(i, 1, 5, 6, 5);
+    hr = g_var3->lpVtbl->SetIntVector(g_var3, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 1.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_int4(i, 2, 1, 2, 5);
+    hr = g_var3->lpVtbl->SetIntVector(g_var3, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 2.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* Unsigned integer comparison. */
+    pass = t->lpVtbl->GetPassByName(t, "p21");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_int4(i, 6, 5, 7, 1);
+    hr = g_var4->lpVtbl->SetIntVector(g_var4, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 0.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_int4(i, 2, 5, 7, 1);
+    hr = g_var4->lpVtbl->SetIntVector(g_var4, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 1.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* ceil() */
+    pass = t->lpVtbl->GetPassByName(t, "p22");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 1.1f, -2.3f, 3.5f, -4.5f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 2.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_vec4(f, -2.3f, 1.1f, 3.5f, -4.5f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == -2.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_vec4(f, 3.5f, -2.3f, 1.1f, -4.5f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 4.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_vec4(f, -4.5f, -2.3f, 3.5f, 1.1f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == -4.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* floor() */
+    pass = t->lpVtbl->GetPassByName(t, "p23");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 1.1f, -2.3f, 3.5f, -4.5f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 1.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_vec4(f, -2.3f, 1.1f, 3.5f, -4.5f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == -3.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_vec4(f, 3.5f, -2.3f, 1.1f, -4.5f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 3.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_vec4(f, -4.5f, -2.3f, 3.5f, 1.1f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == -5.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* dot(), 4-component vectors */
+    pass = t->lpVtbl->GetPassByName(t, "p24");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 1.0f, -2.0f, 3.0f, -4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    set_vec4(f, 5.0f, 6.0f, -7.0f, 8.0f);
+    hr = g_var2->lpVtbl->SetFloatVector(g_var2, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == -60.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* dot(), 3-component vectors */
+    pass = t->lpVtbl->GetPassByName(t, "p25");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 1.0f, -2.0f, 3.0f, -4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    set_vec4(f, 5.0f, 6.0f, -7.0f, 8.0f);
+    hr = g_var2->lpVtbl->SetFloatVector(g_var2, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == -28.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* dot(), 4-component vectors with swizzles */
+    pass = t->lpVtbl->GetPassByName(t, "p26");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 1.0f, -2.0f, 3.0f, -4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    set_vec4(f, 5.0f, 6.0f, -7.0f, 8.0f);
+    hr = g_var2->lpVtbl->SetFloatVector(g_var2, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 20.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* dot(), 3-component vectors with swizzles */
+    pass = t->lpVtbl->GetPassByName(t, "p27");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 1.0f, -2.0f, 3.0f, -4.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    set_vec4(f, 5.0f, 6.0f, -7.0f, 8.0f);
+    hr = g_var2->lpVtbl->SetFloatVector(g_var2, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 40.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* Signed integer multiplication */
+    pass = t->lpVtbl->GetPassByName(t, "p28");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_int4(i, 3, -2, 5, -4);
+    hr = g_var3->lpVtbl->SetIntVector(g_var3, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == -6.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* sqrt() */
+    pass = t->lpVtbl->GetPassByName(t, "p29");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 4.0f, 0.0f, 1.0f, 64.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    ok(blend_factor[0] == 2.0f, "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+    ok(blend_factor[1] == 0.0f, "Got unexpected blend_factor[1] %.8e.\n", blend_factor[1]);
+    ok(blend_factor[2] == 1.0f, "Got unexpected blend_factor[2] %.8e.\n", blend_factor[2]);
+    ok(blend_factor[3] == 8.0f, "Got unexpected blend_factor[3] %.8e.\n", blend_factor[3]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* rsqrt() */
+    pass = t->lpVtbl->GetPassByName(t, "p30");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 4.0f, 9.0f, 1.0f, 64.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    ok(blend_factor[0] == 0.5f, "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+    ok(blend_factor[1] == 1.0f / 3.0f, "Got unexpected blend_factor[1] %.8e.\n", blend_factor[1]);
+    ok(blend_factor[2] == 1.0f, "Got unexpected blend_factor[2] %.8e.\n", blend_factor[2]);
+    ok(blend_factor[3] == 0.125f, "Got unexpected blend_factor[3] %.8e.\n", blend_factor[3]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* log() */
+    pass = t->lpVtbl->GetPassByName(t, "p31");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 4.0f, 9.0f, 0.0f, -2.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    ok(blend_factor[0] == logf(fabsf(f[0])), "Got unexpected blend_factor %.8e.\n", blend_factor[0]);
+    ok(blend_factor[1] == logf(fabsf(f[1])), "Got unexpected blend_factor %.8e.\n", blend_factor[1]);
+    ok(blend_factor[2] == 0.0f, "Got unexpected blend_factor %.8e.\n", blend_factor[2]);
+    ok(blend_factor[3] == logf(fabsf(f[3])), "Got unexpected blend_factor %.8e.\n", blend_factor[3]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* exp() */
+    pass = t->lpVtbl->GetPassByName(t, "p32");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 4.0f, 1.0f, 0.0f, -2.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == expf(f[idx]), "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* binary complement */
+    pass = t->lpVtbl->GetPassByName(t, "p33");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_int4(i, 0, 1, 2, 3);
+    hr = g_var3->lpVtbl->SetIntVector(g_var3, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == -1.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_int4(i, 1, 0, 2, 3);
+    hr = g_var3->lpVtbl->SetIntVector(g_var3, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == -2.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* bitwise 'or' */
+    pass = t->lpVtbl->GetPassByName(t, "p34");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_int4(i, 1, 2, 3, 4);
+    hr = g_var3->lpVtbl->SetIntVector(g_var3, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    set_int4(i, 0x10, 0x20, 0x30, 0x40);
+    hr = g_var4->lpVtbl->SetIntVector(g_var4, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 17.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_int4(i, 0x20, 0x10, 0x30, 0x40);
+    hr = g_var4->lpVtbl->SetIntVector(g_var4, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    for (idx = 0; idx < ARRAY_SIZE(blend_factor); ++idx)
+        ok(blend_factor[idx] == 33.0f, "Got unexpected blend_factor[%u] %.8e.\n", idx, blend_factor[idx]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* Shifts */
+    pass = t->lpVtbl->GetPassByName(t, "p35");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_int4(i, 10, 1, 20, 2);
+    hr = g_var3->lpVtbl->SetIntVector(g_var3, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    set_int4(i, 10, 2, 0, 0);
+    hr = g_var4->lpVtbl->SetIntVector(g_var4, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    ok(blend_factor[0] == 5.0f, "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+    ok(blend_factor[1] == 80.0f, "Got unexpected blend_factor[1] %.8e.\n", blend_factor[1]);
+    ok(blend_factor[2] == 2.0f, "Got unexpected blend_factor[2] %.8e.\n", blend_factor[2]);
+    ok(blend_factor[3] == 0.0f, "Got unexpected blend_factor[3] %.8e.\n", blend_factor[3]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    set_int4(i, 40, 35, 20, 37);
+    hr = g_var3->lpVtbl->SetIntVector(g_var3, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    set_int4(i, 10, 66, 0, 0);
+    hr = g_var4->lpVtbl->SetIntVector(g_var4, i);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    ok(blend_factor[0] == 5.0f, "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+    ok(blend_factor[1] == 640.0f, "Got unexpected blend_factor[1] %.8e.\n", blend_factor[1]);
+    ok(blend_factor[2] == 2.0f, "Got unexpected blend_factor[2] %.8e.\n", blend_factor[2]);
+    ok(blend_factor[3] == 0.0f, "Got unexpected blend_factor[3] %.8e.\n", blend_factor[3]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
+
+    /* log2(), log10(), exp2() */
+    pass = t->lpVtbl->GetPassByName(t, "p36");
+    ok(pass->lpVtbl->IsValid(pass), "Expected valid pass.\n");
+
+    set_vec4(f, 4.0f, 9.0f, 3.0f, 0.0f);
+    hr = g_var->lpVtbl->SetFloatVector(g_var, f);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = pass->lpVtbl->Apply(pass, 0);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    ID3D10Device_OMGetBlendState(device, &blend_state, blend_factor, &sample_mask);
+    ok(!blend_state, "Unexpected blend state %p.\n", blend_state);
+    ok(blend_factor[0] == logf(f[0]) / logf(2.0f), "Got unexpected blend_factor[0] %.8e.\n", blend_factor[0]);
+    ok(blend_factor[1] == log10f(f[1]), "Got unexpected blend_factor[1] %.8e.\n", blend_factor[1]);
+    ok(blend_factor[2] == exp2f(f[2]), "Got unexpected blend_factor[2] %.8e.\n", blend_factor[2]);
+    ok(blend_factor[3] == 0.0f, "Got unexpected blend_factor[3] %.8e.\n", blend_factor[3]);
+    ok(!sample_mask, "Got unexpected sample_mask %#x.\n", sample_mask);
 
     effect->lpVtbl->Release(effect);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
 }
-
-#if 0
-technique10 tech0
-{
-    pass pass0 {}
-};
-#endif
-static DWORD fx_test_fx_4_1[] =
-{
-    0x43425844, 0x228fcf4d, 0x9396b2f5, 0xd817b31f, 0xab6dd460, 0x00000001, 0x000000a0, 0x00000001,
-    0x00000024, 0x30315846, 0x00000074, 0xfeff1011, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-    0x00000000, 0x00000000, 0x00000001, 0x00000010, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
-    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x68636574,
-    0x61700030, 0x00307373, 0x00000004, 0x00000001, 0x00000000, 0x0000000a, 0x00000000, 0x00000000,
-};
 
 static void test_effect_fx_4_1(void)
 {
+    static const char source[] =
+        "technique10 tech0\n"
+        "{\n"
+        "   pass pass0 {}\n"
+        "};";
     ID3D10Effect *effect;
+    ID3D10Device *device;
+    ID3D10Blob *blob;
+    ULONG refcount;
+    HRESULT hr;
+
+    if (!(device = create_device()))
+    {
+        skip("Failed to create device, skipping tests.\n");
+        return;
+    }
+
+    hr = D3DCompile(source, sizeof(source), NULL, NULL, NULL, "main", "fx_4_1", 0, 0, &blob, NULL);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    hr = create_effect(ID3D10Blob_GetBufferPointer(blob), 0, device, NULL, &effect);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+
+    effect->lpVtbl->Release(effect);
+
+    ID3D10Blob_Release(blob);
+
+    refcount = ID3D10Device_Release(device);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
+}
+
+#if 0
+BlendState blend_state
+{
+    srcblend = one;
+};
+#endif
+static DWORD fx_4_1_test_blend_state[] =
+{
+    0x43425844, 0xe4566da7, 0x2242fb47, 0xa5924d09, 0x8280296f, 0x00000001, 0x000001a7, 0x00000001,
+    0x00000024, 0x30315846, 0x0000017b, 0xfeff1011, 0x00000000, 0x00000000, 0x00000001, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000097, 0x00000000, 0x00000000, 0x00000000, 0x00000001,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x6e656c42,
+    0x61745364, 0x04006574, 0x02000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x02000000,
+    0x62000000, 0x646e656c, 0x6174735f, 0x01006574, 0x02000000, 0x02000000, 0x01000000, 0x02000000,
+    0x02000000, 0x01000000, 0x02000000, 0x02000000, 0x01000000, 0x02000000, 0x02000000, 0x01000000,
+    0x02000000, 0x02000000, 0x01000000, 0x02000000, 0x02000000, 0x01000000, 0x02000000, 0x02000000,
+    0x01000000, 0x02000000, 0x02000000, 0x2b000000, 0x0f000000, 0x00000000, 0xff000000, 0x08ffffff,
+    0x26000000, 0x00000000, 0x01000000, 0x37000000, 0x26000000, 0x01000000, 0x01000000, 0x43000000,
+    0x26000000, 0x02000000, 0x01000000, 0x4f000000, 0x26000000, 0x03000000, 0x01000000, 0x5b000000,
+    0x26000000, 0x04000000, 0x01000000, 0x67000000, 0x26000000, 0x05000000, 0x01000000, 0x73000000,
+    0x26000000, 0x06000000, 0x01000000, 0x7f000000, 0x26000000, 0x07000000, 0x01000000, 0x8b000000,
+    0x00000000, 0x00000000,
+};
+
+static void test_effect_fx_4_1_blend_state(void)
+{
+    ID3D10Effect *effect = NULL;
     ID3D10Device *device;
     ULONG refcount;
     HRESULT hr;
@@ -8237,13 +9906,86 @@ static void test_effect_fx_4_1(void)
         return;
     }
 
-    hr = create_effect(fx_test_fx_4_1, 0, device, NULL, &effect);
-    ok(SUCCEEDED(hr), "Failed to create an effect, hr %#x.\n", hr);
-
-    effect->lpVtbl->Release(effect);
+    hr = create_effect(fx_4_1_test_blend_state, 0, device, NULL, &effect);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     refcount = ID3D10Device_Release(device);
-    ok(!refcount, "Device has %u references left.\n", refcount);
+    ok(!refcount, "Device has %lu references left.\n", refcount);
+}
+
+static void test_effect_compiler(void)
+{
+    static char empty_effect[] =
+        "technique10 {};";
+    static char empty_buffer[] =
+        "cbuffer cb1 { float4 m1; }\n"
+        "cbuffer cb2 { }\n"
+        "technique10 {};";
+
+    D3D10_EFFECT_VARIABLE_DESC var_desc;
+    ID3D10EffectConstantBuffer *cb;
+    D3D10_EFFECT_DESC desc;
+    ID3D10Device *device;
+    ID3D10Effect *effect;
+    ID3D10Blob *blob;
+    HRESULT hr;
+
+    if (!(device = create_device()))
+    {
+        skip("Failed to create device, skipping tests.\n");
+        return;
+    }
+
+    hr = D3D10CompileEffectFromMemory(empty_effect, sizeof(empty_effect), NULL, NULL, NULL, 0, 0,
+            &blob, NULL);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = create_effect(ID3D10Blob_GetBufferPointer(blob), 0, device, NULL, &effect);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = ID3D10Effect_GetDesc(effect, &desc);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(desc.Techniques == 1, "Unexpected technique count %u.\n", desc.Techniques);
+    ok(desc.ConstantBuffers == 1, "Unexpected buffer count %u.\n", desc.ConstantBuffers);
+
+    cb = effect->lpVtbl->GetConstantBufferByIndex(effect, 0);
+    hr = cb->lpVtbl->GetDesc(cb, &var_desc);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(!strcmp(var_desc.Name, "$Globals"), "Unexpected variable name %s.\n", var_desc.Name);
+
+    ID3D10Effect_Release(effect);
+    ID3D10Blob_Release(blob);
+
+    /* Empty user buffers. */
+    hr = D3D10CompileEffectFromMemory(empty_buffer, sizeof(empty_buffer), NULL, NULL, NULL, 0, 0,
+            &blob, NULL);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = create_effect(ID3D10Blob_GetBufferPointer(blob), 0, device, NULL, &effect);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = ID3D10Effect_GetDesc(effect, &desc);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(desc.Techniques == 1, "Unexpected technique count %u.\n", desc.Techniques);
+    ok(desc.ConstantBuffers == 3, "Unexpected buffer count %u.\n", desc.ConstantBuffers);
+
+    cb = effect->lpVtbl->GetConstantBufferByIndex(effect, 0);
+    hr = cb->lpVtbl->GetDesc(cb, &var_desc);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(!strcmp(var_desc.Name, "$Globals"), "Unexpected variable name %s.\n", var_desc.Name);
+
+    cb = effect->lpVtbl->GetConstantBufferByIndex(effect, 1);
+    hr = cb->lpVtbl->GetDesc(cb, &var_desc);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(!strcmp(var_desc.Name, "cb1"), "Unexpected variable name %s.\n", var_desc.Name);
+
+    cb = effect->lpVtbl->GetConstantBufferByIndex(effect, 2);
+    hr = cb->lpVtbl->GetDesc(cb, &var_desc);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(!strcmp(var_desc.Name, "cb2"), "Unexpected variable name %s.\n", var_desc.Name);
+
+    ID3D10Effect_Release(effect);
+    ID3D10Blob_Release(blob);
+
+    ID3D10Device_Release(device);
 }
 
 START_TEST(effect)
@@ -8273,4 +10015,6 @@ START_TEST(effect)
     test_effect_index_expression();
     test_effect_value_expression();
     test_effect_fx_4_1();
+    test_effect_fx_4_1_blend_state();
+    test_effect_compiler();
 }

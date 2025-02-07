@@ -37,8 +37,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(clipping);
 static inline BOOL get_dc_device_rect( DC *dc, RECT *rect )
 {
     *rect = dc->device_rect;
-    offset_rect( rect, -dc->attr->vis_rect.left, -dc->attr->vis_rect.top );
-    return !is_rect_empty( rect );
+    OffsetRect( rect, -dc->attr->vis_rect.left, -dc->attr->vis_rect.top );
+    return !IsRectEmpty( rect );
 }
 
 /***********************************************************************
@@ -201,10 +201,10 @@ INT WINAPI NtGdiExtSelectClipRgn( HDC hdc, HRGN rgn, INT mode )
 }
 
 /***********************************************************************
- *           __wine_set_visible_region   (win32u.@)
+ *           set_visible_region
  */
-void CDECL __wine_set_visible_region( HDC hdc, HRGN hrgn, const RECT *vis_rect, const RECT *device_rect,
-                                      struct window_surface *surface )
+void set_visible_region( HDC hdc, HRGN hrgn, const RECT *vis_rect, const RECT *device_rect,
+                         struct window_surface *surface )
 {
     DC * dc;
 
@@ -377,7 +377,7 @@ INT WINAPI NtGdiGetAppClipBox( HDC hdc, RECT *rect )
     }
     else
     {
-        ret = is_rect_empty( &dc->attr->vis_rect ) ? ERROR : SIMPLEREGION;
+        ret = IsRectEmpty( &dc->attr->vis_rect ) ? ERROR : SIMPLEREGION;
         *rect = dc->attr->vis_rect;
     }
 
@@ -417,7 +417,7 @@ INT WINAPI NtGdiGetRandomRgn( HDC hDC, HRGN hRgn, INT iCode )
 
     if (!dc) return -1;
 
-    switch (iCode & ~NTGDI_RGN_MIRROR_RTL)
+    switch (iCode & ~(NTGDI_RGN_MIRROR_RTL | NTGDI_RGN_MONITOR_DPI))
     {
     case 1:
         if (!dc->hClipRgn) ret = 0;
@@ -442,7 +442,7 @@ INT WINAPI NtGdiGetRandomRgn( HDC hDC, HRGN hRgn, INT iCode )
             if (NtCurrentTeb()->Peb->OSPlatformId != VER_PLATFORM_WIN32s)
                 NtGdiOffsetRgn( hRgn, dc->attr->vis_rect.left, dc->attr->vis_rect.top );
         }
-        else if (!is_rect_empty( &dc->device_rect ))
+        else if (!IsRectEmpty( &dc->device_rect ))
             NtGdiSetRectRgn( hRgn, dc->device_rect.left, dc->device_rect.top,
                              dc->device_rect.right, dc->device_rect.bottom );
         else
@@ -459,6 +459,20 @@ INT WINAPI NtGdiGetRandomRgn( HDC hDC, HRGN hRgn, INT iCode )
         mirror_region( hRgn, hRgn, dc->attr->vis_rect.right - dc->attr->vis_rect.left );
 
     release_dc_ptr( dc );
+
+    if (ret > 0 && (iCode & NTGDI_RGN_MONITOR_DPI))
+    {
+        HWND hwnd = NtUserWindowFromDC( hDC );
+        UINT raw_dpi;
+        HRGN region;
+
+        get_win_monitor_dpi( hwnd, &raw_dpi );
+        NtGdiOffsetRgn( hRgn, -dc->attr->vis_rect.left, -dc->attr->vis_rect.top );
+        region = map_dpi_region( hRgn, get_dpi_for_window( hwnd ), raw_dpi );
+        NtGdiCombineRgn( hRgn, region, 0, RGN_COPY );
+        NtGdiDeleteObjectApp( region );
+    }
+
     return ret;
 }
 

@@ -25,7 +25,6 @@
 #include "initguid.h"
 #include "dxva2api.h"
 
-#include "wine/debug.h"
 #include "wine/list.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(mfplat);
@@ -151,7 +150,7 @@ static ULONG WINAPI sample_AddRef(IMFSample *iface)
     struct sample *sample = impl_from_IMFSample(iface);
     ULONG refcount = InterlockedIncrement(&sample->attributes.ref);
 
-    TRACE("%p, refcount %u.\n", iface, refcount);
+    TRACE("%p, refcount %lu.\n", iface, refcount);
 
     return refcount;
 }
@@ -172,7 +171,7 @@ static ULONG WINAPI sample_Release(IMFSample *iface)
     struct sample *sample = impl_from_IMFSample(iface);
     ULONG refcount = InterlockedDecrement(&sample->attributes.ref);
 
-    TRACE("%p, refcount %u.\n", iface, refcount);
+    TRACE("%p, refcount %lu.\n", iface, refcount);
 
     if (!refcount)
         release_sample_object(sample);
@@ -183,26 +182,27 @@ static ULONG WINAPI sample_Release(IMFSample *iface)
 static ULONG WINAPI sample_tracked_Release(IMFSample *iface)
 {
     struct sample *sample = impl_from_IMFSample(iface);
-    ULONG refcount;
+    ULONG refcount = InterlockedDecrement(&sample->attributes.ref);
+    IRtwqAsyncResult *tracked_result = NULL;
     HRESULT hr;
 
     EnterCriticalSection(&sample->attributes.cs);
-    if (sample->tracked_result && sample->tracked_refcount == (sample->attributes.ref - 1))
+    if (sample->tracked_result && sample->tracked_refcount == refcount)
     {
-        IRtwqAsyncResult *tracked_result = sample->tracked_result;
+        tracked_result = sample->tracked_result;
         sample->tracked_result = NULL;
         sample->tracked_refcount = 0;
 
         /* Call could fail if queue system is not initialized, it's not critical. */
         if (FAILED(hr = RtwqInvokeCallback(tracked_result)))
-            WARN("Failed to invoke tracking callback, hr %#x.\n", hr);
-        IRtwqAsyncResult_Release(tracked_result);
+            WARN("Failed to invoke tracking callback, hr %#lx.\n", hr);
     }
     LeaveCriticalSection(&sample->attributes.cs);
 
-    refcount = InterlockedDecrement(&sample->attributes.ref);
+    if (tracked_result)
+        IRtwqAsyncResult_Release(tracked_result);
 
-    TRACE("%p, refcount %u.\n", iface, refcount);
+    TRACE("%p, refcount %lu.\n", iface, refcount);
 
     if (!refcount)
         release_sample_object(sample);
@@ -498,7 +498,7 @@ static HRESULT WINAPI sample_SetSampleFlags(IMFSample *iface, DWORD flags)
 {
     struct sample *sample = impl_from_IMFSample(iface);
 
-    TRACE("%p, %#x.\n", iface, flags);
+    TRACE("%p, %#lx.\n", iface, flags);
 
     EnterCriticalSection(&sample->attributes.cs);
     sample->flags = flags;
@@ -590,7 +590,7 @@ static HRESULT WINAPI sample_GetBufferByIndex(IMFSample *iface, DWORD index, IMF
     struct sample *sample = impl_from_IMFSample(iface);
     HRESULT hr = S_OK;
 
-    TRACE("%p, %u, %p.\n", iface, index, buffer);
+    TRACE("%p, %lu, %p.\n", iface, index, buffer);
 
     EnterCriticalSection(&sample->attributes.cs);
     if (index < sample->buffer_count)
@@ -742,7 +742,7 @@ static HRESULT WINAPI sample_RemoveBufferByIndex(IMFSample *iface, DWORD index)
     struct sample *sample = impl_from_IMFSample(iface);
     HRESULT hr = S_OK;
 
-    TRACE("%p, %u.\n", iface, index);
+    TRACE("%p, %lu.\n", iface, index);
 
     EnterCriticalSection(&sample->attributes.cs);
     if (index < sample->buffer_count)
@@ -796,8 +796,9 @@ static HRESULT WINAPI sample_CopyToBuffer(IMFSample *iface, IMFMediaBuffer *buff
     struct sample *sample = impl_from_IMFSample(iface);
     DWORD total_length, dst_length, dst_current_length, src_max_length, current_length;
     BYTE *src_ptr, *dst_ptr;
-    BOOL locked;
-    HRESULT hr;
+    IMF2DBuffer *buffer2d;
+    BOOL locked = FALSE;
+    HRESULT hr = E_FAIL;
     size_t i;
 
     TRACE("%p, %p.\n", iface, buffer);
@@ -807,39 +808,64 @@ static HRESULT WINAPI sample_CopyToBuffer(IMFSample *iface, IMFMediaBuffer *buff
     total_length = sample_get_total_length(sample);
     dst_current_length = 0;
 
-    dst_ptr = NULL;
-    dst_length = current_length = 0;
-    locked = SUCCEEDED(hr = IMFMediaBuffer_Lock(buffer, &dst_ptr, &dst_length, &current_length));
-    if (locked)
+    if (sample->buffer_count == 1
+            && SUCCEEDED(IMFMediaBuffer_QueryInterface(buffer, &IID_IMF2DBuffer, (void **)&buffer2d)))
     {
-        if (dst_length < total_length)
-            hr = MF_E_BUFFERTOOSMALL;
-        else if (dst_ptr)
+        if (SUCCEEDED(IMFMediaBuffer_GetCurrentLength(sample->buffers[0], &current_length))
+                && SUCCEEDED(IMF2DBuffer_GetContiguousLength(buffer2d, &dst_length))
+                && current_length == dst_length
+                && SUCCEEDED(IMFMediaBuffer_Lock(sample->buffers[0], &src_ptr, &src_max_length, &current_length)))
         {
-            for (i = 0; i < sample->buffer_count && SUCCEEDED(hr); ++i)
-            {
-                src_ptr = NULL;
-                src_max_length = current_length = 0;
-                if (SUCCEEDED(hr = IMFMediaBuffer_Lock(sample->buffers[i], &src_ptr, &src_max_length, &current_length)))
-                {
-                    if (src_ptr)
-                    {
-                        if (current_length > dst_length)
-                            hr = MF_E_BUFFERTOOSMALL;
-                        else if (current_length)
-                        {
-                            memcpy(dst_ptr, src_ptr, current_length);
-                            dst_length -= current_length;
-                            dst_current_length += current_length;
-                            dst_ptr += current_length;
-                        }
-                    }
-                    IMFMediaBuffer_Unlock(sample->buffers[i]);
-                }
-            }
+            hr = IMF2DBuffer_ContiguousCopyFrom(buffer2d, src_ptr, current_length);
+            IMFMediaBuffer_Unlock(sample->buffers[0]);
+        }
+        IMF2DBuffer_Release(buffer2d);
+        if (SUCCEEDED(hr))
+        {
+            dst_current_length = current_length;
+            goto done;
         }
     }
 
+    dst_ptr = NULL;
+    dst_length = current_length = 0;
+    locked = SUCCEEDED(hr = IMFMediaBuffer_Lock(buffer, &dst_ptr, &dst_length, &current_length));
+    if (!locked)
+        goto done;
+
+    if (dst_length < total_length)
+    {
+        hr = MF_E_BUFFERTOOSMALL;
+        goto done;
+    }
+
+    if (!dst_ptr)
+        goto done;
+
+    for (i = 0; i < sample->buffer_count && SUCCEEDED(hr); ++i)
+    {
+        src_ptr = NULL;
+        src_max_length = current_length = 0;
+
+        if (FAILED(hr = IMFMediaBuffer_Lock(sample->buffers[i], &src_ptr, &src_max_length, &current_length)))
+            continue;
+
+        if (src_ptr)
+        {
+            if (current_length > dst_length)
+                hr = MF_E_BUFFERTOOSMALL;
+            else if (current_length)
+            {
+                memcpy(dst_ptr, src_ptr, current_length);
+                dst_length -= current_length;
+                dst_current_length += current_length;
+                dst_ptr += current_length;
+            }
+        }
+        IMFMediaBuffer_Unlock(sample->buffers[i]);
+    }
+
+done:
     IMFMediaBuffer_SetCurrentLength(buffer, dst_current_length);
 
     if (locked)
@@ -1098,7 +1124,7 @@ static ULONG WINAPI sample_allocator_AddRef(IMFVideoSampleAllocatorEx *iface)
     struct sample_allocator *allocator = impl_from_IMFVideoSampleAllocatorEx(iface);
     ULONG refcount = InterlockedIncrement(&allocator->refcount);
 
-    TRACE("%p, refcount %u.\n", iface, refcount);
+    TRACE("%p, refcount %lu.\n", iface, refcount);
 
     return refcount;
 }
@@ -1168,7 +1194,7 @@ static ULONG WINAPI sample_allocator_Release(IMFVideoSampleAllocatorEx *iface)
     struct sample_allocator *allocator = impl_from_IMFVideoSampleAllocatorEx(iface);
     ULONG refcount = InterlockedDecrement(&allocator->refcount);
 
-    TRACE("%p, refcount %u.\n", iface, refcount);
+    TRACE("%p, refcount %lu.\n", iface, refcount);
 
     if (!refcount)
     {
@@ -1266,7 +1292,7 @@ static HRESULT sample_allocator_get_surface_service(struct sample_allocator *all
             if (FAILED(hr = IDirect3DDeviceManager9_GetVideoService(allocator->d3d9_device_manager, service->hdevice,
                     &IID_IDirectXVideoProcessorService, (void **)&service->dxva_service)))
             {
-                WARN("Failed to get DXVA processor service, hr %#x.\n", hr);
+                WARN("Failed to get DXVA processor service, hr %#lx.\n", hr);
                 IDirect3DDeviceManager9_CloseDeviceHandle(allocator->d3d9_device_manager, service->hdevice);
             }
         }
@@ -1278,7 +1304,7 @@ static HRESULT sample_allocator_get_surface_service(struct sample_allocator *all
             if (FAILED(hr = IMFDXGIDeviceManager_GetVideoService(allocator->dxgi_device_manager, service->hdevice,
                     &IID_ID3D11Device, (void **)&service->d3d11_device)))
             {
-                WARN("Failed to get D3D11 device, hr %#x.\n", hr);
+                WARN("Failed to get D3D11 device, hr %#lx.\n", hr);
                 IMFDXGIDeviceManager_CloseDeviceHandle(allocator->dxgi_device_manager, service->hdevice);
             }
         }
@@ -1397,7 +1423,7 @@ static HRESULT sample_allocator_initialize(struct sample_allocator *allocator, u
     unsigned int i, value;
     GUID major, subtype;
     UINT64 frame_size;
-    D3D11_USAGE usage;
+    UINT32 usage;
     HRESULT hr;
 
     if (FAILED(hr = IMFMediaType_GetMajorType(media_type, &major)))
@@ -1488,7 +1514,7 @@ static HRESULT WINAPI sample_allocator_InitializeSampleAllocator(IMFVideoSampleA
     struct sample_allocator *allocator = impl_from_IMFVideoSampleAllocatorEx(iface);
     HRESULT hr;
 
-    TRACE("%p, %u, %p.\n", iface, sample_count, media_type);
+    TRACE("%p, %lu, %p.\n", iface, sample_count, media_type);
 
     if (!sample_count)
         return E_INVALIDARG;
@@ -1585,7 +1611,7 @@ static HRESULT WINAPI sample_allocator_InitializeSampleAllocatorEx(IMFVideoSampl
     struct sample_allocator *allocator = impl_from_IMFVideoSampleAllocatorEx(iface);
     HRESULT hr;
 
-    TRACE("%p, %u, %u, %p, %p.\n", iface, initial_sample_count, max_sample_count, attributes, media_type);
+    TRACE("%p, %lu, %lu, %p, %p.\n", iface, initial_sample_count, max_sample_count, attributes, media_type);
 
     EnterCriticalSection(&allocator->cs);
 

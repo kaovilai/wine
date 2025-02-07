@@ -20,7 +20,12 @@
 
 #include <stdarg.h>
 
+#define COBJMACROS
+
 #include "windef.h"
+#include "initguid.h"
+#include "objbase.h"
+#include "xmllite.h"
 #include "schrpc.h"
 #include "taskschd.h"
 #include "wine/debug.h"
@@ -30,6 +35,11 @@
 WINE_DEFAULT_DEBUG_CHANNEL(schedsvc);
 
 static const char bom_utf8[] = { 0xef,0xbb,0xbf };
+
+struct task_info
+{
+    BOOL enabled;
+};
 
 HRESULT __cdecl SchRpcHighestVersion(DWORD *version)
 {
@@ -48,7 +58,7 @@ static WCHAR *get_full_name(const WCHAR *path, WCHAR **relative_path)
     len = GetSystemDirectoryW(NULL, 0);
     len += lstrlenW(tasksW) + lstrlenW(path);
 
-    target = heap_alloc(len * sizeof(WCHAR));
+    target = malloc(len * sizeof(WCHAR));
     if (target)
     {
         GetSystemDirectoryW(target, len);
@@ -70,7 +80,7 @@ static HRESULT create_directory(const WCHAR *path)
     WCHAR *new_path;
     int len;
 
-    new_path = heap_alloc((lstrlenW(path) + 1) * sizeof(WCHAR));
+    new_path = malloc((lstrlenW(path) + 1) * sizeof(WCHAR));
     if (!new_path) return E_OUTOFMEMORY;
 
     lstrcpyW(new_path, path);
@@ -100,7 +110,7 @@ static HRESULT create_directory(const WCHAR *path)
         new_path[len] = '\\';
     }
 
-    heap_free(new_path);
+    free(new_path);
     return hr;
 }
 
@@ -122,7 +132,7 @@ static HRESULT write_xml_utf8(const WCHAR *name, DWORD disposition, const WCHAR 
     }
 
     size = WideCharToMultiByte(CP_UTF8, 0, xmlW, -1, NULL, 0, NULL, NULL);
-    xml = heap_alloc(size);
+    xml = malloc(size);
     if (!xml)
     {
         CloseHandle(hfile);
@@ -157,7 +167,7 @@ static HRESULT write_xml_utf8(const WCHAR *name, DWORD disposition, const WCHAR 
     }
 
 failed:
-    heap_free(xml);
+    free(xml);
     CloseHandle(hfile);
     return hr;
 }
@@ -170,7 +180,7 @@ HRESULT __cdecl SchRpcRegisterTask(const WCHAR *path, const WCHAR *xml, DWORD fl
     DWORD disposition;
     HRESULT hr;
 
-    TRACE("%s,%s,%#x,%s,%u,%u,%p,%p,%p\n", debugstr_w(path), debugstr_w(xml), flags,
+    TRACE("%s,%s,%#lx,%s,%lu,%lu,%p,%p,%p\n", debugstr_w(path), debugstr_w(xml), flags,
           debugstr_w(sddl), task_logon_type, n_creds, creds, actual_path, xml_error_info);
 
     *actual_path = NULL;
@@ -192,7 +202,7 @@ HRESULT __cdecl SchRpcRegisterTask(const WCHAR *path, const WCHAR *xml, DWORD fl
             hr = create_directory(full_name);
             if (hr != S_OK && hr != HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS))
             {
-                heap_free(full_name);
+                free(full_name);
                 return hr;
             }
             *p = '\\';
@@ -231,11 +241,11 @@ HRESULT __cdecl SchRpcRegisterTask(const WCHAR *path, const WCHAR *xml, DWORD fl
     hr = write_xml_utf8(full_name, disposition, xml);
     if (hr == S_OK)
     {
-        *actual_path = heap_strdupW(relative_path);
+        *actual_path = wcsdup(relative_path);
         schedsvc_auto_start();
     }
 
-    heap_free(full_name);
+    free(full_name);
     return hr;
 }
 
@@ -276,7 +286,7 @@ static HRESULT read_xml(const WCHAR *name, WCHAR **xml)
         return HRESULT_FROM_WIN32(GetLastError());
 
     size = GetFileSize(hfile, NULL);
-    buff = src = heap_alloc(size + 2);
+    buff = src = malloc(size + 2);
     if (!src)
     {
         CloseHandle(hfile);
@@ -300,14 +310,220 @@ static HRESULT read_xml(const WCHAR *name, WCHAR **xml)
         src += sizeof(bom_utf8);
 
     size = MultiByteToWideChar(cp, 0, src, -1, NULL, 0);
-    *xml = heap_alloc(size * sizeof(WCHAR));
+    *xml = malloc(size * sizeof(WCHAR));
     if (*xml)
         MultiByteToWideChar(cp, 0, src, -1, *xml, size);
     else
         hr = E_OUTOFMEMORY;
-    heap_free(buff);
+    free(buff);
 
     return hr;
+}
+
+static HRESULT read_text_value(IXmlReader *reader, WCHAR **value)
+{
+    HRESULT hr;
+    XmlNodeType type;
+
+    while (IXmlReader_Read(reader, &type) == S_OK)
+    {
+        switch (type)
+        {
+            case XmlNodeType_Text:
+                if (FAILED(hr = IXmlReader_GetValue(reader, (const WCHAR **)value, NULL)))
+                    return hr;
+                TRACE("%s\n", debugstr_w(*value));
+                return S_OK;
+
+            case XmlNodeType_Whitespace:
+            case XmlNodeType_Comment:
+                break;
+
+            default:
+                FIXME("unexpected node type %d\n", type);
+                return E_FAIL;
+        }
+    }
+
+    return E_FAIL;
+}
+
+static HRESULT read_variantbool_value(IXmlReader *reader, VARIANT_BOOL *vbool)
+{
+    WCHAR *value;
+    HRESULT hr;
+
+    *vbool = VARIANT_FALSE;
+
+    if (FAILED(hr = read_text_value(reader, &value)))
+        return hr;
+
+    if (!wcscmp(value, L"true"))
+    {
+        *vbool = VARIANT_TRUE;
+    }
+    else if (wcscmp(value, L"false"))
+    {
+        WARN("unexpected bool value %s\n", debugstr_w(value));
+        return SCHED_E_INVALIDVALUE;
+    }
+
+    return S_OK;
+}
+
+static HRESULT read_task_settings(IXmlReader *reader, struct task_info *info)
+{
+    VARIANT_BOOL bool_val;
+    const WCHAR *name;
+    XmlNodeType type;
+    HRESULT hr;
+
+    if (IXmlReader_IsEmptyElement(reader))
+    {
+        TRACE("Settings is empty.\n");
+        return S_OK;
+    }
+
+    while (IXmlReader_Read(reader, &type) == S_OK)
+    {
+        switch (type)
+        {
+            case XmlNodeType_EndElement:
+                hr = IXmlReader_GetLocalName(reader, &name, NULL);
+                if (hr != S_OK) return hr;
+
+                TRACE("/%s\n", debugstr_w(name));
+
+                if (!wcscmp(name, L"Settings"))
+                    return S_OK;
+
+                break;
+
+            case XmlNodeType_Element:
+                hr = IXmlReader_GetLocalName(reader, &name, NULL);
+                if (hr != S_OK) return hr;
+
+                TRACE("Element: %s\n", debugstr_w(name));
+
+                if (!wcscmp(name, L"Enabled"))
+                {
+                    if (FAILED(hr = read_variantbool_value(reader, &bool_val)))
+                        return hr;
+                    info->enabled = !!bool_val;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    WARN("Settings was not terminated\n");
+    return SCHED_E_MALFORMEDXML;
+}
+
+static HRESULT read_task_info(IXmlReader *reader, struct task_info *info)
+{
+    const WCHAR *name;
+    XmlNodeType type;
+    HRESULT hr;
+
+    if (IXmlReader_IsEmptyElement(reader))
+    {
+        TRACE("Task is empty\n");
+        return S_OK;
+    }
+    while (IXmlReader_Read(reader, &type) == S_OK)
+    {
+        switch (type)
+        {
+            case XmlNodeType_EndElement:
+                if (FAILED(hr = IXmlReader_GetLocalName(reader, &name, NULL)))
+                    return hr;
+
+                if (!wcscmp(name, L"Task"))
+                    return S_OK;
+                break;
+
+            case XmlNodeType_Element:
+                if (FAILED(hr = IXmlReader_GetLocalName(reader, &name, NULL)))
+                    return hr;
+
+                TRACE("Element: %s\n", debugstr_w(name));
+
+                if (!wcscmp(name, L"Settings"))
+                {
+                    if (FAILED(hr = read_task_settings(reader, info)))
+                        return hr;
+                }
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    WARN("Task was not terminated\n");
+    return SCHED_E_MALFORMEDXML;
+
+}
+
+static HRESULT read_task_info_from_xml(const WCHAR *xml, struct task_info *info)
+{
+    IXmlReader *reader;
+    const WCHAR *name;
+    XmlNodeType type;
+    IStream *stream;
+    HGLOBAL hmem;
+    HRESULT hr;
+    void *buf;
+
+    memset(info, 0, sizeof(*info));
+
+    if (!(hmem = GlobalAlloc(0, wcslen(xml) * sizeof(WCHAR))))
+        return E_OUTOFMEMORY;
+
+    buf = GlobalLock(hmem);
+    memcpy(buf, xml, lstrlenW(xml) * sizeof(WCHAR));
+    GlobalUnlock(hmem);
+
+    if (FAILED(hr = CreateStreamOnHGlobal(hmem, TRUE, &stream)))
+    {
+        GlobalFree(hmem);
+        return hr;
+    }
+
+    if (FAILED(hr = CreateXmlReader(&IID_IXmlReader, (void **)&reader, NULL)))
+    {
+        IStream_Release(stream);
+        return hr;
+    }
+
+    if (FAILED(hr = IXmlReader_SetInput(reader, (IUnknown *)stream)))
+        goto done;
+
+    while (IXmlReader_Read(reader, &type) == S_OK)
+    {
+        if (type != XmlNodeType_Element) continue;
+        if (FAILED(hr = IXmlReader_GetLocalName(reader, &name, NULL)))
+            goto done;
+
+        TRACE("Element: %s\n", debugstr_w(name));
+        if (wcscmp(name, L"Task"))
+            continue;
+
+        hr = read_task_info(reader, info);
+        break;
+    }
+
+done:
+    IXmlReader_Release(reader);
+    IStream_Release(stream);
+    if (FAILED(hr))
+    {
+        WARN("Failed parsing xml, hr %#lx.\n", hr);
+        return SCHED_E_MALFORMEDXML;
+    }
+    return S_OK;
 }
 
 HRESULT __cdecl SchRpcRetrieveTask(const WCHAR *path, const WCHAR *languages, ULONG *n_languages, WCHAR **xml)
@@ -323,7 +539,7 @@ HRESULT __cdecl SchRpcRetrieveTask(const WCHAR *path, const WCHAR *languages, UL
     hr = read_xml(full_name, xml);
     if (hr != S_OK) *xml = NULL;
 
-    heap_free(full_name);
+    free(full_name);
     return hr;
 }
 
@@ -332,7 +548,7 @@ HRESULT __cdecl SchRpcCreateFolder(const WCHAR *path, const WCHAR *sddl, DWORD f
     WCHAR *full_name;
     HRESULT hr;
 
-    TRACE("%s,%s,%#x\n", debugstr_w(path), debugstr_w(sddl), flags);
+    TRACE("%s,%s,%#lx\n", debugstr_w(path), debugstr_w(sddl), flags);
 
     if (flags) return E_INVALIDARG;
 
@@ -341,19 +557,19 @@ HRESULT __cdecl SchRpcCreateFolder(const WCHAR *path, const WCHAR *sddl, DWORD f
 
     hr = create_directory(full_name);
 
-    heap_free(full_name);
+    free(full_name);
     return hr;
 }
 
 HRESULT __cdecl SchRpcSetSecurity(const WCHAR *path, const WCHAR *sddl, DWORD flags)
 {
-    FIXME("%s,%s,%#x: stub\n", debugstr_w(path), debugstr_w(sddl), flags);
+    FIXME("%s,%s,%#lx: stub\n", debugstr_w(path), debugstr_w(sddl), flags);
     return E_NOTIMPL;
 }
 
 HRESULT __cdecl SchRpcGetSecurity(const WCHAR *path, DWORD flags, WCHAR **sddl)
 {
-    FIXME("%s,%#x,%p: stub\n", debugstr_w(path), flags, sddl);
+    FIXME("%s,%#lx,%p: stub\n", debugstr_w(path), flags, sddl);
     return E_NOTIMPL;
 }
 
@@ -362,9 +578,9 @@ static void free_list(TASK_NAMES list, LONG count)
     LONG i;
 
     for (i = 0; i < count; i++)
-        heap_free(list[i]);
+        free(list[i]);
 
-    heap_free(list);
+    free(list);
 }
 
 static inline BOOL is_directory(const WIN32_FIND_DATAW *data)
@@ -398,7 +614,7 @@ HRESULT __cdecl SchRpcEnumFolders(const WCHAR *path, DWORD flags, DWORD *start_i
     DWORD allocated, count, index;
     TASK_NAMES list;
 
-    TRACE("%s,%#x,%u,%u,%p,%p\n", debugstr_w(path), flags, *start_index, n_requested, n_names, names);
+    TRACE("%s,%#lx,%lu,%lu,%p,%p\n", debugstr_w(path), flags, *start_index, n_requested, n_names, names);
 
     *n_names = 0;
     *names = NULL;
@@ -412,17 +628,17 @@ HRESULT __cdecl SchRpcEnumFolders(const WCHAR *path, DWORD flags, DWORD *start_i
 
     if (lstrlenW(full_name) + 2 > MAX_PATH)
     {
-        heap_free(full_name);
+        free(full_name);
         return HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
     }
 
     lstrcpyW(pathW, full_name);
     lstrcatW(pathW, allW);
 
-    heap_free(full_name);
+    free(full_name);
 
     allocated = 64;
-    list = heap_alloc(allocated * sizeof(list[0]));
+    list = malloc(allocated * sizeof(list[0]));
     if (!list) return E_OUTOFMEMORY;
 
     index = count = 0;
@@ -430,7 +646,7 @@ HRESULT __cdecl SchRpcEnumFolders(const WCHAR *path, DWORD flags, DWORD *start_i
     handle = FindFirstFileW(pathW, &data);
     if (handle == INVALID_HANDLE_VALUE)
     {
-        heap_free(list);
+        free(list);
         if (GetLastError() == ERROR_PATH_NOT_FOUND)
             return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
         return HRESULT_FROM_WIN32(GetLastError());
@@ -444,7 +660,7 @@ HRESULT __cdecl SchRpcEnumFolders(const WCHAR *path, DWORD flags, DWORD *start_i
             {
                 TASK_NAMES new_list;
                 allocated *= 2;
-                new_list = heap_realloc(list, allocated * sizeof(list[0]));
+                new_list = realloc(list, allocated * sizeof(list[0]));
                 if (!new_list)
                 {
                     hr = E_OUTOFMEMORY;
@@ -455,7 +671,7 @@ HRESULT __cdecl SchRpcEnumFolders(const WCHAR *path, DWORD flags, DWORD *start_i
 
             TRACE("adding %s\n", debugstr_w(data.cFileName));
 
-            list[count] = heap_strdupW(data.cFileName);
+            list[count] = wcsdup(data.cFileName);
             if (!list[count])
             {
                 hr = E_OUTOFMEMORY;
@@ -489,7 +705,7 @@ HRESULT __cdecl SchRpcEnumFolders(const WCHAR *path, DWORD flags, DWORD *start_i
         return hr;
     }
 
-    heap_free(list);
+    free(list);
     *names = NULL;
     return *start_index ? S_FALSE : S_OK;
 }
@@ -506,7 +722,7 @@ HRESULT __cdecl SchRpcEnumTasks(const WCHAR *path, DWORD flags, DWORD *start_ind
     DWORD allocated, count, index;
     TASK_NAMES list;
 
-    TRACE("%s,%#x,%u,%u,%p,%p\n", debugstr_w(path), flags, *start_index, n_requested, n_names, names);
+    TRACE("%s,%#lx,%lu,%lu,%p,%p\n", debugstr_w(path), flags, *start_index, n_requested, n_names, names);
 
     *n_names = 0;
     *names = NULL;
@@ -520,17 +736,17 @@ HRESULT __cdecl SchRpcEnumTasks(const WCHAR *path, DWORD flags, DWORD *start_ind
 
     if (lstrlenW(full_name) + 2 > MAX_PATH)
     {
-        heap_free(full_name);
+        free(full_name);
         return HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
     }
 
     lstrcpyW(pathW, full_name);
     lstrcatW(pathW, allW);
 
-    heap_free(full_name);
+    free(full_name);
 
     allocated = 64;
-    list = heap_alloc(allocated * sizeof(list[0]));
+    list = malloc(allocated * sizeof(list[0]));
     if (!list) return E_OUTOFMEMORY;
 
     index = count = 0;
@@ -538,7 +754,7 @@ HRESULT __cdecl SchRpcEnumTasks(const WCHAR *path, DWORD flags, DWORD *start_ind
     handle = FindFirstFileW(pathW, &data);
     if (handle == INVALID_HANDLE_VALUE)
     {
-        heap_free(list);
+        free(list);
         if (GetLastError() == ERROR_PATH_NOT_FOUND)
             return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
         return HRESULT_FROM_WIN32(GetLastError());
@@ -552,7 +768,7 @@ HRESULT __cdecl SchRpcEnumTasks(const WCHAR *path, DWORD flags, DWORD *start_ind
             {
                 TASK_NAMES new_list;
                 allocated *= 2;
-                new_list = heap_realloc(list, allocated * sizeof(list[0]));
+                new_list = realloc(list, allocated * sizeof(list[0]));
                 if (!new_list)
                 {
                     hr = E_OUTOFMEMORY;
@@ -563,7 +779,7 @@ HRESULT __cdecl SchRpcEnumTasks(const WCHAR *path, DWORD flags, DWORD *start_ind
 
             TRACE("adding %s\n", debugstr_w(data.cFileName));
 
-            list[count] = heap_strdupW(data.cFileName);
+            list[count] = wcsdup(data.cFileName);
             if (!list[count])
             {
                 hr = E_OUTOFMEMORY;
@@ -597,14 +813,14 @@ HRESULT __cdecl SchRpcEnumTasks(const WCHAR *path, DWORD flags, DWORD *start_ind
         return hr;
     }
 
-    heap_free(list);
+    free(list);
     *names = NULL;
     return *start_index ? S_FALSE : S_OK;
 }
 
 HRESULT __cdecl SchRpcEnumInstances(const WCHAR *path, DWORD flags, DWORD *n_guids, GUID **guids)
 {
-    FIXME("%s,%#x,%p,%p: stub\n", debugstr_w(path), flags, n_guids, guids);
+    FIXME("%s,%#lx,%p,%p: stub\n", debugstr_w(path), flags, n_guids, guids);
     return E_NOTIMPL;
 }
 
@@ -618,20 +834,20 @@ HRESULT __cdecl SchRpcGetInstanceInfo(GUID guid, WCHAR **path, DWORD *task_state
 
 HRESULT __cdecl SchRpcStopInstance(GUID guid, DWORD flags)
 {
-    FIXME("%s,%#x: stub\n", wine_dbgstr_guid(&guid), flags);
+    FIXME("%s,%#lx: stub\n", wine_dbgstr_guid(&guid), flags);
     return E_NOTIMPL;
 }
 
 HRESULT __cdecl SchRpcStop(const WCHAR *path, DWORD flags)
 {
-    FIXME("%s,%#x: stub\n", debugstr_w(path), flags);
+    FIXME("%s,%#lx: stub\n", debugstr_w(path), flags);
     return E_NOTIMPL;
 }
 
 HRESULT __cdecl SchRpcRun(const WCHAR *path, DWORD n_args, const WCHAR **args, DWORD flags,
                           DWORD session_id, const WCHAR *user, GUID *guid)
 {
-    FIXME("%s,%u,%p,%#x,%#x,%s,%p: stub\n", debugstr_w(path), n_args, args, flags,
+    FIXME("%s,%lu,%p,%#lx,%#lx,%s,%p: stub\n", debugstr_w(path), n_args, args, flags,
           session_id, debugstr_w(user), guid);
     return E_NOTIMPL;
 }
@@ -641,7 +857,7 @@ HRESULT __cdecl SchRpcDelete(const WCHAR *path, DWORD flags)
     WCHAR *full_name;
     HRESULT hr = S_OK;
 
-    TRACE("%s,%#x\n", debugstr_w(path), flags);
+    TRACE("%s,%#lx\n", debugstr_w(path), flags);
 
     if (flags) return E_INVALIDARG;
 
@@ -658,20 +874,20 @@ HRESULT __cdecl SchRpcDelete(const WCHAR *path, DWORD flags)
             hr = DeleteFileW(full_name) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
     }
 
-    heap_free(full_name);
+    free(full_name);
     return hr;
 }
 
 HRESULT __cdecl SchRpcRename(const WCHAR *path, const WCHAR *name, DWORD flags)
 {
-    FIXME("%s,%s,%#x: stub\n", debugstr_w(path), debugstr_w(name), flags);
+    FIXME("%s,%s,%#lx: stub\n", debugstr_w(path), debugstr_w(name), flags);
     return E_NOTIMPL;
 }
 
 HRESULT __cdecl SchRpcScheduledRuntimes(const WCHAR *path, SYSTEMTIME *start, SYSTEMTIME *end, DWORD flags,
                                         DWORD n_requested, DWORD *n_runtimes, SYSTEMTIME **runtimes)
 {
-    FIXME("%s,%p,%p,%#x,%u,%p,%p: stub\n", debugstr_w(path), start, end, flags,
+    FIXME("%s,%p,%p,%#lx,%lu,%p,%p: stub\n", debugstr_w(path), start, end, flags,
           n_requested, n_runtimes, runtimes);
     return E_NOTIMPL;
 }
@@ -685,20 +901,26 @@ HRESULT __cdecl SchRpcGetLastRunInfo(const WCHAR *path, SYSTEMTIME *last_runtime
 HRESULT __cdecl SchRpcGetTaskInfo(const WCHAR *path, DWORD flags, DWORD *enabled, DWORD *task_state)
 {
     WCHAR *full_name, *xml;
+    struct task_info info;
     HRESULT hr;
 
-    FIXME("%s,%#x,%p,%p: stub\n", debugstr_w(path), flags, enabled, task_state);
+    FIXME("%s,%#lx,%p,%p: stub\n", debugstr_w(path), flags, enabled, task_state);
 
     full_name = get_full_name(path, NULL);
     if (!full_name) return E_OUTOFMEMORY;
 
     hr = read_xml(full_name, &xml);
-    heap_free(full_name);
+    free(full_name);
     if (hr != S_OK) return hr;
-    heap_free(xml);
+    hr = read_task_info_from_xml(xml, &info);
+    free(xml);
+    if (FAILED(hr)) return hr;
 
-    *enabled = 0;
-    *task_state = (flags & SCH_FLAG_STATE) ? TASK_STATE_DISABLED : TASK_STATE_UNKNOWN;
+    *enabled = info.enabled;
+    if (flags & SCH_FLAG_STATE)
+        *task_state = *enabled ? TASK_STATE_READY : TASK_STATE_DISABLED;
+    else
+        *task_state = TASK_STATE_UNKNOWN;
     return S_OK;
 }
 
@@ -710,6 +932,6 @@ HRESULT __cdecl SchRpcGetNumberOfMissedRuns(const WCHAR *path, DWORD *runs)
 
 HRESULT __cdecl SchRpcEnableTask(const WCHAR *path, DWORD enabled)
 {
-    FIXME("%s,%u: stub\n", debugstr_w(path), enabled);
+    FIXME("%s,%lu: stub\n", debugstr_w(path), enabled);
     return E_NOTIMPL;
 }

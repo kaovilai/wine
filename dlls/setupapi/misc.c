@@ -26,21 +26,17 @@
 #include "wingdi.h"
 #include "winuser.h"
 #include "winreg.h"
+#include "wincrypt.h"
 #include "setupapi.h"
 #include "lzexpand.h"
-#include "softpub.h"
 #include "mscat.h"
 #include "shlobj.h"
-#include "shlwapi.h"
 
 #include "wine/debug.h"
 
 #include "setupapi_private.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(setupapi);
-
-/* arbitrary limit not related to what native actually uses */
-#define OEM_INDEX_LIMIT 999
 
 /* Handles and critical sections for the SetupLog API */
 static HANDLE setupact = INVALID_HANDLE_VALUE;
@@ -67,7 +63,7 @@ static CRITICAL_SECTION setupapi_cs = { &critsect_debug, -1, 0, 0, 0, 0 };
  */
 VOID WINAPI MyFree(LPVOID lpMem)
 {
-    HeapFree(GetProcessHeap(), 0, lpMem);
+    free(lpMem);
 }
 
 
@@ -85,7 +81,7 @@ VOID WINAPI MyFree(LPVOID lpMem)
  */
 LPVOID WINAPI MyMalloc(DWORD dwSize)
 {
-    return HeapAlloc(GetProcessHeap(), 0, dwSize);
+    return malloc(dwSize);
 }
 
 
@@ -109,10 +105,7 @@ LPVOID WINAPI MyMalloc(DWORD dwSize)
  */
 LPVOID WINAPI MyRealloc(LPVOID lpSrc, DWORD dwSize)
 {
-    if (lpSrc == NULL)
-        return HeapAlloc(GetProcessHeap(), 0, dwSize);
-
-    return HeapReAlloc(GetProcessHeap(), 0, lpSrc, dwSize);
+    return realloc(lpSrc, dwSize);
 }
 
 
@@ -740,7 +733,7 @@ fail:;
 DWORD WINAPI RetreiveFileSecurity(LPCWSTR lpFileName,
                                   PSECURITY_DESCRIPTOR *pSecurityDescriptor)
 {
-    PSECURITY_DESCRIPTOR SecDesc;
+    SECURITY_DESCRIPTOR *SecDesc, *NewSecDesc;
     DWORD dwSize = 0x100;
     DWORD dwError;
 
@@ -763,9 +756,13 @@ DWORD WINAPI RetreiveFileSecurity(LPCWSTR lpFileName,
         return dwError;
     }
 
-    SecDesc = MyRealloc(SecDesc, dwSize);
-    if (SecDesc == NULL)
+    NewSecDesc = MyRealloc(SecDesc, dwSize);
+    if (NewSecDesc == NULL)
+    {
+        MyFree(SecDesc);
         return ERROR_NOT_ENOUGH_MEMORY;
+    }
+    SecDesc = NewSecDesc;
 
     if (GetFileSecurityW(lpFileName, OWNER_SECURITY_INFORMATION |
                          GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
@@ -811,7 +808,7 @@ DWORD WINAPI CMP_WaitNoPendingInstallEvents( DWORD dwTimeout )
 
     if (!warned)
     {
-        FIXME("%d\n", dwTimeout);
+        FIXME("%ld\n", dwTimeout);
         warned = TRUE;
     }
     return WAIT_OBJECT_0;
@@ -831,323 +828,6 @@ DWORD WINAPI CMP_WaitNoPendingInstallEvents( DWORD dwTimeout )
 void WINAPI AssertFail(LPCSTR lpFile, UINT uLine, LPCSTR lpMessage)
 {
     FIXME("%s %u %s\n", lpFile, uLine, lpMessage);
-}
-
-/***********************************************************************
- *      SetupCopyOEMInfA  (SETUPAPI.@)
- */
-BOOL WINAPI SetupCopyOEMInfA( PCSTR source, PCSTR location,
-                              DWORD media_type, DWORD style, PSTR dest,
-                              DWORD buffer_size, PDWORD required_size, PSTR *component )
-{
-    BOOL ret = FALSE;
-    LPWSTR destW = NULL, sourceW = NULL, locationW = NULL;
-    DWORD size;
-
-    TRACE("%s, %s, %d, %d, %p, %d, %p, %p\n", debugstr_a(source), debugstr_a(location),
-          media_type, style, dest, buffer_size, required_size, component);
-
-    if (dest && !(destW = MyMalloc( buffer_size * sizeof(WCHAR) ))) return FALSE;
-    if (source && !(sourceW = strdupAtoW( source ))) goto done;
-    if (location && !(locationW = strdupAtoW( location ))) goto done;
-
-    ret = SetupCopyOEMInfW( sourceW, locationW, media_type, style, destW, buffer_size, &size, NULL );
-
-    if (required_size) *required_size = size;
-
-    if (dest)
-    {
-        if (buffer_size >= size)
-        {
-            WideCharToMultiByte( CP_ACP, 0, destW, -1, dest, buffer_size, NULL, NULL );
-            if (component) *component = strrchr( dest, '\\' ) + 1;
-        }
-        else
-            SetLastError( ERROR_INSUFFICIENT_BUFFER );
-    }
-
-done:
-    MyFree( destW );
-    HeapFree( GetProcessHeap(), 0, sourceW );
-    HeapFree( GetProcessHeap(), 0, locationW );
-    if (ret) SetLastError(ERROR_SUCCESS);
-    return ret;
-}
-
-static int compare_files( HANDLE file1, HANDLE file2 )
-{
-    char buffer1[2048];
-    char buffer2[2048];
-    DWORD size1;
-    DWORD size2;
-
-    while( ReadFile(file1, buffer1, sizeof(buffer1), &size1, NULL) &&
-           ReadFile(file2, buffer2, sizeof(buffer2), &size2, NULL) )
-    {
-        int ret;
-        if (size1 != size2)
-            return size1 > size2 ? 1 : -1;
-        if (!size1)
-            return 0;
-        ret = memcmp( buffer1, buffer2, size1 );
-        if (ret)
-            return ret;
-    }
-
-    return 0;
-}
-
-static BOOL find_existing_inf(const WCHAR *source, WCHAR *target)
-{
-    static const WCHAR infW[] = {'\\','i','n','f','\\',0};
-    static const WCHAR wildcardW[] = {'*',0};
-
-    LARGE_INTEGER source_file_size, dest_file_size;
-    HANDLE source_file, dest_file;
-    WIN32_FIND_DATAW find_data;
-    HANDLE find_handle;
-
-    source_file = CreateFileW( source, FILE_READ_DATA | FILE_READ_ATTRIBUTES,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                               NULL, OPEN_EXISTING, 0, NULL );
-    if (source_file == INVALID_HANDLE_VALUE)
-        return FALSE;
-
-    if (!GetFileSizeEx( source_file, &source_file_size ))
-    {
-        CloseHandle( source_file );
-        return FALSE;
-    }
-
-    GetWindowsDirectoryW( target, MAX_PATH );
-    lstrcatW( target, infW );
-    lstrcatW( target, wildcardW );
-    if ((find_handle = FindFirstFileW( target, &find_data )) != INVALID_HANDLE_VALUE)
-    {
-        do {
-            GetWindowsDirectoryW( target, MAX_PATH );
-            lstrcatW( target, infW );
-            lstrcatW( target, find_data.cFileName );
-            dest_file = CreateFileW( target, FILE_READ_DATA | FILE_READ_ATTRIBUTES,
-                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                     NULL, OPEN_EXISTING, 0, NULL );
-            if (dest_file == INVALID_HANDLE_VALUE)
-                continue;
-
-            SetFilePointer( source_file, 0, NULL, FILE_BEGIN );
-
-            if (GetFileSizeEx( dest_file, &dest_file_size )
-                    && dest_file_size.QuadPart == source_file_size.QuadPart
-                    && !compare_files( source_file, dest_file ))
-            {
-                CloseHandle( dest_file );
-                CloseHandle( source_file );
-                FindClose( find_handle );
-                return TRUE;
-            }
-            CloseHandle( dest_file );
-        } while (FindNextFileW( find_handle, &find_data ));
-
-        FindClose( find_handle );
-    }
-
-    CloseHandle( source_file );
-    return FALSE;
-}
-
-/***********************************************************************
- *      SetupCopyOEMInfW  (SETUPAPI.@)
- */
-BOOL WINAPI SetupCopyOEMInfW( PCWSTR source, PCWSTR location,
-                              DWORD media_type, DWORD style, PWSTR dest,
-                              DWORD buffer_size, DWORD *required_size, WCHAR **filepart )
-{
-    BOOL ret = FALSE;
-    WCHAR target[MAX_PATH], catalog_file[MAX_PATH], pnf_path[MAX_PATH], *p;
-    static const WCHAR inf[] = { '\\','i','n','f','\\',0 };
-    static const WCHAR wszVersion[] = { 'V','e','r','s','i','o','n',0 };
-    static const WCHAR wszCatalogFile[] = { 'C','a','t','a','l','o','g','F','i','l','e',0 };
-    FILE *pnf_file;
-    unsigned int i;
-    DWORD size;
-    HINF hinf;
-
-    TRACE("%s, %s, %d, %d, %p, %d, %p, %p\n", debugstr_w(source), debugstr_w(location),
-          media_type, style, dest, buffer_size, required_size, filepart);
-
-    if (!source)
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-
-    /* check for a relative path */
-    if (!(*source == '\\' || (*source && source[1] == ':')))
-    {
-        SetLastError(ERROR_FILE_NOT_FOUND);
-        return FALSE;
-    }
-
-    if (find_existing_inf( source, target ))
-    {
-        TRACE("Found existing INF %s.\n", debugstr_w(target));
-        if (style & SP_COPY_NOOVERWRITE)
-        {
-            SetLastError( ERROR_FILE_EXISTS );
-            ret = FALSE;
-        }
-        else
-            ret = TRUE;
-        goto done;
-    }
-
-    GetWindowsDirectoryW( target, ARRAY_SIZE(target) );
-    lstrcatW( target, inf );
-    lstrcatW( target, wcsrchr( source, '\\' ) + 1 );
-    if (GetFileAttributesW( target ) != INVALID_FILE_ATTRIBUTES)
-    {
-        for (i = 0; i < OEM_INDEX_LIMIT; i++)
-        {
-            static const WCHAR formatW[] = {'o','e','m','%','u','.','i','n','f',0};
-
-            GetWindowsDirectoryW( target, ARRAY_SIZE(target) );
-            lstrcatW( target, inf );
-            swprintf( target + lstrlenW(target), ARRAY_SIZE(target) - lstrlenW(target), formatW, i );
-
-            if (GetFileAttributesW( target ) == INVALID_FILE_ATTRIBUTES)
-                break;
-        }
-        if (i == OEM_INDEX_LIMIT)
-        {
-            SetLastError( ERROR_FILENAME_EXCED_RANGE );
-            return FALSE;
-        }
-    }
-
-    hinf = SetupOpenInfFileW( source, NULL, INF_STYLE_WIN4, NULL );
-    if (hinf == INVALID_HANDLE_VALUE) return FALSE;
-
-    if (SetupGetLineTextW( NULL, hinf, wszVersion, wszCatalogFile, catalog_file,
-                           ARRAY_SIZE( catalog_file ), NULL ))
-    {
-        WCHAR source_cat[MAX_PATH];
-        HCATADMIN handle;
-        HCATINFO cat;
-        GUID msguid = DRIVER_ACTION_VERIFY;
-
-        SetupCloseInfFile( hinf );
-
-        lstrcpyW( source_cat, source );
-        p = wcsrchr( source_cat, '\\' );
-        if (p) p++;
-        else p = source_cat;
-        lstrcpyW( p, catalog_file );
-
-        TRACE("installing catalog file %s\n", debugstr_w( source_cat ));
-
-        if (!CryptCATAdminAcquireContext(&handle, &msguid, 0))
-        {
-            ERR("Could not acquire security context\n");
-            return FALSE;
-        }
-
-        if (!(cat = CryptCATAdminAddCatalog(handle, source_cat, catalog_file, 0)))
-        {
-            ERR("Could not add catalog\n");
-            CryptCATAdminReleaseContext(handle, 0);
-            return FALSE;
-        }
-
-        CryptCATAdminReleaseCatalogContext(handle, cat, 0);
-        CryptCATAdminReleaseContext(handle, 0);
-    }
-    else
-        SetupCloseInfFile( hinf );
-
-    if (!(ret = CopyFileW( source, target, TRUE )))
-        return ret;
-
-done:
-    if (style & SP_COPY_DELETESOURCE)
-        DeleteFileW( source );
-
-    if (ret)
-    {
-        wcscpy(pnf_path, target);
-        PathRemoveExtensionW(pnf_path);
-        PathAddExtensionW(pnf_path, L".pnf");
-        if ((pnf_file = _wfopen(pnf_path, L"w")))
-        {
-            fputws(PNF_HEADER, pnf_file);
-            fputws(source, pnf_file);
-            fclose(pnf_file);
-        }
-    }
-
-    size = lstrlenW( target ) + 1;
-    if (dest)
-    {
-        if (buffer_size >= size)
-        {
-            lstrcpyW( dest, target );
-            if (filepart) *filepart = wcsrchr( dest, '\\' ) + 1;
-        }
-        else
-        {
-            SetLastError( ERROR_INSUFFICIENT_BUFFER );
-            ret = FALSE;
-        }
-    }
-
-    if (required_size) *required_size = size;
-    if (ret) SetLastError(ERROR_SUCCESS);
-
-    return ret;
-}
-
-/***********************************************************************
- *      SetupUninstallOEMInfA  (SETUPAPI.@)
- */
-BOOL WINAPI SetupUninstallOEMInfA( PCSTR inf_file, DWORD flags, PVOID reserved )
-{
-    BOOL ret;
-    WCHAR *inf_fileW = NULL;
-
-    TRACE("%s, 0x%08x, %p\n", debugstr_a(inf_file), flags, reserved);
-
-    if (inf_file && !(inf_fileW = strdupAtoW( inf_file ))) return FALSE;
-    ret = SetupUninstallOEMInfW( inf_fileW, flags, reserved );
-    HeapFree( GetProcessHeap(), 0, inf_fileW );
-    return ret;
-}
-
-/***********************************************************************
- *      SetupUninstallOEMInfW  (SETUPAPI.@)
- */
-BOOL WINAPI SetupUninstallOEMInfW( PCWSTR inf_file, DWORD flags, PVOID reserved )
-{
-    static const WCHAR infW[] = {'\\','i','n','f','\\',0};
-    WCHAR target[MAX_PATH];
-
-    TRACE("%s, 0x%08x, %p\n", debugstr_w(inf_file), flags, reserved);
-
-    if (!inf_file)
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-
-    if (!GetWindowsDirectoryW( target, ARRAY_SIZE( target ))) return FALSE;
-
-    lstrcatW( target, infW );
-    lstrcatW( target, inf_file );
-
-    if (flags & SUOI_FORCEDELETE)
-        return DeleteFileW(target);
-
-    FIXME("not deleting %s\n", debugstr_w(target));
-
-    return TRUE;
 }
 
 /***********************************************************************
@@ -1313,7 +993,7 @@ BOOL WINAPI SetupGetFileCompressionInfoExA( PCSTR source, PSTR name, DWORD len, 
     DWORD nb_chars = 0;
     LPSTR nameA;
 
-    TRACE("%s, %p, %d, %p, %p, %p, %p\n", debugstr_a(source), name, len, required,
+    TRACE("%s, %p, %ld, %p, %p, %p, %p\n", debugstr_a(source), name, len, required,
           source_size, target_size, type);
 
     if (!source || !(sourceW = MultiByteToUnicode( source, CP_ACP ))) return FALSE;
@@ -1321,7 +1001,7 @@ BOOL WINAPI SetupGetFileCompressionInfoExA( PCSTR source, PSTR name, DWORD len, 
     if (name)
     {
         ret = SetupGetFileCompressionInfoExW( sourceW, NULL, 0, &nb_chars, NULL, NULL, NULL );
-        if (!(nameW = HeapAlloc( GetProcessHeap(), 0, nb_chars * sizeof(WCHAR) )))
+        if (!(nameW = malloc( nb_chars * sizeof(WCHAR) )))
         {
             MyFree( sourceW );
             return FALSE;
@@ -1342,7 +1022,7 @@ BOOL WINAPI SetupGetFileCompressionInfoExA( PCSTR source, PSTR name, DWORD len, 
         }
     }
     if (required) *required = nb_chars;
-    HeapFree( GetProcessHeap(), 0, nameW );
+    free( nameW );
     MyFree( sourceW );
 
     return ret;
@@ -1373,7 +1053,7 @@ BOOL WINAPI SetupGetFileCompressionInfoExW( PCWSTR source, PWSTR name, DWORD len
     BOOL ret = FALSE;
     DWORD source_len;
 
-    TRACE("%s, %p, %d, %p, %p, %p, %p\n", debugstr_w(source), name, len, required,
+    TRACE("%s, %p, %ld, %p, %p, %p, %p\n", debugstr_w(source), name, len, required,
           source_size, target_size, type);
 
     if (!source) return FALSE;
@@ -1498,7 +1178,7 @@ static DWORD decompress_file_lz( LPCWSTR source, LPCWSTR target )
     if ((error = LZCopy( src, dst )) >= 0) ret = ERROR_SUCCESS;
     else
     {
-        WARN("failed to decompress file %d\n", error);
+        WARN("failed to decompress file %ld\n", error);
         ret = ERROR_INVALID_DATA;
     }
 
@@ -1772,7 +1452,7 @@ BOOL WINAPI SetupLogErrorW(LPCWSTR message, LogSeverity severity)
     if (message)
     {
         len = WideCharToMultiByte(CP_ACP, 0, message, -1, NULL, 0, NULL, NULL);
-        msg = HeapAlloc(GetProcessHeap(), 0, len);
+        msg = malloc(len);
         if (msg == NULL)
         {
             SetLastError(ERROR_NOT_ENOUGH_MEMORY);
@@ -1786,7 +1466,7 @@ BOOL WINAPI SetupLogErrorW(LPCWSTR message, LogSeverity severity)
      */
     ret = SetupLogErrorA(msg, severity);
 
-    HeapFree(GetProcessHeap(), 0, msg);
+    free(msg);
     return ret;
 }
 

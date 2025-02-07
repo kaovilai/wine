@@ -218,14 +218,14 @@ static nsIDOMElement *get_dom_element(NPP instance)
 
     nsres = nsISupports_QueryInterface(instance_unk, &IID_nsIPluginInstance, (void**)&plugin_instance);
     if(NS_FAILED(nsres)) {
-        ERR("Could not get nsIPluginInstance interface: %08x\n", nsres);
+        ERR("Could not get nsIPluginInstance interface: %08lx\n", nsres);
         return NULL;
     }
 
     nsres = nsIPluginInstance_GetDOMElement(plugin_instance, &elem);
     nsIPluginInstance_Release(plugin_instance);
     if(NS_FAILED(nsres)) {
-        ERR("GetDOMElement failed: %08x\n", nsres);
+        ERR("GetDOMElement failed: %08lx\n", nsres);
         return NULL;
     }
 
@@ -301,6 +301,8 @@ static NPError CDECL NPP_New(NPMIMEType pluginType, NPP instance, UINT16 mode, I
     }
 
     instance->pdata = container->plugin_host;
+    if(container->plugin_host)
+        IOleClientSite_AddRef(&container->plugin_host->IOleClientSite_iface);
 
     node_release(&container->element.node);
     return err;

@@ -25,18 +25,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include "wine/debug.h"
+
+#define xprintf( fmt, ... ) output( logfile, fmt, ## __VA_ARGS__ )
+extern void output( HANDLE file, const char *fmt, ... ) __WINE_PRINTF_ATTR(2,3);
+extern char *strmake( const char *fmt, ... ) __WINE_PRINTF_ATTR(1,2);
 
 void fatal (const char* msg);
 void warning (const char* msg);
-void WINAPIV xprintf (const char *fmt, ...);
-char *vstrmake (size_t *lenp, va_list ap);
-char * WINAPIV strmake (size_t *lenp, ...);
+char *vstrmake (va_list ap);
 int goodtagchar (char c);
 const char *findbadtagchar (const char *tag);
 
 int send_file (const char *url, const char *name);
-
-extern HANDLE logfile;
 
 /* GUI definitions */
 
@@ -45,10 +46,9 @@ extern HANDLE logfile;
 #ifndef __WINE_ALLOC_SIZE
 #define __WINE_ALLOC_SIZE(x)
 #endif
-void *heap_alloc (size_t len) __WINE_ALLOC_SIZE(1);
-void *heap_realloc (void *op, size_t len) __WINE_ALLOC_SIZE(2);
-char *heap_strdup( const char *str );
-void heap_free (void *op);
+void *xalloc (size_t len) __WINE_ALLOC_SIZE(1);
+void *xrealloc (void *op, size_t len) __WINE_ALLOC_SIZE(2);
+char *xstrdup( const char *str );
 
 enum report_type {
     R_STATUS = 0,

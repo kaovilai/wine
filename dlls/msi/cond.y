@@ -123,7 +123,7 @@ static void value_free( struct value val )
     struct value value;
     LPWSTR identifier;
     INT operator;
-    BOOL bool;
+    BOOL boolean;
 }
 
 %token COND_SPACE
@@ -137,7 +137,7 @@ static void value_free( struct value val )
 
 %nonassoc COND_ERROR
 
-%type <bool> expression boolean_term boolean_factor
+%type <boolean> expression boolean_term boolean_factor
 %type <value> value
 %type <identifier> identifier
 %type <operator> operator
@@ -154,6 +154,7 @@ condition:
         {
             COND_input* cond = (COND_input*) info;
             cond->result = MSICONDITION_NONE;
+            (void)cond_nerrs; /* avoid unused variable warning */
         }
     ;
 
@@ -413,13 +414,13 @@ static int COND_IsNumber( WCHAR x )
 static WCHAR *strstriW( const WCHAR *str, const WCHAR *sub )
 {
     LPWSTR strlower, sublower, r;
-    strlower = CharLowerW( strdupW( str ) );
-    sublower = CharLowerW( strdupW( sub ) );
+    strlower = CharLowerW( wcsdup( str ) );
+    sublower = CharLowerW( wcsdup( sub ) );
     r = wcsstr( strlower, sublower );
     if (r)
         r = (LPWSTR)str + (r - strlower);
-    msi_free( strlower );
-    msi_free( sublower );
+    free( strlower );
+    free( sublower );
     return r;
 }
 
@@ -755,7 +756,7 @@ static void *cond_alloc( COND_input *cond, unsigned int sz )
 {
     struct list *mem;
 
-    mem = msi_alloc( sizeof (struct list) + sz );
+    mem = malloc( sizeof (struct list) + sz );
     if( !mem )
         return NULL;
 
@@ -773,12 +774,12 @@ static void *cond_track_mem( COND_input *cond, void *ptr, unsigned int sz )
     new_ptr = cond_alloc( cond, sz );
     if( !new_ptr )
     {
-        msi_free( ptr );
+        free( ptr );
         return NULL;
     }
 
     memcpy( new_ptr, ptr, sz );
-    msi_free( ptr );
+    free( ptr );
     return new_ptr;
 }
 
@@ -789,7 +790,7 @@ static void cond_free( void *ptr )
     if( ptr )
     {
         list_remove( mem );
-        msi_free( mem );
+        free( mem );
     }
 }
 
@@ -878,6 +879,6 @@ MSICONDITION WINAPI MsiEvaluateConditionA( MSIHANDLE hInstall, LPCSTR szConditio
         return MSICONDITION_ERROR;
 
     r = MsiEvaluateConditionW( hInstall, szwCond );
-    msi_free( szwCond );
+    free( szwCond );
     return r;
 }

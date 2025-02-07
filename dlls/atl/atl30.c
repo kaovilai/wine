@@ -121,7 +121,7 @@ HRESULT WINAPI AtlModuleTerm(_ATL_MODULE *pM)
             iter->pFunc(iter->dw);
             tmp = iter;
             iter = iter->pNext;
-            HeapFree(GetProcessHeap(), 0, tmp);
+            free(tmp);
         }
     }
 
@@ -134,7 +134,7 @@ HRESULT WINAPI AtlModuleRegisterClassObjects(_ATL_MODULEW *pM, DWORD dwClsContex
     _ATL_OBJMAP_ENTRYW_V1 *obj;
     int i=0;
 
-    TRACE("(%p %i %i)\n",pM, dwClsContext, dwFlags);
+    TRACE("(%p %li %li)\n",pM, dwClsContext, dwFlags);
 
     if (pM == NULL)
         return E_INVALIDARG;
@@ -155,7 +155,7 @@ HRESULT WINAPI AtlModuleRegisterClassObjects(_ATL_MODULEW *pM, DWORD dwClsContex
                                            dwFlags, &obj->dwRegister);
 
                 if (FAILED (rc) )
-                    WARN("Failed to register object %i: 0x%08x\n", i, rc);
+                    WARN("Failed to register object %i: 0x%08lx\n", i, rc);
 
                 if (pUnknown)
                     IUnknown_Release(pUnknown);
@@ -247,7 +247,7 @@ HRESULT WINAPI AtlModuleGetClassObject(_ATL_MODULEW *pm, REFCLSID rclsid,
                                                   (void **)&obj->pCF);
                 if (obj->pCF)
                     hres = IUnknown_QueryInterface(obj->pCF, riid, ppv);
-                break;
+                return hres;
             }
         }
     }
@@ -258,7 +258,7 @@ HRESULT WINAPI AtlModuleGetClassObject(_ATL_MODULEW *pm, REFCLSID rclsid,
 }
 
 /***********************************************************************
- *           AtlModuleGetClassObject              [ATL.@]
+ *           AtlModuleRegisterTypeLib             [ATL.@]
  */
 HRESULT WINAPI AtlModuleRegisterTypeLib(_ATL_MODULEW *pm, LPCOLESTR lpszIndex)
 {

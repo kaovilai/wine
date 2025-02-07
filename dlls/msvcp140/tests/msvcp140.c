@@ -18,6 +18,8 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <locale.h>
+#include <share.h>
 
 #include "windef.h"
 #include "winbase.h"
@@ -142,6 +144,53 @@ typedef struct {
     void *arg;
 } _Threadpool_chore;
 
+typedef struct
+{
+    HANDLE hnd;
+    DWORD  id;
+} _Thrd_t;
+
+typedef struct cs_queue
+{
+    void *ctx;
+    struct cs_queue *next;
+    BOOL free;
+    int unknown;
+} cs_queue;
+
+typedef struct
+{
+    cs_queue unk_active;
+    void *unknown[2];
+    cs_queue *head;
+    void *tail;
+} critical_section;
+
+typedef union {
+    critical_section conc;
+    SRWLOCK win;
+} cs;
+
+typedef struct {
+    DWORD flags;
+    ULONG_PTR unknown;
+    cs cs;
+    DWORD thread_id;
+    DWORD count;
+} *_Mtx_t;
+
+typedef struct {
+    ULONG_PTR unknown;
+    CONDITION_VARIABLE cv;
+} *_Cnd_t;
+
+typedef struct {
+    __time64_t sec;
+    int nsec;
+} xtime;
+
+typedef int (__cdecl *_Thrd_start_t)(void*);
+
 enum file_type {
     file_not_found = -1,
     none_file,
@@ -172,8 +221,25 @@ static void (__thiscall *p__TaskEventLogger__LogWorkItemStarted)(_TaskEventLogge
 static int (__cdecl *p__Schedule_chore)(_Threadpool_chore*);
 static int (__cdecl *p__Reschedule_chore)(const _Threadpool_chore*);
 static void (__cdecl *p__Release_chore)(_Threadpool_chore*);
+static int (__cdecl *p__Mtx_init)(_Mtx_t*, int);
+static void (__cdecl *p__Mtx_destroy)(_Mtx_t);
+static int (__cdecl *p__Mtx_lock)(_Mtx_t);
+static int (__cdecl *p__Mtx_unlock)(_Mtx_t);
+static void (__cdecl *p__Mtx_clear_owner)(_Mtx_t);
+static void (__cdecl *p__Mtx_reset_owner)(_Mtx_t);
+static int (__cdecl *p__Cnd_init)(_Cnd_t*);
+static void (__cdecl *p__Cnd_destroy)(_Cnd_t);
+static int (__cdecl *p__Cnd_wait)(_Cnd_t, _Mtx_t);
+static int (__cdecl *p__Cnd_timedwait)(_Cnd_t, _Mtx_t, const xtime*);
+static int (__cdecl *p__Cnd_broadcast)(_Cnd_t);
+static int (__cdecl *p__Cnd_signal)(_Cnd_t);
+static int (__cdecl *p__Thrd_create)(_Thrd_t*, _Thrd_start_t, void*);
+static int (__cdecl *p__Thrd_join)(_Thrd_t, int*);
+static int (__cdecl *p__Xtime_diff_to_millis2)(const xtime*, const xtime*);
+static int (__cdecl *p_xtime_get)(xtime*, int);
 
 static void (__cdecl *p_Close_dir)(void*);
+static DWORD (__cdecl *p_Copy_file)(WCHAR const *, WCHAR const *);
 static MSVCP_bool (__cdecl *p_Current_get)(WCHAR *);
 static MSVCP_bool (__cdecl *p_Current_set)(WCHAR const *);
 static int (__cdecl *p_Equivalent)(WCHAR const*, WCHAR const*);
@@ -197,6 +263,24 @@ static int (__cdecl *p_Unlink)(WCHAR const*);
 static ULONG (__cdecl *p__Winerror_message)(ULONG, char*, ULONG);
 static int (__cdecl *p__Winerror_map)(int);
 static const char* (__cdecl *p__Syserror_map)(int err);
+
+typedef enum {
+    OPENMODE_in         = 0x01,
+    OPENMODE_out        = 0x02,
+    OPENMODE_ate        = 0x04,
+    OPENMODE_app        = 0x08,
+    OPENMODE_trunc      = 0x10,
+    OPENMODE__Nocreate  = 0x40,
+    OPENMODE__Noreplace = 0x80,
+    OPENMODE_binary     = 0x20,
+    OPENMODE_mask       = 0xff
+} IOSB_openmode;
+static FILE* (__cdecl *p__Fiopen_wchar)(const wchar_t*, int, int);
+static FILE* (__cdecl *p__Fiopen)(const char*, int, int);
+
+static char* (__cdecl *p_setlocale)(int, const char*);
+static int (__cdecl *p_fclose)(FILE*);
+static int (__cdecl *p__unlink)(const char*);
 
 static BOOLEAN (WINAPI *pCreateSymbolicLinkW)(const WCHAR *, const WCHAR *, DWORD);
 
@@ -236,6 +320,9 @@ static BOOL init(void)
         SET(p__Release_chore, "?_Release_chore@details@Concurrency@@YAXPEAU_Threadpool_chore@12@@Z");
         SET(p__Winerror_message, "?_Winerror_message@std@@YAKKPEADK@Z");
         SET(p__Syserror_map, "?_Syserror_map@std@@YAPEBDH@Z");
+
+        SET(p__Fiopen_wchar, "?_Fiopen@std@@YAPEAU_iobuf@@PEB_WHH@Z");
+        SET(p__Fiopen, "?_Fiopen@std@@YAPEAU_iobuf@@PEBDHH@Z");
     } else {
 #ifdef __arm__
         SET(p_task_continuation_context_ctor, "??0task_continuation_context@Concurrency@@AAA@XZ");
@@ -244,7 +331,7 @@ static BOOL init(void)
         SET(p__ContextCallback__Capture, "?_Capture@_ContextCallback@details@Concurrency@@AAAXXZ");
         SET(p__ContextCallback__Reset, "?_Reset@_ContextCallback@details@Concurrency@@AAAXXZ");
         SET(p__TaskEventLogger__LogCancelTask, "?_LogCancelTask@_TaskEventLogger@details@Concurrency@@QAAXXZ");
-        SET(p__TaskEventLogger__LogScheduleTask, "?_LogScheduleTask@_TaskEventLogger@details@Concurrency@@QAEX_N@Z");
+        SET(p__TaskEventLogger__LogScheduleTask, "?_LogScheduleTask@_TaskEventLogger@details@Concurrency@@QAAX_N@Z@Z");
         SET(p__TaskEventLogger__LogTaskCompleted, "?_LogTaskCompleted@_TaskEventLogger@details@Concurrency@@QAAXXZ");
         SET(p__TaskEventLogger__LogTaskExecutionCompleted, "?_LogTaskExecutionCompleted@_TaskEventLogger@details@Concurrency@@QAAXXZ");
         SET(p__TaskEventLogger__LogWorkItemCompleted, "?_LogWorkItemCompleted@_TaskEventLogger@details@Concurrency@@QAAXXZ");
@@ -267,9 +354,30 @@ static BOOL init(void)
         SET(p__Release_chore, "?_Release_chore@details@Concurrency@@YAXPAU_Threadpool_chore@12@@Z");
         SET(p__Winerror_message, "?_Winerror_message@std@@YAKKPADK@Z");
         SET(p__Syserror_map, "?_Syserror_map@std@@YAPBDH@Z");
+
+        SET(p__Fiopen_wchar, "?_Fiopen@std@@YAPAU_iobuf@@PB_WHH@Z");
+        SET(p__Fiopen, "?_Fiopen@std@@YAPAU_iobuf@@PBDHH@Z");
     }
 
+    SET(p__Mtx_init, "_Mtx_init");
+    SET(p__Mtx_destroy, "_Mtx_destroy");
+    SET(p__Mtx_lock, "_Mtx_lock");
+    SET(p__Mtx_unlock, "_Mtx_unlock");
+    SET(p__Mtx_clear_owner, "_Mtx_clear_owner");
+    SET(p__Mtx_reset_owner, "_Mtx_reset_owner");
+    SET(p__Cnd_init, "_Cnd_init");
+    SET(p__Cnd_destroy, "_Cnd_destroy");
+    SET(p__Cnd_wait, "_Cnd_wait");
+    SET(p__Cnd_timedwait, "_Cnd_timedwait");
+    SET(p__Cnd_broadcast, "_Cnd_broadcast");
+    SET(p__Cnd_signal, "_Cnd_signal");
+    SET(p__Thrd_create, "_Thrd_create");
+    SET(p__Thrd_join, "_Thrd_join");
+    SET(p__Xtime_diff_to_millis2, "_Xtime_diff_to_millis2");
+    SET(p_xtime_get, "xtime_get");
+
     SET(p_Close_dir, "_Close_dir");
+    SET(p_Copy_file, "_Copy_file");
     SET(p_Current_get, "_Current_get");
     SET(p_Current_set, "_Current_set");
     SET(p_Equivalent, "_Equivalent");
@@ -294,6 +402,11 @@ static BOOL init(void)
     hdll = GetModuleHandleA("kernel32.dll");
     pCreateSymbolicLinkW = (void*)GetProcAddress(hdll, "CreateSymbolicLinkW");
 
+    hdll = GetModuleHandleA("ucrtbase.dll");
+    p_setlocale = (void*)GetProcAddress(hdll, "setlocale");
+    p_fclose = (void*)GetProcAddress(hdll, "fclose");
+    p__unlink = (void*)GetProcAddress(hdll, "_unlink");
+
     init_thiscall_thunk();
     return TRUE;
 }
@@ -301,7 +414,7 @@ static BOOL init(void)
 static void test_thrd(void)
 {
     ok(p__Thrd_id() == GetCurrentThreadId(),
-        "expected same id, got _Thrd_id %u GetCurrentThreadId %u\n",
+        "expected same id, got _Thrd_id %u GetCurrentThreadId %lu\n",
         p__Thrd_id(), GetCurrentThreadId());
 }
 
@@ -529,7 +642,7 @@ static void test_chore(void)
     ok(chore.callback == chore_callback, "chore.callback = %p, expected %p\n", chore.callback, chore_callback);
     ok(chore.arg == event, "chore.arg = %p, expected %p\n", chore.arg, event);
     wait = WaitForSingleObject(event, 500);
-    ok(wait == WAIT_OBJECT_0, "WaitForSingleObject returned %d\n", wait);
+    ok(wait == WAIT_OBJECT_0, "WaitForSingleObject returned %ld\n", wait);
 
     if(!GetProcAddress(GetModuleHandleA("kernel32"), "CreateThreadpoolWork"))
     {
@@ -545,12 +658,12 @@ static void test_chore(void)
     ok(old_chore.work != chore.work, "new threadpool work was not created\n");
     p__Release_chore(&old_chore);
     wait = WaitForSingleObject(event, 500);
-    ok(wait == WAIT_OBJECT_0, "WaitForSingleObject returned %d\n", wait);
+    ok(wait == WAIT_OBJECT_0, "WaitForSingleObject returned %ld\n", wait);
 
     ret = p__Reschedule_chore(&chore);
     ok(!ret, "_Reschedule_chore returned %d\n", ret);
     wait = WaitForSingleObject(event, 500);
-    ok(wait == WAIT_OBJECT_0, "WaitForSingleObject returned %d\n", wait);
+    ok(wait == WAIT_OBJECT_0, "WaitForSingleObject returned %ld\n", wait);
 
     p__Release_chore(&chore);
     ok(!chore.work, "chore.work != NULL\n");
@@ -1256,12 +1369,12 @@ static void test__Winerror_message(void)
     ret = p__Winerror_message(0, buf, sizeof(buf));
     ok(ret == ret_fm || (ret_fm > 2 && buf_fm[ret_fm - 1] == '\n' &&
                 buf_fm[ret_fm - 2] == '\r' && ret + 2 == ret_fm),
-            "ret = %u, expected %u\n", ret, ret_fm);
+            "ret = %lu, expected %lu\n", ret, ret_fm);
     ok(!strncmp(buf, buf_fm, ret), "buf = %s, expected %s\n", buf, buf_fm);
 
     memset(buf, 'a', sizeof(buf));
     ret = p__Winerror_message(0, buf, 2);
-    ok(!ret, "ret = %u\n", ret);
+    ok(!ret, "ret = %lu\n", ret);
     ok(buf[0] == 'a', "buf = %s\n", buf);
 }
 
@@ -1326,6 +1439,8 @@ static void test__Syserror_map(void)
 
     r1 = p__Syserror_map(0);
     ok(r1 != NULL, "_Syserror_map(0) returned NULL\n");
+    r1 = p__Syserror_map(1233);
+    ok(r1 != NULL, "_Syserror_map(1233) returned NULL\n");
     r2 = p__Syserror_map(1234);
     ok(r2 != NULL, "_Syserror_map(1234) returned NULL\n");
     ok(r1 == r2, "r1 = %p(%s), r2 = %p(%s)\n", r1, r1, r2, r2);
@@ -1385,6 +1500,316 @@ static void test_Equivalent(void)
     ok(SetCurrentDirectoryW(current_path), "SetCurrentDirectoryW failed\n");
 }
 
+#define NUM_THREADS 10
+#define TIMEDELTA 250  /* 250 ms uncertainty allowed */
+struct cndmtx
+{
+    HANDLE initialized;
+    LONG started;
+    int thread_no;
+
+    _Cnd_t cnd;
+    _Mtx_t mtx;
+    BOOL timed_wait;
+    BOOL use_cnd_func;
+};
+
+static int __cdecl cnd_wait_thread(void *arg)
+{
+    struct cndmtx *cm = arg;
+    int r;
+
+    p__Mtx_lock(cm->mtx);
+
+    if(InterlockedIncrement(&cm->started) == cm->thread_no)
+        SetEvent(cm->initialized);
+
+    if(cm->use_cnd_func) {
+        if(cm->timed_wait) {
+            xtime xt;
+            p_xtime_get(&xt, 1);
+            xt.sec += 2;
+
+            r = p__Cnd_timedwait(cm->cnd, cm->mtx, &xt);
+        } else {
+            r = p__Cnd_wait(cm->cnd, cm->mtx);
+        }
+        ok(!r, "wait failed\n");
+    } else {
+        p__Mtx_clear_owner(cm->mtx);
+        r = SleepConditionVariableSRW(&cm->cnd->cv, &cm->mtx->cs.win,
+                                      cm->timed_wait ? 2000 : INFINITE, 0);
+        ok(r, "wait failed\n");
+        p__Mtx_reset_owner(cm->mtx);
+    }
+
+    p__Mtx_unlock(cm->mtx);
+    return 0;
+}
+
+static void test_cnd(void)
+{
+    _Thrd_t threads[NUM_THREADS];
+    xtime xt, before, after;
+    struct cndmtx cm;
+    int r, i, diff;
+    _Cnd_t cnd;
+    _Mtx_t mtx;
+
+    r = p__Cnd_init(&cnd);
+    ok(!r, "failed to init cnd\n");
+
+    r = p__Mtx_init(&mtx, 0);
+    ok(!r, "failed to init mtx\n");
+
+    p__Cnd_destroy(NULL);
+
+    /* test _Cnd_signal/_Cnd_wait */
+    cm.initialized = CreateEventW(NULL, FALSE, FALSE, NULL);
+    cm.started = 0;
+    cm.thread_no = 1;
+    cm.cnd = cnd;
+    cm.mtx = mtx;
+    cm.timed_wait = FALSE;
+    cm.use_cnd_func = TRUE;
+    p__Thrd_create(&threads[0], cnd_wait_thread, (void*)&cm);
+
+    WaitForSingleObject(cm.initialized, INFINITE);
+    p__Mtx_lock(mtx);
+    p__Mtx_unlock(mtx);
+
+    /* signal cnd function with kernel function */
+    WakeConditionVariable(&cm.cnd->cv);
+    p__Thrd_join(threads[0], NULL);
+
+    cm.started = 0;
+    cm.thread_no = 1;
+    cm.use_cnd_func = FALSE;
+    p__Thrd_create(&threads[0], cnd_wait_thread, (void*)&cm);
+
+    WaitForSingleObject(cm.initialized, INFINITE);
+    p__Mtx_lock(mtx);
+    p__Mtx_unlock(mtx);
+
+    /* signal kernel functions with cnd function */
+    r = p__Cnd_signal(cm.cnd);
+    ok(!r, "failed to signal\n");
+    p__Thrd_join(threads[0], NULL);
+
+    /* test _Cnd_timedwait time out */
+    p__Mtx_lock(mtx);
+    p_xtime_get(&before, 1);
+    xt = before;
+    xt.sec += 1;
+    /* try to avoid failures on spurious wakeup */
+    p__Cnd_timedwait(cnd, mtx, &xt);
+    r = p__Cnd_timedwait(cnd, mtx, &xt);
+    p_xtime_get(&after, 1);
+    p__Mtx_unlock(mtx);
+
+    diff = p__Xtime_diff_to_millis2(&after, &before);
+    ok(r == 2, "should have timed out\n");
+    ok(diff > 1000 - TIMEDELTA, "got %d\n", diff);
+
+    /* test _Cnd_timedwait */
+    cm.started = 0;
+    cm.timed_wait = TRUE;
+    cm.use_cnd_func = TRUE;
+    p__Thrd_create(&threads[0], cnd_wait_thread, (void*)&cm);
+
+    WaitForSingleObject(cm.initialized, INFINITE);
+    p__Mtx_lock(mtx);
+    p__Mtx_unlock(mtx);
+
+    /* signal cnd function with kernel function */
+    WakeConditionVariable(&cm.cnd->cv);
+    p__Thrd_join(threads[0], NULL);
+
+    cm.started = 0;
+    cm.use_cnd_func = FALSE;
+    p__Thrd_create(&threads[0], cnd_wait_thread, (void*)&cm);
+
+    WaitForSingleObject(cm.initialized, INFINITE);
+    p__Mtx_lock(mtx);
+    p__Mtx_unlock(mtx);
+
+    /* signal kernel functions with cnd function */
+    r = p__Cnd_signal(cm.cnd);
+    ok(!r, "failed to signal\n");
+    p__Thrd_join(threads[0], NULL);
+
+    /* test _Cnd_broadcast */
+    cm.started = 0;
+    cm.timed_wait = FALSE;
+    cm.use_cnd_func = TRUE;
+    cm.thread_no = NUM_THREADS;
+    for(i = 0; i < cm.thread_no; i++)
+        p__Thrd_create(&threads[i], cnd_wait_thread, (void*)&cm);
+
+    WaitForSingleObject(cm.initialized, INFINITE);
+    p__Mtx_lock(mtx);
+    p__Mtx_unlock(mtx);
+
+    /* signal cnd function with kernel function */
+    WakeAllConditionVariable(&cm.cnd->cv);
+    for(i = 0; i < cm.thread_no; i++)
+        p__Thrd_join(threads[i], NULL);
+
+    cm.started = 0;
+    cm.use_cnd_func = FALSE;
+    for(i = 0; i < cm.thread_no; i++)
+        p__Thrd_create(&threads[i], cnd_wait_thread, (void*)&cm);
+
+    WaitForSingleObject(cm.initialized, INFINITE);
+    p__Mtx_lock(mtx);
+    p__Mtx_unlock(mtx);
+
+    /* signal kernel functions with cnd function */
+    r = p__Cnd_broadcast(cnd);
+    ok(!r, "failed to broadcast\n");
+    for(i = 0; i < cm.thread_no; i++)
+        p__Thrd_join(threads[i], NULL);
+
+    p__Cnd_destroy(cnd);
+    p__Mtx_destroy(mtx);
+    CloseHandle(cm.initialized);
+}
+
+static void test_Copy_file(void)
+{
+    WCHAR origin_path[MAX_PATH], temp_path[MAX_PATH];
+    HANDLE file;
+    DWORD ret;
+
+    GetCurrentDirectoryW(MAX_PATH, origin_path);
+    GetTempPathW(MAX_PATH, temp_path);
+    ok(SetCurrentDirectoryW(temp_path), "SetCurrentDirectoryW to temp_path failed\n");
+
+    CreateDirectoryW(L"wine_test_dir", NULL);
+
+    file = CreateFileW(L"wine_test_dir/f1", 0, 0, NULL, CREATE_NEW, 0, NULL);
+    ok(file != INVALID_HANDLE_VALUE, "create file failed: INVALID_HANDLE_VALUE\n");
+    ok(CloseHandle(file), "CloseHandle\n");
+
+    file = CreateFileW(L"wine_test_dir/f2", 0, 0, NULL, CREATE_NEW, 0, NULL);
+    ok(file != INVALID_HANDLE_VALUE, "create file failed: INVALID_HANDLE_VALUE\n");
+    ok(CloseHandle(file), "CloseHandle\n");
+    SetFileAttributesW(L"wine_test_dir/f2", FILE_ATTRIBUTE_READONLY);
+
+    ok(CreateDirectoryW(L"wine_test_dir/d1", NULL) || GetLastError() == ERROR_ALREADY_EXISTS,
+            "CreateDirectoryW failed.\n");
+
+    SetLastError(0xdeadbeef);
+    ret = p_Copy_file(L"wine_test_dir/f1", L"wine_test_dir/d1");
+    ok(ret == ERROR_ACCESS_DENIED, "Got unexpected ret %lu.\n", ret);
+    ok(GetLastError() == ret, "Got unexpected err %lu.\n", GetLastError());
+
+    SetLastError(0xdeadbeef);
+    ret = p_Copy_file(L"wine_test_dir/f1", L"wine_test_dir/f2");
+    ok(ret == ERROR_ACCESS_DENIED, "Got unexpected ret %lu.\n", ret);
+    ok(GetLastError() == ret, "Got unexpected err %lu.\n", GetLastError());
+
+    SetLastError(0xdeadbeef);
+    ret = p_Copy_file(L"wine_test_dir/f1", L"wine_test_dir/f3");
+    ok(ret == ERROR_SUCCESS, "Got unexpected ret %lu.\n", ret);
+    ok(GetLastError() == ret || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* some win8 machines */,
+            "Got unexpected err %lu.\n", GetLastError());
+
+    SetLastError(0xdeadbeef);
+    ret = p_Copy_file(L"wine_test_dir/f1", L"wine_test_dir/f3");
+    ok(ret == ERROR_SUCCESS, "Got unexpected ret %lu.\n", ret);
+    ok(GetLastError() == ret || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* some win8 machines */,
+            "Got unexpected err %lu.\n", GetLastError());
+
+    SetLastError(0xdeadbeef);
+    ret = p_Copy_file(L"wine_test_dir/missing", L"wine_test_dir/f3");
+    ok(ret == ERROR_FILE_NOT_FOUND, "Got unexpected ret %lu.\n", ret);
+    ok(GetLastError() == ret, "Got unexpected err %lu.\n", GetLastError());
+
+    ok(RemoveDirectoryW(L"wine_test_dir/d1"), "expect wine_test_dir to exist\n");
+    ok(DeleteFileW(L"wine_test_dir/f1"), "expect wine_test_dir/f1 to exist\n");
+    SetFileAttributesW(L"wine_test_dir/f2", FILE_ATTRIBUTE_NORMAL);
+    ok(DeleteFileW(L"wine_test_dir/f2"), "expect wine_test_dir/f2 to exist\n");
+    ok(DeleteFileW(L"wine_test_dir/f3"), "expect wine_test_dir/f3 to exist\n");
+    ok(RemoveDirectoryW(L"wine_test_dir"), "expect wine_test_dir to exist\n");
+
+    ok(SetCurrentDirectoryW(origin_path), "SetCurrentDirectoryW to origin_path failed\n");
+}
+
+static void test__Mtx(void)
+{
+    _Mtx_t mtx = NULL;
+    int r;
+
+    r = p__Mtx_init(&mtx, 0);
+    ok(!r, "failed to init mtx\n");
+
+    ok(mtx->thread_id == -1, "mtx.thread_id = %lx\n", mtx->thread_id);
+    ok(mtx->count == 0, "mtx.count = %lx\n", mtx->count);
+    ok(mtx->cs.win.Ptr == 0, "mtx.cs == %p\n", mtx->cs.win.Ptr);
+    p__Mtx_lock(mtx);
+    ok(mtx->thread_id == GetCurrentThreadId(), "mtx.thread_id = %lx\n", mtx->thread_id);
+    ok(mtx->count == 1, "mtx.count = %lx\n", mtx->count);
+    ok(mtx->cs.win.Ptr != 0, "mtx.cs == %p\n", mtx->cs.win.Ptr);
+    p__Mtx_lock(mtx);
+    ok(mtx->thread_id == GetCurrentThreadId(), "mtx.thread_id = %lx\n", mtx->thread_id);
+    ok(mtx->count == 1, "mtx.count = %lx\n", mtx->count);
+    ok(mtx->cs.win.Ptr != 0, "mtx.cs == %p\n", mtx->cs.win.Ptr);
+    p__Mtx_unlock(mtx);
+    ok(mtx->thread_id == -1, "mtx.thread_id = %lx\n", mtx->thread_id);
+    ok(mtx->count == 0, "mtx.count = %lx\n", mtx->count);
+    ok(mtx->cs.win.Ptr == 0, "mtx.cs == %p\n", mtx->cs.win.Ptr);
+    p__Mtx_unlock(mtx);
+    ok(mtx->thread_id == -1, "mtx.thread_id = %lx\n", mtx->thread_id);
+    ok(mtx->count == -1, "mtx.count = %lx\n", mtx->count);
+    p__Mtx_unlock(mtx);
+    ok(mtx->thread_id == -1, "mtx.thread_id = %lx\n", mtx->thread_id);
+    ok(mtx->count == -2, "mtx.count = %lx\n", mtx->count);
+
+    p__Mtx_destroy(mtx);
+}
+
+static void test__Fiopen(void)
+{
+    int i, ret;
+    FILE *f;
+    wchar_t wpath[MAX_PATH];
+    static const struct {
+        const char *loc;
+        const char *path;
+    } tests[] = {
+        { "German.utf8",    "t\xc3\xa4\xc3\x8f\xc3\xb6\xc3\x9f.txt" },
+        { "Polish.utf8",    "t\xc4\x99\xc5\x9b\xc4\x87.txt" },
+        { "Turkish.utf8",   "t\xc3\x87\xc4\x9e\xc4\xb1\xc4\xb0\xc5\x9e.txt" },
+        { "Arabic.utf8",    "t\xd8\xaa\xda\x86.txt" },
+        { "Japanese.utf8",  "t\xe3\x82\xaf\xe3\x83\xa4.txt" },
+        { "Chinese.utf8",   "t\xe4\xb8\x82\xe9\xbd\xab.txt" },
+    };
+
+    for(i=0; i<ARRAY_SIZE(tests); i++) {
+        if(!p_setlocale(LC_ALL, tests[i].loc)) {
+            win_skip("skipping locale %s\n", tests[i].loc);
+            continue;
+        }
+
+        ret = MultiByteToWideChar(CP_UTF8, 0, tests[i].path, -1, wpath, MAX_PATH);
+        ok(ret, "MultiByteToWideChar failed on %s with locale %s: %lx\n",
+                debugstr_a(tests[i].path), tests[i].loc, GetLastError());
+
+        f = p__Fiopen(tests[i].path, OPENMODE_out, SH_DENYNO);
+        ok(!!f, "failed to create %s with locale %s\n", tests[i].path, tests[i].loc);
+        p_fclose(f);
+
+        f = p__Fiopen_wchar(wpath, OPENMODE_in, SH_DENYNO);
+        ok(!!f, "failed to open %s with locale %s\n", wine_dbgstr_w(wpath), tests[i].loc);
+        if(f) p_fclose(f);
+
+        ok(!p__unlink(tests[i].path), "failed to unlink %s with locale %s\n",
+                tests[i].path, tests[i].loc);
+    }
+    p_setlocale(LC_ALL, "C");
+}
+
 START_TEST(msvcp140)
 {
     if(!init()) return;
@@ -1410,5 +1835,9 @@ START_TEST(msvcp140)
     test__Winerror_map();
     test__Syserror_map();
     test_Equivalent();
+    test_cnd();
+    test_Copy_file();
+    test__Mtx();
+    test__Fiopen();
     FreeLibrary(msvcp);
 }

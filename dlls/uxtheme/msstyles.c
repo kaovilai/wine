@@ -32,8 +32,8 @@
 
 #include "msstyles.h"
 
+#include "wine/exception.h"
 #include "wine/debug.h"
-#include "wine/heap.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 
@@ -48,6 +48,8 @@ static void MSSTYLES_ParseThemeIni(PTHEME_FILE tf, BOOL setMetrics);
 static HRESULT MSSTYLES_GetFont (LPCWSTR lpStringStart, LPCWSTR lpStringEnd, LPCWSTR *lpValEnd, LOGFONTW* logfont);
 
 #define MSSTYLES_VERSION 0x0003
+
+#define THEME_CLASS_SIGNATURE 0x12bc6d83
 
 static PTHEME_FILE tfActiveTheme;
 
@@ -98,7 +100,7 @@ HRESULT MSSTYLES_OpenThemeFile(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWST
     }
     if((versize = SizeofResource(hTheme, hrsc)) != 2)
     {
-        TRACE("Version resource found, but wrong size: %d\n", versize);
+        TRACE("Version resource found, but wrong size: %ld\n", versize);
         hr = HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
         goto invalid_theme;
     }
@@ -159,7 +161,7 @@ HRESULT MSSTYLES_OpenThemeFile(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWST
         goto invalid_theme;
     }
 
-    *tf = heap_alloc_zero(sizeof(THEME_FILE));
+    *tf = calloc(1, sizeof(THEME_FILE));
     (*tf)->hTheme = hTheme;
     
     GetFullPathNameW(lpThemeFile, MAX_PATH, (*tf)->szThemeFile, NULL);
@@ -168,7 +170,7 @@ HRESULT MSSTYLES_OpenThemeFile(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWST
     (*tf)->pszAvailSizes = pszSizes;
     (*tf)->pszSelectedColor = pszSelectedColor;
     (*tf)->pszSelectedSize = pszSelectedSize;
-    (*tf)->dwRefCount = 1;
+    (*tf)->refcount = 1;
     return S_OK;
 
 invalid_theme:
@@ -184,9 +186,12 @@ invalid_theme:
  */
 void MSSTYLES_CloseThemeFile(PTHEME_FILE tf)
 {
+    LONG refcount;
+
     if(tf) {
-        tf->dwRefCount--;
-        if(!tf->dwRefCount) {
+        refcount = InterlockedDecrement(&tf->refcount);
+        if (!refcount)
+        {
             if(tf->hTheme) FreeLibrary(tf->hTheme);
             if(tf->classes) {
                 while(tf->classes) {
@@ -198,13 +203,14 @@ void MSSTYLES_CloseThemeFile(PTHEME_FILE tf)
                         while(ps->properties) {
                             PTHEME_PROPERTY prop = ps->properties;
                             ps->properties = prop->next;
-                            heap_free(prop);
+                            free(prop);
                         }
 
                         pcls->partstate = ps->next;
-                        heap_free(ps);
+                        free(ps);
                     }
-                    heap_free(pcls);
+                    pcls->signature = 0;
+                    free(pcls);
                 }
             }
             while (tf->images)
@@ -212,9 +218,9 @@ void MSSTYLES_CloseThemeFile(PTHEME_FILE tf)
                 PTHEME_IMAGE img = tf->images;
                 tf->images = img->next;
                 DeleteObject (img->image);
-                heap_free(img);
+                free(img);
             }
-            heap_free(tf);
+            free(tf);
         }
     }
 }
@@ -231,7 +237,7 @@ HRESULT MSSTYLES_SetActiveTheme(PTHEME_FILE tf, BOOL setMetrics)
     tfActiveTheme = tf;
     if (tfActiveTheme)
     {
-	tfActiveTheme->dwRefCount++;
+        InterlockedIncrement(&tfActiveTheme->refcount);
 	if(!tfActiveTheme->classes)
 	    MSSTYLES_ParseThemeIni(tfActiveTheme, setMetrics);
     }
@@ -441,7 +447,9 @@ static PTHEME_CLASS MSSTYLES_AddClass(PTHEME_FILE tf, LPCWSTR pszAppName, LPCWST
     PTHEME_CLASS cur = MSSTYLES_FindClass(tf, pszAppName, pszClassName);
     if(cur) return cur;
 
-    cur = heap_alloc(sizeof(*cur));
+    cur = malloc(sizeof(*cur));
+    cur->signature = THEME_CLASS_SIGNATURE;
+    cur->refcount = 0;
     cur->hTheme = tf->hTheme;
     lstrcpyW(cur->szAppName, pszAppName);
     lstrcpyW(cur->szClassName, pszClassName);
@@ -450,6 +458,36 @@ static PTHEME_CLASS MSSTYLES_AddClass(PTHEME_FILE tf, LPCWSTR pszAppName, LPCWST
     cur->overrides = NULL;
     tf->classes = cur;
     return cur;
+}
+
+/***********************************************************************
+ *      MSSTYLES_FindPart
+ *
+ * Find a part
+ *
+ * PARAMS
+ *     tc                  Class to search
+ *     iPartId             Part ID to find
+ *
+ * RETURNS
+ *  The part found, or NULL
+ */
+PTHEME_PARTSTATE MSSTYLES_FindPart(PTHEME_CLASS tc, int iPartId)
+{
+    PTHEME_PARTSTATE cur = tc->partstate;
+
+    while (cur)
+    {
+        if (cur->iPartId == iPartId)
+            return cur;
+
+        cur = cur->next;
+    }
+
+    if (tc->overrides)
+        return MSSTYLES_FindPart(tc->overrides, iPartId);
+
+    return NULL;
 }
 
 /***********************************************************************
@@ -498,7 +536,7 @@ static PTHEME_PARTSTATE MSSTYLES_AddPartState(PTHEME_CLASS tc, int iPartId, int 
     PTHEME_PARTSTATE cur = MSSTYLES_FindPartState(tc, iPartId, iStateId, NULL);
     if(cur) return cur;
 
-    cur = heap_alloc(sizeof(*cur));
+    cur = malloc(sizeof(*cur));
     cur->iPartId = iPartId;
     cur->iStateId = iStateId;
     cur->properties = NULL;
@@ -615,7 +653,7 @@ static PTHEME_PROPERTY MSSTYLES_AddProperty(PTHEME_PARTSTATE ps, int iPropertyPr
     /* Should duplicate properties overwrite the original, or be ignored? */
     if(cur) return cur;
 
-    cur = heap_alloc(sizeof(*cur));
+    cur = malloc(sizeof(*cur));
     cur->iPrimitiveType = iPropertyPrimitive;
     cur->iPropertyId = iPropertyId;
     cur->lpValue = lpValue;
@@ -656,7 +694,7 @@ static PTHEME_PROPERTY MSSTYLES_AddMetric(PTHEME_FILE tf, int iPropertyPrimitive
     /* Should duplicate properties overwrite the original, or be ignored? */
     if(cur) return cur;
 
-    cur = heap_alloc(sizeof(*cur));
+    cur = malloc(sizeof(*cur));
     cur->iPrimitiveType = iPropertyPrimitive;
     cur->iPropertyId = iPropertyId;
     cur->lpValue = lpValue;
@@ -983,6 +1021,23 @@ static void MSSTYLES_ParseThemeIni(PTHEME_FILE tf, BOOL setMetrics)
     }
 }
 
+static void parse_app_class_name(LPCWSTR name, LPWSTR app_name, LPWSTR class_name)
+{
+    LPCWSTR p;
+
+    app_name[0] = class_name[0] = 0;
+
+    p = wcsstr(name, L"::");
+    if (p)
+    {
+        lstrcpynW(app_name, name, min(p - name + 1, MAX_THEME_APP_NAME));
+        p += 2;
+        lstrcpynW(class_name, p, min(wcslen(p) + 1, MAX_THEME_CLASS_NAME));
+    }
+    else
+        lstrcpynW(class_name, name, MAX_THEME_CLASS_NAME);
+}
+
 /***********************************************************************
  *      MSSTYLES_OpenThemeClass
  *
@@ -997,6 +1052,8 @@ static void MSSTYLES_ParseThemeIni(PTHEME_FILE tf, BOOL setMetrics)
 PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, UINT dpi)
 {
     PTHEME_CLASS cls = NULL;
+    WCHAR buf[MAX_THEME_APP_NAME + MAX_THEME_CLASS_NAME];
+    WCHAR szAppName[MAX_THEME_APP_NAME];
     WCHAR szClassName[MAX_THEME_CLASS_NAME];
     LPCWSTR start;
     LPCWSTR end;
@@ -1013,19 +1070,37 @@ PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, U
     start = pszClassList;
     while((end = wcschr(start, ';'))) {
         len = end-start;
-        lstrcpynW(szClassName, start, min(len+1, ARRAY_SIZE(szClassName)));
+        lstrcpynW(buf, start, min(len+1, ARRAY_SIZE(buf)));
         start = end+1;
-        cls = MSSTYLES_FindClass(tfActiveTheme, pszAppName, szClassName);
+
+        parse_app_class_name(buf, szAppName, szClassName);
+
+        /* If the window application name is set then fail */
+        if (szAppName[0] && pszAppName)
+            return NULL;
+
+        cls = MSSTYLES_FindClass(tfActiveTheme, szAppName[0] ? szAppName : pszAppName, szClassName);
+        /* Fall back to default class if the specified subclass is not found */
+        if (!cls) cls = MSSTYLES_FindClass(tfActiveTheme, NULL, szClassName);
+
         if(cls) break;
     }
     if(!cls && *start) {
-        lstrcpynW(szClassName, start, ARRAY_SIZE(szClassName));
-        cls = MSSTYLES_FindClass(tfActiveTheme, pszAppName, szClassName);
+        parse_app_class_name(start, szAppName, szClassName);
+
+        /* If the window application name is set then fail */
+        if (szAppName[0] && pszAppName)
+            return NULL;
+
+        cls = MSSTYLES_FindClass(tfActiveTheme, szAppName[0] ? szAppName : pszAppName, szClassName);
+        /* Fall back to default class if the specified subclass is not found */
+        if (!cls) cls = MSSTYLES_FindClass(tfActiveTheme, NULL, szClassName);
     }
     if(cls) {
         TRACE("Opened app %s, class %s from list %s\n", debugstr_w(cls->szAppName), debugstr_w(cls->szClassName), debugstr_w(pszClassList));
 	cls->tf = tfActiveTheme;
-	cls->tf->dwRefCount++;
+        InterlockedIncrement(&cls->tf->refcount);
+        InterlockedIncrement(&cls->refcount);
         cls->dpi = dpi;
     }
     return cls;
@@ -1045,7 +1120,29 @@ PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, U
  */
 HRESULT MSSTYLES_CloseThemeClass(PTHEME_CLASS tc)
 {
-    MSSTYLES_CloseThemeFile (tc->tf);
+    LONG refcount;
+
+    __TRY
+    {
+        if (tc->signature != THEME_CLASS_SIGNATURE)
+            tc = NULL;
+    }
+    __EXCEPT_PAGE_FAULT
+    {
+        tc = NULL;
+    }
+    __ENDTRY
+
+    if (!tc)
+    {
+        WARN("Invalid theme class handle\n");
+        return E_HANDLE;
+    }
+
+    refcount = InterlockedDecrement(&tc->refcount);
+    /* Some buggy apps may double free HTHEME handles */
+    if (refcount >= 0)
+        MSSTYLES_CloseThemeFile(tc->tf);
     return S_OK;
 }
 
@@ -1084,25 +1181,112 @@ PTHEME_PROPERTY MSSTYLES_FindProperty(PTHEME_CLASS tc, int iPartId, int iStateId
 }
 
 /* Prepare a bitmap to be used for alpha blending */
-static BOOL prepare_alpha (HBITMAP bmp, BOOL* hasAlpha)
+static BOOL prepare_alpha (HBITMAP bmp, BOOL* hasAlpha, BOOL *hasDefaultTransparentColour)
 {
     DIBSECTION dib;
-    int n;
+    int n, stride;
     BYTE* p;
 
     *hasAlpha = FALSE;
+    *hasDefaultTransparentColour = FALSE;
 
     if (!bmp || GetObjectW( bmp, sizeof(dib), &dib ) != sizeof(dib))
         return FALSE;
 
-    if (dib.dsBm.bmBitsPixel != 32 || dib.dsBmih.biCompression != BI_RGB)
-        /* nothing to do */
+    if (dib.dsBm.bmBitsPixel <= 8)
+    {
+        RGBQUAD p[256];
+        HDC hdc = CreateCompatibleDC(NULL);
+        HBITMAP prev = SelectObject(hdc, bmp);
+        UINT count = GetDIBColorTable(hdc, 0, 256, p);
+
+        SelectObject(hdc, prev);
+        DeleteDC(hdc);
+
+        for (n = 0; n < count; ++n)
+        {
+            if (RGB(p[n].rgbRed, p[n].rgbGreen, p[n].rgbBlue) == DEFAULT_TRANSPARENT_COLOR)
+            {
+                *hasDefaultTransparentColour = TRUE;
+                return TRUE;
+            }
+        }
+        return TRUE;
+    }
+
+    if (dib.dsBm.bmBitsPixel == 16)
+    {
+        unsigned short transparent_color;
+        int y;
+
+        if (dib.dsBmih.biCompression == BI_RGB)
+        {
+            transparent_color = 0x7c00 | 0x001f;
+        }
+        else if (dib.dsBmih.biCompression == BI_BITFIELDS && dib.dsBitfields[0])
+        {
+            transparent_color = dib.dsBitfields[0] | dib.dsBitfields[2];
+        }
+        else
+        {
+            WARN("biCompression %ld, bpp %d not checked for default transparent colour.\n", dib.dsBmih.biCompression, dib.dsBm.bmBitsPixel);
+            return TRUE;
+        }
+        stride = (dib.dsBmih.biWidth * 2 + 3) & ~3;
+        p = dib.dsBm.bmBits;
+        for (y = 0; y < dib.dsBmih.biHeight; ++y)
+        {
+            p = (BYTE *)dib.dsBm.bmBits + stride * y;
+            for (n = 0; n < dib.dsBmih.biWidth; ++n, p += 2)
+            {
+                if ((p[0] | (p[1] << 8)) == transparent_color)
+                {
+                    *hasDefaultTransparentColour = TRUE;
+                    return TRUE;
+                }
+            }
+        }
+        return TRUE;
+    }
+
+    if (dib.dsBmih.biCompression != BI_RGB)
+    {
+        WARN("biCompression %ld, bpp %d not checked for default transparent colour.\n", dib.dsBmih.biCompression, dib.dsBm.bmBitsPixel);
+        return TRUE;
+    }
+
+    if (dib.dsBm.bmBitsPixel == 24)
+    {
+        int y;
+
+        stride = (dib.dsBmih.biWidth * 3 + 3) & ~3;
+        p = dib.dsBm.bmBits;
+        for (y = 0; y < dib.dsBmih.biHeight; ++y)
+        {
+            p = (BYTE *)dib.dsBm.bmBits + stride * y;
+            for (n = 0; n < dib.dsBmih.biWidth; ++n, p += 3)
+            {
+                if (RGB(p[0], p[1], p[2]) == DEFAULT_TRANSPARENT_COLOR)
+                {
+                    *hasDefaultTransparentColour = TRUE;
+                    return TRUE;
+                }
+            }
+        }
+        return TRUE;
+    }
+
+    if (dib.dsBm.bmBitsPixel != 32)
         return TRUE;
 
     /* If all alpha values are 0xff, don't use alpha blending */
     for (n = 0, p = dib.dsBm.bmBits; n < dib.dsBmih.biWidth * dib.dsBmih.biHeight; n++, p += 4)
+    {
         if ((*hasAlpha = (p[3] != 0xff)))
             break;
+        if (RGB(p[0], p[1], p[2]) == DEFAULT_TRANSPARENT_COLOR)
+            *hasDefaultTransparentColour = TRUE;
+    }
 
     if (!*hasAlpha)
         return TRUE;
@@ -1122,11 +1306,13 @@ static BOOL prepare_alpha (HBITMAP bmp, BOOL* hasAlpha)
     return TRUE;
 }
 
-HBITMAP MSSTYLES_LoadBitmap (PTHEME_CLASS tc, LPCWSTR lpFilename, BOOL* hasAlpha)
+HBITMAP MSSTYLES_LoadBitmap (PTHEME_CLASS tc, LPCWSTR lpFilename, BOOL* hasAlpha, BOOL *hasDefaultTransparentColour)
 {
     WCHAR szFile[MAX_PATH];
     LPWSTR tmp;
     PTHEME_IMAGE img;
+    BOOL has_default;
+
     lstrcpynW(szFile, lpFilename, ARRAY_SIZE(szFile));
     tmp = szFile;
     do {
@@ -1143,15 +1329,20 @@ HBITMAP MSSTYLES_LoadBitmap (PTHEME_CLASS tc, LPCWSTR lpFilename, BOOL* hasAlpha
         {
             TRACE ("found %p %s: %p\n", img, debugstr_w (img->name), img->image);
             *hasAlpha = img->hasAlpha;
+            if (hasDefaultTransparentColour)
+                *hasDefaultTransparentColour = img->hasDefaultTransparentColour;
             return img->image;
         }
         img = img->next;
     }
     /* Not found? Load from resources */
-    img = heap_alloc(sizeof(*img));
+    img = malloc(sizeof(*img));
     img->image = LoadImageW(tc->hTheme, szFile, IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
-    prepare_alpha (img->image, hasAlpha);
+    prepare_alpha (img->image, hasAlpha, &has_default);
     img->hasAlpha = *hasAlpha;
+    img->hasDefaultTransparentColour = has_default;
+    if (hasDefaultTransparentColour)
+        *hasDefaultTransparentColour = has_default;
     /* ...and stow away for later reuse. */
     lstrcpyW (img->name, szFile);
     img->next = tc->tf->images;

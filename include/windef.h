@@ -54,76 +54,45 @@ extern "C" {
 # endif
 #endif
 
-#ifndef _MSC_VER
-# undef __stdcall
-# ifdef __i386__
-#  ifdef __GNUC__
-#   if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 2)) || defined(__APPLE__)
-#    define __stdcall __attribute__((__stdcall__)) __attribute__((__force_align_arg_pointer__))
-#   else
-#    define __stdcall __attribute__((__stdcall__))
-#   endif
+#if !defined(_MSC_VER) && !defined(__MINGW32__)
+
+#undef __stdcall
+#undef __cdecl
+#undef __fastcall
+#undef __thiscall
+
+#ifdef WINE_UNIX_LIB
+# define __stdcall
+# define __cdecl
+#else
+# if defined(__i386__) && defined(__GNUC__)
+#  if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 2)) || defined(__APPLE__)
+#   define __stdcall __attribute__((__stdcall__)) __attribute__((__force_align_arg_pointer__))
+#   define __cdecl __attribute__((__cdecl__)) __attribute__((__force_align_arg_pointer__))
 #  else
-#   error You need to define __stdcall for your compiler
+#   define __stdcall __attribute__((__stdcall__))
+#   define __cdecl __attribute__((__cdecl__))
 #  endif
-# elif defined(__x86_64__) && defined (__GNUC__)
+# elif defined(__x86_64__) && defined(__GNUC__)
 #  if __has_attribute(__force_align_arg_pointer__)
 #   define __stdcall __attribute__((ms_abi)) __attribute__((__force_align_arg_pointer__))
 #  else
 #   define __stdcall __attribute__((ms_abi))
 #  endif
-# elif defined(__arm__) && defined (__GNUC__) && !defined(__SOFTFP__) && !defined(__MINGW32__) && !defined(__CYGWIN__)
-#   define __stdcall __attribute__((pcs("aapcs-vfp")))
-# elif defined(__aarch64__) && defined (__GNUC__) && __has_attribute(ms_abi)
-#  define __stdcall __attribute__((ms_abi))
-# else  /* __i386__ */
-#  define __stdcall
-# endif  /* __i386__ */
-#endif /* __stdcall */
-
-#ifndef _MSC_VER
-# undef __cdecl
-# if defined(__i386__) && defined(__GNUC__)
-#  if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 2)) || defined(__APPLE__)
-#   define __cdecl __attribute__((__cdecl__)) __attribute__((__force_align_arg_pointer__))
-#  else
-#   define __cdecl __attribute__((__cdecl__))
-#  endif
-# else
 #  define __cdecl __stdcall
-# endif
-#endif
-
-#if !defined(_MSC_VER) && !defined(__fastcall)
-# define __fastcall __stdcall
-#endif
-
-#if (!defined(_MSC_VER) || !defined(__clang__)) && !defined(__thiscall)
-# define __thiscall __stdcall
-#endif
-
-#ifndef __ms_va_list
-# if (defined(__x86_64__) || (defined(__aarch64__) && __has_attribute(ms_abi))) && defined (__GNUC__)
 #  define __ms_va_list __builtin_ms_va_list
-#  define __ms_va_start(list,arg) __builtin_ms_va_start(list,arg)
-#  define __ms_va_end(list) __builtin_ms_va_end(list)
-#  define __ms_va_copy(dest,src) __builtin_ms_va_copy(dest,src)
 # else
-#  define __ms_va_list va_list
-#  define __ms_va_start(list,arg) va_start(list,arg)
-#  define __ms_va_end(list) va_end(list)
-#  ifdef va_copy
-#   define __ms_va_copy(dest,src) va_copy(dest,src)
-#  else
-#   define __ms_va_copy(dest,src) ((dest) = (src))
-#  endif
+#  define __stdcall
+#  define __cdecl
 # endif
-#endif
+# define __fastcall __stdcall
+# define __thiscall __stdcall
+#endif  /* WINE_UNIX_LIB */
 
-#if defined(__arm__) && defined (__GNUC__) && !defined(__SOFTFP__) && !defined(__MINGW32__) && !defined(__CYGWIN__)
-# define WINAPIV __attribute__((pcs("aapcs")))
-#else
-# define WINAPIV __cdecl
+#endif  /* _MSC_VER || __MINGW32__ */
+
+#if !defined(__ms_va_list) && !defined(WINE_UNIX_LIB)
+# define __ms_va_list va_list
 #endif
 
 #ifdef __WINESRC__
@@ -138,9 +107,6 @@ extern "C" {
 #endif
 #ifndef _fastcall
 #define _fastcall   __ONLY_IN_WINELIB(__stdcall)
-#endif
-#ifndef __fastcall
-#define __fastcall  __ONLY_IN_WINELIB(__stdcall)
 #endif
 #ifndef cdecl
 #define cdecl       __ONLY_IN_WINELIB(__cdecl)
@@ -199,12 +165,19 @@ extern "C" {
 #define _CDECL      __cdecl
 #define APIENTRY    WINAPI
 #define CONST       __ONLY_IN_WINELIB(const)
+#ifndef WINAPIV
+# define WINAPIV CDECL
+#endif
 
 /* Misc. constants. */
 
 #undef NULL
 #ifdef __cplusplus
-#define NULL  0
+#ifndef _WIN64
+#define NULL 0
+#else
+#define NULL 0LL
+#endif
 #else
 #define NULL  ((void*)0)
 #endif
@@ -266,7 +239,6 @@ typedef unsigned int    DWORD,      *PDWORD,   *LPDWORD;
 
 #ifdef __WINESRC__
 #define WINE_NO_UNICODE_MACROS 1
-#define WINE_STRICT_PROTOTYPES 1
 #endif
 
 #ifdef WINE_NO_UNICODE_MACROS
@@ -344,7 +316,7 @@ typedef HICON HCURSOR;
 
 /* Callback function pointers types */
 
-#ifdef WINE_STRICT_PROTOTYPES
+#ifndef WINE_NO_STRICT_PROTOTYPES
 typedef INT_PTR (CALLBACK *FARPROC)(void);
 typedef INT_PTR (CALLBACK *NEARPROC)(void);
 typedef INT_PTR (CALLBACK *PROC)(void);
@@ -408,23 +380,13 @@ typedef struct _POINTL
 
 typedef struct tagPOINTS
 {
-#ifdef WORDS_BIGENDIAN
-    SHORT y;
-    SHORT x;
-#else
     SHORT x;
     SHORT y;
-#endif
 } POINTS, *PPOINTS, *LPPOINTS;
 
 typedef struct _FILETIME {
-#ifdef WORDS_BIGENDIAN
-    DWORD  dwHighDateTime;
-    DWORD  dwLowDateTime;
-#else
     DWORD  dwLowDateTime;
     DWORD  dwHighDateTime;
-#endif
 } FILETIME, *PFILETIME, *LPFILETIME;
 #define _FILETIME_
 
@@ -466,5 +428,11 @@ typedef enum DPI_AWARENESS
 #ifdef __cplusplus
 }
 #endif
+
+typedef enum {
+  DPI_HOSTING_BEHAVIOR_INVALID = -1,
+  DPI_HOSTING_BEHAVIOR_DEFAULT = 0,
+  DPI_HOSTING_BEHAVIOR_MIXED = 1
+} DPI_HOSTING_BEHAVIOR;
 
 #endif /* _WINDEF_ */

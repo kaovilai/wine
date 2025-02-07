@@ -36,11 +36,19 @@
 44 stub -noname ClassicSystemParametersInfoA
 45 stub -noname ClassicSystemParametersInfoW
 46 stub -noname ClassicAdjustWindowRectEx
+47 stdcall DrawThemeBackgroundEx(ptr ptr long long ptr ptr)
 48 stub -noname GetThemeParseErrorInfo
 60 stub -noname CreateThemeDataFromObjects
 61 stdcall OpenThemeDataEx(ptr wstr long)
 62 stub -noname ServerClearStockObjects
 63 stub -noname MarkSelection
+104 stdcall -noname RefreshImmersiveColorPolicyState()
+132 stdcall -noname ShouldAppsUseDarkMode()
+133 stdcall -noname AllowDarkModeForWindow(ptr long)
+135 stdcall -noname SetPreferredAppMode(long)
+136 stdcall -noname FlushMenuThemes()
+137 stdcall -noname IsDarkModeAllowedForWindow(ptr)
+138 stdcall -noname ShouldSystemUseDarkMode()
 
 # Standard functions
 @ stdcall BeginBufferedAnimation(ptr ptr ptr long ptr ptr ptr ptr)
@@ -53,7 +61,6 @@
 @ stdcall BufferedPaintUnInit()
 @ stdcall CloseThemeData(ptr)
 @ stdcall DrawThemeBackground(ptr ptr long long ptr ptr)
-@ stdcall DrawThemeBackgroundEx(ptr ptr long long ptr ptr)
 @ stdcall DrawThemeEdge(ptr ptr long long ptr long long ptr)
 @ stdcall DrawThemeIcon(ptr ptr long long ptr ptr long)
 @ stdcall DrawThemeParentBackground(ptr ptr ptr)

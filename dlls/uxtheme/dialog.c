@@ -129,13 +129,27 @@ LRESULT WINAPI UXTHEME_DefDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, BOO
     case WM_ERASEBKGND:
     {
         dlgproc = (WNDPROC)GetWindowLongPtrW(hwnd, DWLP_DLGPROC);
-        lr = CallWindowProcW(dlgproc, hwnd, msg, wp, lp);
-        if (lr)
-            return lr;
+        SetWindowLongPtrW(hwnd, DWLP_MSGRESULT, 0);
+        lr = LOWORD(CallWindowProcW(dlgproc, hwnd, msg, wp, lp));
+        if (lr || !IsWindow(hwnd))
+            return GetWindowLongPtrW(hwnd, DWLP_MSGRESULT);
 
         brush = get_dialog_background_brush(hwnd, TRUE);
         if (!brush)
-            break;
+        {
+            /* Copied from DEFDLG_Proc() */
+            brush = (HBRUSH)SendMessageW(hwnd, WM_CTLCOLORDLG, wp, (LPARAM)hwnd);
+            if (!brush)
+                brush = (HBRUSH)DefWindowProcW(hwnd, WM_CTLCOLORDLG, wp, (LPARAM)hwnd);
+            if (brush)
+            {
+                hdc = (HDC)wp;
+                GetClientRect(hwnd, &rect);
+                DPtoLP(hdc, (LPPOINT)&rect, 2);
+                FillRect(hdc, &rect, brush);
+            }
+            return TRUE;
+        }
 
         /* Using FillRect() to draw background could introduce a tiling effect if the destination
          * rectangle is larger than the pattern brush size, which is usually 10x600. This bug is
@@ -149,16 +163,19 @@ LRESULT WINAPI UXTHEME_DefDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, BOO
         SetBrushOrgEx(hdc, old_org.x, old_org.y, NULL);
         return TRUE;
     }
+    case WM_CTLCOLORMSGBOX:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORDLG:
     case WM_CTLCOLORSTATIC:
     {
         dlgproc = (WNDPROC)GetWindowLongPtrW(hwnd, DWLP_DLGPROC);
         lr = CallWindowProcW(dlgproc, hwnd, msg, wp, lp);
-        if (lr)
+        if (lr || !IsWindow(hwnd))
             return lr;
 
         brush = get_dialog_background_brush(hwnd, FALSE);
         if (!brush)
-            break;
+            return DefWindowProcW(hwnd, msg, wp, lp);
 
         hdc = (HDC)wp;
         SetBkColor(hdc, GetSysColor(COLOR_BTNFACE));

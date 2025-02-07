@@ -50,14 +50,6 @@ static IWbemContext * unsafe_get_context_from_namedvalueset( IDispatch *disp )
     return valueset ? valueset->context : NULL;
 }
 
-static WCHAR *heap_strdupW( const WCHAR *src )
-{
-    WCHAR *dst;
-    if (!src) return NULL;
-    if ((dst = malloc( (lstrlenW( src ) + 1) * sizeof(WCHAR) ))) lstrcpyW( dst, src );
-    return dst;
-}
-
 struct services;
 
 static HRESULT EnumVARIANT_create( struct services *, IEnumWbemClassObject *, IEnumVARIANT ** );
@@ -109,7 +101,7 @@ static HRESULT get_typeinfo( enum type_id tid, ITypeInfo **ret )
         hr = LoadRegTypeLib( &LIBID_WbemScripting, 1, 2, LOCALE_SYSTEM_DEFAULT, &typelib );
         if (FAILED( hr ))
         {
-            ERR( "LoadRegTypeLib failed: %08x\n", hr );
+            ERR( "LoadRegTypeLib failed: %#lx\n", hr );
             return hr;
         }
         if (InterlockedCompareExchangePointer( (void **)&wbemdisp_typelib, typelib, NULL ))
@@ -122,7 +114,7 @@ static HRESULT get_typeinfo( enum type_id tid, ITypeInfo **ret )
         hr = ITypeLib_GetTypeInfoOfGuid( wbemdisp_typelib, wbemdisp_tid_id[tid], &typeinfo );
         if (FAILED( hr ))
         {
-            ERR( "GetTypeInfoOfGuid(%s) failed: %08x\n", debugstr_guid(wbemdisp_tid_id[tid]), hr );
+            ERR( "GetTypeInfoOfGuid(%s) failed: %#lx\n", debugstr_guid(wbemdisp_tid_id[tid]), hr );
             return hr;
         }
         if (InterlockedCompareExchangePointer( (void **)(wbemdisp_typeinfo + tid), typeinfo, NULL ))
@@ -199,7 +191,7 @@ static HRESULT WINAPI property_GetTypeInfo( ISWbemProperty *iface, UINT index,
                                             LCID lcid, ITypeInfo **info )
 {
     struct property *property = impl_from_ISWbemProperty( iface );
-    TRACE( "%p, %u, %u, %p\n", property, index, lcid, info );
+    TRACE( "%p, %u, %#lx, %p\n", property, index, lcid, info );
 
     return get_typeinfo( ISWbemProperty_tid, info );
 }
@@ -211,7 +203,7 @@ static HRESULT WINAPI property_GetIDsOfNames( ISWbemProperty *iface, REFIID riid
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %s, %p, %u, %u, %p\n", property, debugstr_guid(riid), names, count, lcid, dispid );
+    TRACE( "%p, %s, %p, %u, %#lx, %p\n", property, debugstr_guid(riid), names, count, lcid, dispid );
 
     if (!names || !count || !dispid) return E_INVALIDARG;
 
@@ -232,7 +224,7 @@ static HRESULT WINAPI property_Invoke( ISWbemProperty *iface, DISPID member, REF
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %d, %s, %d, %d, %p, %p, %p, %p\n", property, member, debugstr_guid(riid),
+    TRACE( "%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p\n", property, member, debugstr_guid(riid),
            lcid, flags, params, result, excep_info, arg_err );
 
     hr = get_typeinfo( ISWbemProperty_tid, &typeinfo );
@@ -398,7 +390,7 @@ static HRESULT WINAPI propertyset_GetTypeInfo( ISWbemPropertySet *iface,
                                                UINT index, LCID lcid, ITypeInfo **info )
 {
     struct propertyset *propertyset = impl_from_ISWbemPropertySet( iface );
-    TRACE( "%p, %u, %u, %p\n", propertyset, index, lcid, info );
+    TRACE( "%p, %u, %#lx, %p\n", propertyset, index, lcid, info );
 
     return get_typeinfo( ISWbemPropertySet_tid, info );
 }
@@ -410,7 +402,7 @@ static HRESULT WINAPI propertyset_GetIDsOfNames( ISWbemPropertySet *iface, REFII
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %s, %p, %u, %u, %p\n", propertyset, debugstr_guid(riid), names, count, lcid, dispid );
+    TRACE( "%p, %s, %p, %u, %#lx, %p\n", propertyset, debugstr_guid(riid), names, count, lcid, dispid );
 
     if (!names || !count || !dispid) return E_INVALIDARG;
 
@@ -431,7 +423,7 @@ static HRESULT WINAPI propertyset_Invoke( ISWbemPropertySet *iface, DISPID membe
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %d, %s, %d, %d, %p, %p, %p, %p\n", propertyset, member, debugstr_guid(riid),
+    TRACE( "%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p\n", propertyset, member, debugstr_guid(riid),
            lcid, flags, params, result, excep_info, arg_err );
 
     hr = get_typeinfo( ISWbemPropertySet_tid, &typeinfo );
@@ -457,7 +449,7 @@ static HRESULT WINAPI propertyset_Item( ISWbemPropertySet *iface, BSTR name,
     HRESULT hr;
     VARIANT var;
 
-    TRACE( "%p, %s, %08x, %p\n", propertyset, debugstr_w(name), flags, prop );
+    TRACE( "%p, %s, %#lx, %p\n", propertyset, debugstr_w(name), flags, prop );
 
     hr = IWbemClassObject_Get( propertyset->object, name, 0, &var, NULL, NULL );
     if (SUCCEEDED(hr))
@@ -637,7 +629,7 @@ static HRESULT WINAPI method_GetTypeInfo(
 {
     struct method *method = impl_from_ISWbemMethod( iface );
 
-    TRACE( "%p, %u, %u, %p\n", method, index, lcid, info );
+    TRACE( "%p, %u, %#lx, %p\n", method, index, lcid, info );
 
     return get_typeinfo( ISWbemMethod_tid, info );
 }
@@ -654,7 +646,7 @@ static HRESULT WINAPI method_GetIDsOfNames(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %s, %p, %u, %u, %p\n", method, debugstr_guid(riid), names, count, lcid, dispid );
+    TRACE( "%p, %s, %p, %u, %#lx, %p\n", method, debugstr_guid(riid), names, count, lcid, dispid );
 
     if (!names || !count || !dispid) return E_INVALIDARG;
 
@@ -682,7 +674,7 @@ static HRESULT WINAPI method_Invoke(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %d, %s, %d, %d, %p, %p, %p, %p\n", method, member, debugstr_guid(riid),
+    TRACE( "%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p\n", method, member, debugstr_guid(riid),
            lcid, flags, params, result, excep_info, arg_err );
 
     hr = get_typeinfo( ISWbemMethod_tid, &typeinfo );
@@ -784,7 +776,7 @@ static HRESULT SWbemMethod_create( struct methodset *set, const WCHAR *name, ISW
     method->refs = 1;
     method->set = set;
     ISWbemMethodSet_AddRef( &method->set->ISWbemMethodSet_iface );
-    if (!(method->name = heap_strdupW( name )))
+    if (!(method->name = wcsdup( name )))
     {
         ISWbemMethod_Release( &method->ISWbemMethod_iface );
         return E_OUTOFMEMORY;
@@ -858,7 +850,7 @@ static HRESULT WINAPI methodset_GetTypeInfo( ISWbemMethodSet *iface,
 {
     struct methodset *set = impl_from_ISWbemMethodSet( iface );
 
-    TRACE( "%p, %u, %u, %p\n", set, index, lcid, info );
+    TRACE( "%p, %u, %#lx, %p\n", set, index, lcid, info );
 
     return get_typeinfo( ISWbemMethodSet_tid, info );
 }
@@ -875,7 +867,7 @@ static HRESULT WINAPI methodset_GetIDsOfNames(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %s, %p, %u, %u, %p\n", set, debugstr_guid(riid), names, count, lcid, dispid );
+    TRACE( "%p, %s, %p, %u, %#lx, %p\n", set, debugstr_guid(riid), names, count, lcid, dispid );
 
     if (!names || !count || !dispid) return E_INVALIDARG;
 
@@ -903,7 +895,7 @@ static HRESULT WINAPI methodset_Invoke(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %d, %s, %d, %d, %p, %p, %p, %p\n", set, member, debugstr_guid(riid),
+    TRACE( "%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p\n", set, member, debugstr_guid(riid),
            lcid, flags, params, result, excep_info, arg_err );
 
     hr = get_typeinfo( ISWbemMethodSet_tid, &typeinfo );
@@ -935,7 +927,7 @@ static HRESULT WINAPI methodset_Item(
     IWbemClassObject *in_sign, *out_sign;
     HRESULT hr;
 
-    TRACE("%p, %s, %#x, %p\n", set, debugstr_w(name), flags, method);
+    TRACE("%p, %s, %#lx, %p\n", set, debugstr_w(name), flags, method);
 
     *method = NULL;
 
@@ -1069,7 +1061,7 @@ static HRESULT WINAPI object_GetTypeInfo(
     ITypeInfo **info )
 {
     struct object *object = impl_from_ISWbemObject( iface );
-    FIXME( "%p, %u, %u, %p\n", object, index, lcid, info );
+    FIXME( "%p, %u, %#lx, %p\n", object, index, lcid, info );
     return E_NOTIMPL;
 }
 
@@ -1189,7 +1181,7 @@ static HRESULT WINAPI object_GetIDsOfNames(
     UINT i;
     ITypeInfo *typeinfo;
 
-    TRACE( "%p, %s, %p, %u, %u, %p\n", object, debugstr_guid(riid), names, count, lcid, dispid );
+    TRACE( "%p, %s, %p, %u, %#lx, %p\n", object, debugstr_guid(riid), names, count, lcid, dispid );
 
     if (!names || !count || !dispid) return E_INVALIDARG;
 
@@ -1251,7 +1243,7 @@ static VARTYPE to_vartype( CIMTYPE type )
     case CIM_REAL32:    return VT_R4;
 
     default:
-        ERR("unhandled type %u\n", type);
+        ERR( "unhandled type %lu\n", type );
         break;
     }
     return 0;
@@ -1276,7 +1268,7 @@ static HRESULT WINAPI object_Invoke(
     CIMTYPE type;
     HRESULT hr;
 
-    TRACE( "%p, %x, %s, %u, %x, %p, %p, %p, %p\n", object, member, debugstr_guid(riid),
+    TRACE( "%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p\n", object, member, debugstr_guid(riid),
            lcid, flags, params, result, excep_info, arg_err );
 
     if (member <= DISPID_BASE_METHOD)
@@ -1294,7 +1286,8 @@ static HRESULT WINAPI object_Invoke(
     if (!(name = get_member_name( object, member, &type )))
         return DISP_E_MEMBERNOTFOUND;
 
-    if (flags == (DISPATCH_METHOD|DISPATCH_PROPERTYGET))
+    if (flags == (DISPATCH_METHOD|DISPATCH_PROPERTYGET) ||
+        flags == DISPATCH_PROPERTYGET)
     {
         memset( params, 0, sizeof(*params) );
         return IWbemClassObject_Get( object->object, name, 0, result, NULL, NULL );
@@ -1318,7 +1311,7 @@ static HRESULT WINAPI object_Invoke(
     }
     else
     {
-        FIXME( "flags %x not supported\n", flags );
+        FIXME( "flags %#x not supported\n", flags );
         return E_NOTIMPL;
     }
 }
@@ -1486,7 +1479,7 @@ static HRESULT WINAPI object_ExecMethod_(
     VARIANT path;
     HRESULT hr;
 
-    TRACE( "%p, %s, %p, %#x, %p, %p\n", object, debugstr_w(method), in_params, flags, valueset, out_params );
+    TRACE( "%p, %s, %p, %#lx, %p, %p\n", object, debugstr_w(method), in_params, flags, valueset, out_params );
 
     V_VT( &path ) = VT_EMPTY;
     hr = IWbemClassObject_Get( object->object, L"__PATH", 0, &path, NULL, NULL );
@@ -1536,7 +1529,7 @@ static HRESULT WINAPI object_GetObjectText_(
 {
     struct object *object = impl_from_ISWbemObject( iface );
 
-    TRACE( "%p, %#x, %p\n", object, flags, text );
+    TRACE( "%p, %#lx, %p\n", object, flags, text );
 
     return IWbemClassObject_GetObjectText( object->object, flags, text );
 }
@@ -1769,7 +1762,7 @@ static HRESULT WINAPI objectset_GetTypeInfo(
     ITypeInfo **info )
 {
     struct objectset *objectset = impl_from_ISWbemObjectSet( iface );
-    TRACE( "%p, %u, %u, %p\n", objectset, index, lcid, info );
+    TRACE( "%p, %u, %#lx, %p\n", objectset, index, lcid, info );
 
     return get_typeinfo( ISWbemObjectSet_tid, info );
 }
@@ -1786,7 +1779,7 @@ static HRESULT WINAPI objectset_GetIDsOfNames(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %s, %p, %u, %u, %p\n", objectset, debugstr_guid(riid), names, count, lcid, dispid );
+    TRACE( "%p, %s, %p, %u, %#lx, %p\n", objectset, debugstr_guid(riid), names, count, lcid, dispid );
 
     if (!names || !count || !dispid) return E_INVALIDARG;
 
@@ -1814,7 +1807,7 @@ static HRESULT WINAPI objectset_Invoke(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %d, %s, %d, %d, %p, %p, %p, %p\n", objectset, member, debugstr_guid(riid),
+    TRACE( "%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p\n", objectset, member, debugstr_guid(riid),
            lcid, flags, params, result, excep_info, arg_err );
 
     hr = get_typeinfo( ISWbemObjectSet_tid, &typeinfo );
@@ -1886,7 +1879,7 @@ static HRESULT WINAPI objectset_ItemIndex(
     IEnumVARIANT *enum_var;
     VARIANT var;
 
-    TRACE( "%p, %d, %p\n", objectset, lIndex, objWbemObject );
+    TRACE( "%p, %ld, %p\n", objectset, lIndex, objWbemObject );
 
     *objWbemObject = NULL;
     hr = ISWbemObjectSet_get_Count( iface, &count );
@@ -2025,7 +2018,7 @@ static HRESULT WINAPI enumvar_Next( IEnumVARIANT *iface, ULONG celt, VARIANT *va
     IWbemClassObject *obj;
     ULONG count = 0;
 
-    TRACE( "%p, %u, %p, %p\n", iface, celt, var, fetched );
+    TRACE( "%p, %lu, %p, %p\n", iface, celt, var, fetched );
 
     if (celt) IEnumWbemClassObject_Next( enumvar->objectenum, WBEM_INFINITE, 1, &obj, &count );
     if (count)
@@ -2048,7 +2041,7 @@ static HRESULT WINAPI enumvar_Skip( IEnumVARIANT *iface, ULONG celt )
 {
     struct enumvar *enumvar = impl_from_IEnumVARIANT( iface );
 
-    TRACE( "%p, %u\n", iface, celt );
+    TRACE( "%p, %lu\n", iface, celt );
 
     return IEnumWbemClassObject_Skip( enumvar->objectenum, WBEM_INFINITE, celt );
 }
@@ -2166,7 +2159,7 @@ static HRESULT WINAPI services_GetTypeInfo(
     ITypeInfo **info )
 {
     struct services *services = impl_from_ISWbemServices( iface );
-    TRACE( "%p, %u, %u, %p\n", services, index, lcid, info );
+    TRACE( "%p, %u, %#lx, %p\n", services, index, lcid, info );
 
     return get_typeinfo( ISWbemServices_tid, info );
 }
@@ -2183,7 +2176,7 @@ static HRESULT WINAPI services_GetIDsOfNames(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %s, %p, %u, %u, %p\n", services, debugstr_guid(riid), names, count, lcid, dispid );
+    TRACE( "%p, %s, %p, %u, %#lx, %p\n", services, debugstr_guid(riid), names, count, lcid, dispid );
 
     if (!names || !count || !dispid) return E_INVALIDARG;
 
@@ -2211,7 +2204,7 @@ static HRESULT WINAPI services_Invoke(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %d, %s, %d, %d, %p, %p, %p, %p\n", services, member, debugstr_guid(riid),
+    TRACE( "%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p\n", services, member, debugstr_guid(riid),
            lcid, flags, params, result, excep_info, arg_err );
 
     hr = get_typeinfo( ISWbemServices_tid, &typeinfo );
@@ -2235,7 +2228,7 @@ static HRESULT WINAPI services_Get(
     IWbemClassObject *obj;
     HRESULT hr;
 
-    TRACE( "%p, %s, %d, %p, %p\n", iface, debugstr_w(strObjectPath), iFlags, objWbemNamedValueSet,
+    TRACE( "%p, %s, %#lx, %p, %p\n", iface, debugstr_w(strObjectPath), iFlags, objWbemNamedValueSet,
            objWbemObject );
 
     if (objWbemNamedValueSet) FIXME( "ignoring context\n" );
@@ -2303,7 +2296,7 @@ static HRESULT WINAPI services_InstancesOf(
     BSTR query, wql = SysAllocString( L"WQL" );
     HRESULT hr;
 
-    TRACE( "%p, %s, %x, %p, %p\n", iface, debugstr_w(strClass), iFlags, objWbemNamedValueSet,
+    TRACE( "%p, %s, %#lx, %p, %p\n", iface, debugstr_w(strClass), iFlags, objWbemNamedValueSet,
            objWbemObjectSet );
 
     if (!(query = build_query_string( strClass )))
@@ -2364,7 +2357,7 @@ static HRESULT WINAPI services_ExecQuery(
     IEnumWbemClassObject *iter;
     HRESULT hr;
 
-    TRACE( "%p, %s, %s, %x, %p, %p\n", iface, debugstr_w(strQuery), debugstr_w(strQueryLanguage),
+    TRACE( "%p, %s, %s, %#lx, %p, %p\n", iface, debugstr_w(strQuery), debugstr_w(strQueryLanguage),
            iFlags, objWbemNamedValueSet, objWbemObjectSet );
 
     if (objWbemNamedValueSet) FIXME( "ignoring context\n" );
@@ -2502,7 +2495,7 @@ static HRESULT WINAPI services_ExecMethod(
     IWbemContext *context;
     HRESULT hr;
 
-    TRACE( "%p, %s, %s, %p, %#x, %p, %p\n", services, debugstr_w(path), debugstr_w(method), in_sparams,
+    TRACE( "%p, %s, %s, %p, %#lx, %p, %p\n", services, debugstr_w(path), debugstr_w(method), in_sparams,
             flags, valueset, out_sparams );
 
     in_params = unsafe_object_impl_from_IDispatch( in_sparams );
@@ -2671,7 +2664,7 @@ static HRESULT WINAPI locator_GetTypeInfo(
     ITypeInfo **info )
 {
     struct locator *locator = impl_from_ISWbemLocator( iface );
-    TRACE( "%p, %u, %u, %p\n", locator, index, lcid, info );
+    TRACE( "%p, %u, %#lx, %p\n", locator, index, lcid, info );
 
     return get_typeinfo( ISWbemLocator_tid, info );
 }
@@ -2688,7 +2681,7 @@ static HRESULT WINAPI locator_GetIDsOfNames(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %s, %p, %u, %u, %p\n", locator, debugstr_guid(riid), names, count, lcid, dispid );
+    TRACE( "%p, %s, %p, %u, %#lx, %p\n", locator, debugstr_guid(riid), names, count, lcid, dispid );
 
     if (!names || !count || !dispid) return E_INVALIDARG;
 
@@ -2716,7 +2709,7 @@ static HRESULT WINAPI locator_Invoke(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %d, %s, %d, %d, %p, %p, %p, %p\n", locator, member, debugstr_guid(riid),
+    TRACE( "%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p\n", locator, member, debugstr_guid(riid),
            lcid, flags, params, result, excep_info, arg_err );
 
     hr = get_typeinfo( ISWbemLocator_tid, &typeinfo );
@@ -2771,7 +2764,7 @@ static HRESULT WINAPI locator_ConnectServer(
     BSTR resource;
     HRESULT hr;
 
-    TRACE( "%p, %s, %s, %s, %p, %s, %s, 0x%08x, %p, %p\n", iface, debugstr_w(strServer),
+    TRACE( "%p, %s, %s, %s, %p, %s, %s, %#lx, %p, %p\n", iface, debugstr_w(strServer),
            debugstr_w(strNamespace), debugstr_w(strUser), strPassword, debugstr_w(strLocale),
            debugstr_w(strAuthority), iSecurityFlags, objWbemNamedValueSet, objWbemServices );
 
@@ -2910,7 +2903,7 @@ static HRESULT WINAPI security_GetTypeInfo(
     ITypeInfo **info )
 {
     struct security *security = impl_from_ISWbemSecurity( iface );
-    TRACE( "%p, %u, %u, %p\n", security, index, lcid, info );
+    TRACE( "%p, %u, %#lx, %p\n", security, index, lcid, info );
 
     return get_typeinfo( ISWbemSecurity_tid, info );
 }
@@ -2927,7 +2920,7 @@ static HRESULT WINAPI security_GetIDsOfNames(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %s, %p, %u, %u, %p\n", security, debugstr_guid(riid), names, count, lcid, dispid );
+    TRACE( "%p, %s, %p, %u, %#lx, %p\n", security, debugstr_guid(riid), names, count, lcid, dispid );
 
     if (!names || !count || !dispid) return E_INVALIDARG;
 
@@ -2955,7 +2948,7 @@ static HRESULT WINAPI security_Invoke(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %d, %s, %d, %d, %p, %p, %p, %p\n", security, member, debugstr_guid(riid),
+    TRACE( "%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p\n", security, member, debugstr_guid(riid),
            lcid, flags, params, result, excep_info, arg_err );
 
     hr = get_typeinfo( ISWbemSecurity_tid, &typeinfo );
@@ -3143,7 +3136,7 @@ static HRESULT WINAPI namedvalue_GetTypeInfo(
 {
     struct namedvalue *value = impl_from_ISWbemNamedValue( iface );
 
-    TRACE( "%p, %u, %u, %p\n", value, index, lcid, info );
+    TRACE( "%p, %u, %#lx, %p\n", value, index, lcid, info );
 
     return get_typeinfo( ISWbemNamedValue_tid, info );
 }
@@ -3160,7 +3153,7 @@ static HRESULT WINAPI namedvalue_GetIDsOfNames(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %s, %p, %u, %u, %p\n", value, debugstr_guid(riid), names, count, lcid, dispid );
+    TRACE( "%p, %s, %p, %u, %#lx, %p\n", value, debugstr_guid(riid), names, count, lcid, dispid );
 
     if (!names || !count || !dispid) return E_INVALIDARG;
 
@@ -3188,7 +3181,7 @@ static HRESULT WINAPI namedvalue_Invoke(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %d, %s, %d, %d, %p, %p, %p, %p\n", set, member, debugstr_guid(riid),
+    TRACE( "%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p\n", set, member, debugstr_guid(riid),
            lcid, flags, params, result, excep_info, arg_err );
 
     hr = get_typeinfo( ISWbemNamedValue_tid, &typeinfo );
@@ -3321,7 +3314,7 @@ static HRESULT WINAPI namedvalueset_GetTypeInfo(
 {
     struct namedvalueset *set = impl_from_ISWbemNamedValueSet( iface );
 
-    TRACE( "%p, %u, %u, %p\n", set, index, lcid, info );
+    TRACE( "%p, %u, %#lx, %p\n", set, index, lcid, info );
 
     return get_typeinfo( ISWbemNamedValueSet_tid, info );
 }
@@ -3338,7 +3331,7 @@ static HRESULT WINAPI namedvalueset_GetIDsOfNames(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %s, %p, %u, %u, %p\n", set, debugstr_guid(riid), names, count, lcid, dispid );
+    TRACE( "%p, %s, %p, %u, %#lx, %p\n", set, debugstr_guid(riid), names, count, lcid, dispid );
 
     if (!names || !count || !dispid) return E_INVALIDARG;
 
@@ -3366,7 +3359,7 @@ static HRESULT WINAPI namedvalueset_Invoke(
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE( "%p, %d, %s, %d, %d, %p, %p, %p, %p\n", set, member, debugstr_guid(riid),
+    TRACE( "%p, %ld, %s, %#lx, %#x, %p, %p, %p, %p\n", set, member, debugstr_guid(riid),
            lcid, flags, params, result, excep_info, arg_err );
 
     hr = get_typeinfo( ISWbemNamedValueSet_tid, &typeinfo );
@@ -3398,7 +3391,7 @@ static HRESULT WINAPI namedvalueset_Item(
     VARIANT var;
     HRESULT hr;
 
-    TRACE("%p, %s, %#x, %p\n", set, debugstr_w(name), flags, value);
+    TRACE("%p, %s, %#lx, %p\n", set, debugstr_w(name), flags, value);
 
     if (SUCCEEDED(hr = IWbemContext_GetValue( set->context, name, flags, &var )))
     {
@@ -3428,7 +3421,7 @@ static HRESULT WINAPI namedvalueset_Add(
     struct namedvalueset *set = impl_from_ISWbemNamedValueSet( iface );
     HRESULT hr;
 
-    TRACE("%p, %s, %s, %#x, %p\n", set, debugstr_w(name), debugstr_variant(var), flags, value);
+    TRACE("%p, %s, %s, %#lx, %p\n", set, debugstr_w(name), debugstr_variant(var), flags, value);
 
     if (!name || !var || !value)
         return WBEM_E_INVALID_PARAMETER;
@@ -3448,7 +3441,7 @@ static HRESULT WINAPI namedvalueset_Remove(
 {
     struct namedvalueset *set = impl_from_ISWbemNamedValueSet( iface );
 
-    TRACE("%p, %s, %#x\n", set, debugstr_w(name), flags);
+    TRACE("%p, %s, %#lx\n", set, debugstr_w(name), flags);
 
     return IWbemContext_DeleteValue( set->context, name, flags );
 }

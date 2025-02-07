@@ -65,6 +65,7 @@ struct event
     struct list entry;
     DWORD code;
     BYTE *data;
+    WCHAR *path;
     unsigned int size;
 };
 
@@ -108,7 +109,7 @@ plugplay_rpc_handle __cdecl plugplay_register_listener(void)
     return listener;
 }
 
-DWORD __cdecl plugplay_get_event( plugplay_rpc_handle handle, BYTE **data, unsigned int *size )
+DWORD __cdecl plugplay_get_event( plugplay_rpc_handle handle, WCHAR **path, BYTE **data, unsigned int *size )
 {
     struct listener *listener = handle;
     struct event *event;
@@ -126,6 +127,7 @@ DWORD __cdecl plugplay_get_event( plugplay_rpc_handle handle, BYTE **data, unsig
     LeaveCriticalSection( &plugplay_cs );
 
     ret = event->code;
+    *path = event->path;
     *data = event->data;
     *size = event->size;
     free( event );
@@ -137,13 +139,17 @@ void __cdecl plugplay_unregister_listener( plugplay_rpc_handle handle )
     destroy_listener( handle );
 }
 
-void __cdecl plugplay_send_event( DWORD code, const BYTE *data, unsigned int size )
+void __cdecl plugplay_send_event( const WCHAR *path, DWORD code, const BYTE *data, unsigned int size )
 {
     struct listener *listener;
     struct event *event;
+    const DEV_BROADCAST_HDR *header = (const DEV_BROADCAST_HDR *)data;
 
-    BroadcastSystemMessageW( 0, NULL, WM_DEVICECHANGE, code, (LPARAM)data );
-    BroadcastSystemMessageW( 0, NULL, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED, 0 );
+    if (header->dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE)
+    {
+        BroadcastSystemMessageW( 0, NULL, WM_DEVICECHANGE, code, (LPARAM)data );
+        BroadcastSystemMessageW( 0, NULL, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED, 0 );
+    }
 
     EnterCriticalSection( &plugplay_cs );
 
@@ -158,6 +164,7 @@ void __cdecl plugplay_send_event( DWORD code, const BYTE *data, unsigned int siz
             break;
         }
 
+        event->path = wcsdup( path );
         event->code = code;
         memcpy( event->data, data, size );
         event->size = size;
@@ -190,7 +197,7 @@ static DWORD WINAPI service_handler( DWORD ctrl, DWORD event_type, LPVOID event_
         SetEvent( stop_event );
         return NO_ERROR;
     default:
-        WINE_FIXME( "got service ctrl %x\n", ctrl );
+        WINE_FIXME( "got service ctrl %lx\n", ctrl );
         status.dwCurrentState = SERVICE_RUNNING;
         SetServiceStatus( service_handle, &status );
         return NO_ERROR;
@@ -208,17 +215,17 @@ static void WINAPI ServiceMain( DWORD argc, LPWSTR *argv )
 
     if ((err = RpcServerUseProtseqEpA( protseq, 0, endpoint, NULL )))
     {
-        ERR("RpcServerUseProtseqEp() failed, error %u\n", err);
+        ERR("RpcServerUseProtseqEp() failed, error %lu\n", err);
         return;
     }
     if ((err = RpcServerRegisterIf( plugplay_v0_0_s_ifspec, NULL, NULL )))
     {
-        ERR("RpcServerRegisterIf() failed, error %u\n", err);
+        ERR("RpcServerRegisterIf() failed, error %lu\n", err);
         return;
     }
     if ((err = RpcServerListen( 1, RPC_C_LISTEN_MAX_CALLS_DEFAULT, TRUE )))
     {
-        ERR("RpcServerListen() failed, error %u\n", err);
+        ERR("RpcServerListen() failed, error %lu\n", err);
         return;
     }
 

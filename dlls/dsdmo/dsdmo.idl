@@ -41,3 +41,51 @@ coclass DirectSoundParamEqDMO {}
     uuid(87fc0268-9a55-4360-95aa-004a1d9de26c)
 ]
 coclass DirectSoundWavesReverbDMO {}
+
+[
+    uuid(ef3e932c-d40b-4f51-8ccf-3f98f1b29d5d),
+    threading(both),
+    progid("Microsoft.DirectSoundEchoDMO.1"),
+    vi_progid("Microsoft.DirectSoundEchoDMO")
+]
+coclass DirectSoundEchoDMO {}
+
+[
+    uuid(ef011f79-4000-406d-87af-bffb3fc39d57),
+    threading(both),
+    progid("Microsoft.DirectSoundCompressorDMO.1"),
+    vi_progid("Microsoft.DirectSoundCompressorDMO")
+]
+coclass DirectSoundCompressorDMO {}
+
+[
+    uuid(efe6629c-81f7-4281-bd91-c9d604a95af6),
+    threading(both),
+    progid("Microsoft.DirectSoundChorusDMO.1"),
+    vi_progid("Microsoft.DirectSoundChorusDMO")
+]
+coclass DirectSoundChorusDMO {}
+
+[
+    uuid(efca3d92-dfd8-4672-a603-7420894bad98),
+    threading(both),
+    progid("Microsoft.DirectSoundFlangerDMO.1"),
+    vi_progid("Microsoft.DirectSoundFlangerDMO")
+]
+coclass DirectSoundFlangerDMO {}
+
+[
+    uuid(ef114c90-cd1d-484e-96e5-09cfaf912a21),
+    threading(both),
+    progid("Microsoft.DirectSoundDistortionDMO.1"),
+    vi_progid("Microsoft.DirectSoundDistortionDMO")
+]
+coclass DirectSoundDistortionDMO {}
+
+[
+    uuid(dafd8210-5711-4b91-9fe3-f75b7ae279bf),
+    threading(both),
+    progid("Microsoft.DirectSoundGargleDMO.1"),
+    vi_progid("Microsoft.DirectSoundGargleDMO")
+]
+coclass DirectSoundGargleDMO {}

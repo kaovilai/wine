@@ -18,7 +18,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 #include <stdarg.h>
-#define NONAMELESSUNION
+
 #include "windef.h"
 #include "winbase.h"
 #include "wincrypt.h"
@@ -328,7 +328,7 @@ static BOOL CRYPT_QuerySerializedStoreFromBlob(const CRYPT_DATA_BLOB *blob,
      CERT_STORE_CREATE_NEW_FLAG, NULL);
     BOOL ret;
 
-    TRACE("(%d, %p)\n", blob->cbData, blob->pbData);
+    TRACE("(%ld, %p)\n", blob->cbData, blob->pbData);
 
     ret = CRYPT_ReadSerializedStoreFromBlob(blob, store);
     if (ret)
@@ -358,7 +358,7 @@ static BOOL CRYPT_QuerySerializedStoreObject(DWORD dwObjectType,
         return CRYPT_QuerySerializedStoreFromBlob(pvObject,
          pdwMsgAndCertEncodingType, pdwContentType, phCertStore, phMsg);
     default:
-        FIXME("unimplemented for type %d\n", dwObjectType);
+        FIXME("unimplemented for type %ld\n", dwObjectType);
         SetLastError(E_INVALIDARG); /* FIXME: is this the correct error? */
         return FALSE;
     }
@@ -481,7 +481,7 @@ static BOOL CRYPT_QueryMessageObject(DWORD dwObjectType, const void *pvObject,
     DWORD encodingType = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
     DWORD formatType = 0;
 
-    TRACE("(%d, %p, %08x, %08x, %p, %p, %p, %p, %p)\n", dwObjectType, pvObject,
+    TRACE("(%ld, %p, %08lx, %08lx, %p, %p, %p, %p, %p)\n", dwObjectType, pvObject,
      dwExpectedContentTypeFlags, dwExpectedFormatTypeFlags,
      pdwMsgAndCertEncodingType, pdwContentType, pdwFormatType, phCertStore,
      phMsg);
@@ -629,15 +629,45 @@ static BOOL CRYPT_QueryEmbeddedMessageObject(DWORD dwObjectType,
 
     TRACE("%s\n", debugstr_w(pvObject));
 
-    if (dwObjectType != CERT_QUERY_OBJECT_FILE)
+    if (dwObjectType == CERT_QUERY_OBJECT_BLOB)
     {
-        WARN("don't know what to do for type %d embedded signed messages\n",
-         dwObjectType);
+        WCHAR temp_path[MAX_PATH], temp_name[MAX_PATH];
+        const CERT_BLOB *b = pvObject;
+
+        TRACE("cbData %lu, pbData %p.\n", b->cbData, b->pbData);
+
+        if (!GetTempPathW(MAX_PATH, temp_path) || !GetTempFileNameW(temp_path, L"blb", 0, temp_name))
+        {
+            ERR("Failed getting temp file name.\n");
+            return FALSE;
+        }
+        file = CreateFileW(temp_name, GENERIC_READ | GENERIC_WRITE, 0,
+                NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+        if (file == INVALID_HANDLE_VALUE)
+        {
+            ERR("Could not create temp file.\n");
+            SetLastError(ERROR_OUTOFMEMORY);
+            return FALSE;
+        }
+        if (!WriteFile(file, b->pbData, b->cbData, NULL, NULL))
+        {
+            CloseHandle(file);
+            ERR("Could not write temp file.\n");
+            SetLastError(ERROR_OUTOFMEMORY);
+            return FALSE;
+        }
+    }
+    else if (dwObjectType == CERT_QUERY_OBJECT_FILE)
+    {
+        file = CreateFileW(pvObject, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
+    else
+    {
+        WARN("Unknown dwObjectType %lu.\n", dwObjectType);
         SetLastError(E_INVALIDARG);
         return FALSE;
     }
-    file = CreateFileW(pvObject, GENERIC_READ, FILE_SHARE_READ,
-     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
     if (file != INVALID_HANDLE_VALUE)
     {
         ret = CryptSIPRetrieveSubjectGuid(pvObject, file, &subject);
@@ -703,7 +733,7 @@ static BOOL CRYPT_QueryPFXObject(DWORD dwObjectType, const void *pvObject,
     CRYPT_DATA_BLOB blob = {0}, *ptr;
     BOOL ret;
 
-    TRACE("(%d, %p, %08x, %08x, %p, %p, %p, %p, %p)\n", dwObjectType, pvObject,
+    TRACE("(%ld, %p, %08lx, %08lx, %p, %p, %p, %p, %p)\n", dwObjectType, pvObject,
      dwExpectedContentTypeFlags, dwExpectedFormatTypeFlags,
      pdwMsgAndCertEncodingType, pdwContentType, pdwFormatType, phCertStore,
      phMsg);
@@ -747,7 +777,7 @@ BOOL WINAPI CryptQueryObject(DWORD dwObjectType, const void *pvObject,
      CERT_QUERY_CONTENT_FLAG_PKCS10 | CERT_QUERY_CONTENT_FLAG_CERT_PAIR;
     BOOL ret = TRUE;
 
-    TRACE("(%08x, %p, %08x, %08x, %08x, %p, %p, %p, %p, %p, %p)\n",
+    TRACE("(%08lx, %p, %08lx, %08lx, %08lx, %p, %p, %p, %p, %p, %p)\n",
      dwObjectType, pvObject, dwExpectedContentTypeFlags,
      dwExpectedFormatTypeFlags, dwFlags, pdwMsgAndCertEncodingType,
      pdwContentType, pdwFormatType, phCertStore, phMsg, ppvContext);
@@ -755,7 +785,7 @@ BOOL WINAPI CryptQueryObject(DWORD dwObjectType, const void *pvObject,
     if (dwObjectType != CERT_QUERY_OBJECT_BLOB &&
      dwObjectType != CERT_QUERY_OBJECT_FILE)
     {
-        WARN("unsupported type %d\n", dwObjectType);
+        WARN("unsupported type %ld\n", dwObjectType);
         SetLastError(E_INVALIDARG);
         return FALSE;
     }
@@ -766,7 +796,7 @@ BOOL WINAPI CryptQueryObject(DWORD dwObjectType, const void *pvObject,
         return FALSE;
     }
     if (dwExpectedContentTypeFlags & unimplementedTypes)
-        WARN("unimplemented for types %08x\n",
+        WARN("unimplemented for types %08lx\n",
          dwExpectedContentTypeFlags & unimplementedTypes);
 
     if (pdwFormatType)
@@ -1218,12 +1248,12 @@ static BOOL CRYPT_FormatAltNameEntry(DWORD dwFormatStrType, DWORD indentLevel,
     {
     case CERT_ALT_NAME_RFC822_NAME:
         LoadStringW(hInstance, IDS_ALT_NAME_RFC822_NAME, buf, ARRAY_SIZE(buf));
-        bytesNeeded += lstrlenW(entry->u.pwszRfc822Name) * sizeof(WCHAR);
+        bytesNeeded += lstrlenW(entry->pwszRfc822Name) * sizeof(WCHAR);
         ret = TRUE;
         break;
     case CERT_ALT_NAME_DNS_NAME:
         LoadStringW(hInstance, IDS_ALT_NAME_DNS_NAME, buf, ARRAY_SIZE(buf));
-        bytesNeeded += lstrlenW(entry->u.pwszDNSName) * sizeof(WCHAR);
+        bytesNeeded += lstrlenW(entry->pwszDNSName) * sizeof(WCHAR);
         ret = TRUE;
         break;
     case CERT_ALT_NAME_DIRECTORY_NAME:
@@ -1233,7 +1263,7 @@ static BOOL CRYPT_FormatAltNameEntry(DWORD dwFormatStrType, DWORD indentLevel,
         if (dwFormatStrType & CRYPT_FORMAT_STR_MULTI_LINE)
             strType |= CERT_NAME_STR_CRLF_FLAG;
         directoryNameLen = cert_name_to_str_with_indent(X509_ASN_ENCODING,
-         indentLevel + 1, &entry->u.DirectoryName, strType, NULL, 0);
+         indentLevel + 1, &entry->DirectoryName, strType, NULL, 0);
         LoadStringW(hInstance, IDS_ALT_NAME_DIRECTORY_NAME, buf, ARRAY_SIZE(buf));
         bytesNeeded += (directoryNameLen - 1) * sizeof(WCHAR);
         if (dwFormatStrType & CRYPT_FORMAT_STR_MULTI_LINE)
@@ -1245,59 +1275,59 @@ static BOOL CRYPT_FormatAltNameEntry(DWORD dwFormatStrType, DWORD indentLevel,
     }
     case CERT_ALT_NAME_URL:
         LoadStringW(hInstance, IDS_ALT_NAME_URL, buf, ARRAY_SIZE(buf));
-        bytesNeeded += lstrlenW(entry->u.pwszURL) * sizeof(WCHAR);
+        bytesNeeded += lstrlenW(entry->pwszURL) * sizeof(WCHAR);
         ret = TRUE;
         break;
     case CERT_ALT_NAME_IP_ADDRESS:
     {
         LoadStringW(hInstance, IDS_ALT_NAME_IP_ADDRESS, buf, ARRAY_SIZE(buf));
-        if (entry->u.IPAddress.cbData == 8)
+        if (entry->IPAddress.cbData == 8)
         {
             if (dwFormatStrType & CRYPT_FORMAT_STR_MULTI_LINE)
             {
                 LoadStringW(hInstance, IDS_ALT_NAME_MASK, mask, ARRAY_SIZE(mask));
                 bytesNeeded += lstrlenW(mask) * sizeof(WCHAR);
                 swprintf(ipAddrBuf, ARRAY_SIZE(ipAddrBuf), L"%d.%d.%d.%d",
-                 entry->u.IPAddress.pbData[0],
-                 entry->u.IPAddress.pbData[1],
-                 entry->u.IPAddress.pbData[2],
-                 entry->u.IPAddress.pbData[3]);
+                 entry->IPAddress.pbData[0],
+                 entry->IPAddress.pbData[1],
+                 entry->IPAddress.pbData[2],
+                 entry->IPAddress.pbData[3]);
                 bytesNeeded += lstrlenW(ipAddrBuf) * sizeof(WCHAR);
                 /* indent again, for the mask line */
                 bytesNeeded += indentLevel * lstrlenW(indent) * sizeof(WCHAR);
                 swprintf(maskBuf, ARRAY_SIZE(maskBuf), L"%d.%d.%d.%d",
-                 entry->u.IPAddress.pbData[4],
-                 entry->u.IPAddress.pbData[5],
-                 entry->u.IPAddress.pbData[6],
-                 entry->u.IPAddress.pbData[7]);
+                 entry->IPAddress.pbData[4],
+                 entry->IPAddress.pbData[5],
+                 entry->IPAddress.pbData[6],
+                 entry->IPAddress.pbData[7]);
                 bytesNeeded += lstrlenW(maskBuf) * sizeof(WCHAR);
                 bytesNeeded += lstrlenW(crlf) * sizeof(WCHAR);
             }
             else
             {
                 swprintf(ipAddrBuf, ARRAY_SIZE(ipAddrBuf), L"%d.%d.%d.%d/%d.%d.%d.%d",
-                 entry->u.IPAddress.pbData[0],
-                 entry->u.IPAddress.pbData[1],
-                 entry->u.IPAddress.pbData[2],
-                 entry->u.IPAddress.pbData[3],
-                 entry->u.IPAddress.pbData[4],
-                 entry->u.IPAddress.pbData[5],
-                 entry->u.IPAddress.pbData[6],
-                 entry->u.IPAddress.pbData[7]);
+                 entry->IPAddress.pbData[0],
+                 entry->IPAddress.pbData[1],
+                 entry->IPAddress.pbData[2],
+                 entry->IPAddress.pbData[3],
+                 entry->IPAddress.pbData[4],
+                 entry->IPAddress.pbData[5],
+                 entry->IPAddress.pbData[6],
+                 entry->IPAddress.pbData[7]);
                 bytesNeeded += (lstrlenW(ipAddrBuf) + 1) * sizeof(WCHAR);
             }
             ret = TRUE;
         }
         else
         {
-            FIXME("unknown IP address format (%d bytes)\n",
-             entry->u.IPAddress.cbData);
+            FIXME("unknown IP address format (%ld bytes)\n",
+             entry->IPAddress.cbData);
             ret = FALSE;
         }
         break;
     }
     default:
-        FIXME("unimplemented for %d\n", entry->dwAltNameChoice);
+        FIXME("unimplemented for %ld\n", entry->dwAltNameChoice);
         ret = FALSE;
     }
     if (ret)
@@ -1331,7 +1361,7 @@ static BOOL CRYPT_FormatAltNameEntry(DWORD dwFormatStrType, DWORD indentLevel,
             case CERT_ALT_NAME_RFC822_NAME:
             case CERT_ALT_NAME_DNS_NAME:
             case CERT_ALT_NAME_URL:
-                lstrcpyW(str, entry->u.pwszURL);
+                lstrcpyW(str, entry->pwszURL);
                 break;
             case CERT_ALT_NAME_DIRECTORY_NAME:
                 if (dwFormatStrType & CRYPT_FORMAT_STR_MULTI_LINE)
@@ -1342,7 +1372,7 @@ static BOOL CRYPT_FormatAltNameEntry(DWORD dwFormatStrType, DWORD indentLevel,
                 else
                     *str++ = '=';
                 cert_name_to_str_with_indent(X509_ASN_ENCODING,
-                 indentLevel + 1, &entry->u.DirectoryName, strType, str,
+                 indentLevel + 1, &entry->DirectoryName, strType, str,
                  bytesNeeded / sizeof(WCHAR));
                 break;
             case CERT_ALT_NAME_IP_ADDRESS:
@@ -2009,7 +2039,7 @@ static BOOL WINAPI CRYPT_FormatCRLDistPoints(DWORD dwCertEncodingType,
                  * RDN.)
                  */
                 ret = CRYPT_FormatAltNameInfo(dwFormatStrType, 3,
-                 &distPoint->DistPointName.u.FullName, NULL, &size);
+                 &distPoint->DistPointName.FullName, NULL, &size);
                 if (ret)
                     bytesNeeded += size - sizeof(WCHAR);
                 haveAnEntry = TRUE;
@@ -2128,7 +2158,7 @@ static BOOL WINAPI CRYPT_FormatCRLDistPoints(DWORD dwCertEncodingType,
                         lstrcpyW(str, nameSep);
                         str += lstrlenW(nameSep);
                         ret = CRYPT_FormatAltNameInfo(dwFormatStrType, 3,
-                         &distPoint->DistPointName.u.FullName, str,
+                         &distPoint->DistPointName.FullName, str,
                          &altNameSize);
                         if (ret)
                             str += altNameSize / sizeof(WCHAR) - 1;
@@ -2590,7 +2620,7 @@ BOOL WINAPI CryptFormatObject(DWORD dwCertEncodingType, DWORD dwFormatType,
     HCRYPTOIDFUNCADDR hFunc = NULL;
     BOOL ret = FALSE;
 
-    TRACE("(%08x, %d, %08x, %p, %s, %p, %d, %p, %p)\n", dwCertEncodingType,
+    TRACE("(%08lx, %ld, %08lx, %p, %s, %p, %ld, %p, %p)\n", dwCertEncodingType,
      dwFormatType, dwFormatStrType, pFormatStruct, debugstr_a(lpszStructType),
      pbEncoded, cbEncoded, pbFormat, pcbFormat);
 

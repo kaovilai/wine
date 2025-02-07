@@ -115,6 +115,7 @@ query:
     {
         SQL_input* sql = (SQL_input*) info;
         *sql->view = $1;
+        (void)sql_nerrs; /* avoid unused variable warning */
     }
     ;
 
@@ -759,7 +760,7 @@ static void *parser_alloc( void *info, unsigned int sz )
     SQL_input* sql = (SQL_input*) info;
     struct list *mem;
 
-    mem = msi_alloc( sizeof (struct list) + sz );
+    mem = malloc( sizeof (struct list) + sz );
     list_add_tail( sql->mem, mem );
     return &mem[1];
 }

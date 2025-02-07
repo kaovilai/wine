@@ -18,7 +18,6 @@
 
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -59,6 +58,7 @@ static const char *trust_status_to_str(DWORD status)
         { CERT_TRUST_HAS_EXCLUDED_NAME_CONSTRAINT, "excluded name constraint" },
         { CERT_TRUST_IS_OFFLINE_REVOCATION, "revocation server offline" },
         { CERT_TRUST_NO_ISSUANCE_CHAIN_POLICY, "no issuance policy" },
+        { CERT_TRUST_IS_PARTIAL_CHAIN, "partial chain" },
     };
     static char buf[1024];
     int i, pos = 0;
@@ -99,74 +99,89 @@ static const char *get_cert_common_name(PCCERT_CONTEXT cert)
     return name;
 }
 
-static void check_and_store_certs(HCERTSTORE from, HCERTSTORE to)
+static void get_cert_context_hash( const CERT_CONTEXT *cert, BYTE *sha1_hash, WCHAR *hash_str )
+{
+    DWORD size;
+
+    size = 20;
+    CertGetCertificateContextProperty( cert, CERT_HASH_PROP_ID, sha1_hash, &size );
+    CRYPT_HashToStr( sha1_hash, hash_str );
+}
+
+static void mark_cert_imported( HKEY import_key, const CERT_CONTEXT *cert )
+{
+    WCHAR hash_str[20 * 2 + 1];
+    BYTE sha1_hash[20];
+    DWORD value = 1;
+
+    get_cert_context_hash( cert, sha1_hash, hash_str );
+    RegSetValueExW( import_key, hash_str, 0, REG_DWORD, (BYTE *)&value, sizeof(value) );
+}
+
+static void check_and_store_certs( HCERTSTORE cached, HKEY key, HKEY import_key )
 {
     DWORD root_count = 0;
-    CERT_CHAIN_ENGINE_CONFIG chainEngineConfig =
-     { sizeof(chainEngineConfig), 0 };
+    CERT_CHAIN_ENGINE_CONFIG chainEngineConfig = { sizeof(chainEngineConfig), 0 };
     HCERTCHAINENGINE engine;
+    PCCERT_CONTEXT cert = NULL;
 
     TRACE("\n");
 
-    CertDuplicateStore(to);
-    engine = CRYPT_CreateChainEngine(to, CERT_SYSTEM_STORE_CURRENT_USER, &chainEngineConfig);
-    if (engine)
+    if (!(engine = CRYPT_CreateChainEngine( cached, CERT_SYSTEM_STORE_CURRENT_USER, &chainEngineConfig )))
+        return;
+
+    while ((cert = CertEnumCertificatesInStore( cached, cert )))
     {
-        PCCERT_CONTEXT cert = NULL;
+        const DWORD allowed_errors = CERT_TRUST_IS_UNTRUSTED_ROOT | CERT_TRUST_IS_NOT_VALID_FOR_USAGE
+                                    | CERT_TRUST_INVALID_BASIC_CONSTRAINTS | CERT_TRUST_IS_NOT_TIME_VALID;
+        CERT_CHAIN_PARA chainPara = { sizeof(chainPara), { 0 } };
+        PCCERT_CHAIN_CONTEXT chain;
+        DWORD size;
+        int is_new;
+        BOOL ret;
 
-        do {
-            cert = CertEnumCertificatesInStore(from, cert);
-            if (cert)
-            {
-                CERT_CHAIN_PARA chainPara = { sizeof(chainPara), { 0 } };
-                PCCERT_CHAIN_CONTEXT chain;
-                BOOL ret;
+        size = sizeof(is_new);
+        if (!CertGetCertificateContextProperty( cert, CERT_FIRST_USER_PROP_ID, &is_new, &size ))
+        {
+            ERR( "CERT_FIRST_USER_PROP_ID property absent for cert %p.\n", cert );
+            continue;
+        }
+        if (!is_new)
+            continue;
 
-                ret = CertGetCertificateChain(engine, cert, NULL, from,
-                 &chainPara, CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL, NULL, &chain);
-                if (!ret)
-                    TRACE("rejecting %s: %s\n", get_cert_common_name(cert),
-                     "chain creation failed");
-                else
-                {
-                    DWORD allowedErrors = CERT_TRUST_IS_UNTRUSTED_ROOT |
-                     CERT_TRUST_IS_NOT_VALID_FOR_USAGE |
-                     CERT_TRUST_INVALID_BASIC_CONSTRAINTS |
-                     CERT_TRUST_IS_NOT_TIME_VALID;
+        ret = CertGetCertificateChain( engine, cert, NULL, NULL, &chainPara, CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL, NULL, &chain );
+        if (!ret)
+        {
+            TRACE( "rejecting %s: chain creation failed.\n", get_cert_common_name( cert ));
+            continue;
+        }
 
-                    /* The certificate chain verification only allows certain
-                     * invalid CA certs if they're installed locally:  CA
-                     * certs missing the key usage extension, and CA certs
-                     * missing the basic constraints extension.  Of course
-                     * there's a chicken and egg problem:  we have to accept
-                     * them here in order for them to be accepted later.
-                     * Expired, locally installed certs are also allowed here,
-                     * because we don't know (yet) what date will be checked
-                     * for an item signed by one of these certs.
-                     * Thus, accept certs with any of the allowed errors.
-                     */
-                    if (chain->TrustStatus.dwErrorStatus & ~allowedErrors)
-                        TRACE("rejecting %s: %s\n", get_cert_common_name(cert),
-                         trust_status_to_str(chain->TrustStatus.dwErrorStatus &
-                         ~CERT_TRUST_IS_UNTRUSTED_ROOT));
-                    else
-                    {
-                        DWORD i, j;
-
-                        for (i = 0; i < chain->cChain; i++)
-                            for (j = 0; j < chain->rgpChain[i]->cElement; j++)
-                                if (CertAddCertificateContextToStore(to,
-                                 chain->rgpChain[i]->rgpElement[j]->pCertContext,
-                                 CERT_STORE_ADD_NEW, NULL))
-                                    root_count++;
-                    }
-                    CertFreeCertificateChain(chain);
-                }
-            }
-        } while (cert);
-        CertFreeCertificateChainEngine(engine);
+        /* The certificate chain verification only allows certain
+         * invalid CA certs if they're installed locally:  CA
+         * certs missing the key usage extension, and CA certs
+         * missing the basic constraints extension.  Of course
+         * there's a chicken and egg problem:  we have to accept
+         * them here in order for them to be accepted later.
+         * Expired, locally installed certs are also allowed here,
+         * because we don't know (yet) what date will be checked
+         * for an item signed by one of these certs.
+         * Thus, accept certs with any of the allowed errors.
+         */
+        if (chain->TrustStatus.dwErrorStatus & ~allowed_errors)
+            TRACE( "rejecting %s: %s\n", get_cert_common_name(cert),
+                   trust_status_to_str( chain->TrustStatus.dwErrorStatus & ~CERT_TRUST_IS_UNTRUSTED_ROOT ));
+        else
+        {
+            /* Clear custom property so it is not serialized and seen by apps. */
+            CertSetCertificateContextProperty( cert, CERT_FIRST_USER_PROP_ID, 0, NULL );
+            mark_cert_imported( import_key, cert );
+            CRYPT_SerializeContextToReg( key, 0, pCertInterface, cert );
+            root_count++;
+        }
+        CertFreeCertificateChain(chain);
     }
-    TRACE("Added %d root certificates\n", root_count);
+    CertFreeCertificateChainEngine( engine );
+    TRACE( "Added %ld root certificates\n", root_count );
 }
 
 static const BYTE authenticode[] = {
@@ -596,16 +611,34 @@ static const struct CONST_BLOB {
     { rootcertauthority2011, sizeof(rootcertauthority2011) },
 };
 
-static void add_ms_root_certs(HCERTSTORE to)
+static void add_ms_root_certs(HKEY key, HCERTSTORE cached)
 {
+    PCCERT_CONTEXT cert, existing;
     DWORD i;
+    int is_new;
+    const CRYPT_DATA_BLOB exists_blob = { sizeof(is_new), (BYTE *)&is_new };
 
     TRACE("\n");
 
     for (i = 0; i < ARRAY_SIZE(msRootCerts); i++)
-        if (!CertAddEncodedCertificateToStore(to, X509_ASN_ENCODING,
-         msRootCerts[i].pb, msRootCerts[i].cb, CERT_STORE_ADD_NEW, NULL))
-            WARN("adding root cert %d failed: %08x\n", i, GetLastError());
+    {
+        if (!(cert = CertCreateCertificateContext(X509_ASN_ENCODING, msRootCerts[i].pb, msRootCerts[i].cb)))
+        {
+            WARN("adding root cert %ld failed: %08lx\n", i, GetLastError());
+            continue;
+        }
+        if ((existing = CertFindCertificateInStore(cached, X509_ASN_ENCODING, 0, CERT_FIND_EXISTING, cert, NULL)))
+        {
+            is_new = 0;
+            CertSetCertificateContextProperty(existing, CERT_FIRST_USER_PROP_ID, 0, &exists_blob);
+            CertFreeCertificateContext(existing);
+        }
+        else
+        {
+            CRYPT_SerializeContextToReg(key, 0, pCertInterface, cert);
+        }
+        CertFreeCertificateContext(cert);
+    }
 }
 
 /* Reads certificates from the list of known locations into store.  Stops when
@@ -613,52 +646,119 @@ static void add_ms_root_certs(HCERTSTORE to)
  * adding redundant certificates, e.g. when both a certificate bundle and
  * individual certificates exist in the same directory.
  */
-static void read_trusted_roots_from_known_locations(HCERTSTORE store)
+static void sync_trusted_roots_from_known_locations( HKEY key, HCERTSTORE cached )
 {
-    HCERTSTORE from = CertOpenStore(CERT_STORE_PROV_MEMORY,
-     X509_ASN_ENCODING, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
-    DWORD needed;
+    DWORD needed, size;
     struct enum_root_certs_params params = { NULL, 2048, &needed };
+    HCRYPTPROV prov;
+    HCRYPTHASH hash;
+    BYTE hashval[20];
+    DWORD hashlen;
+    CRYPT_HASH_BLOB hash_blob = { sizeof(hashval), hashval };
+    int is_new;
+    CRYPT_DATA_BLOB exists_blob = { sizeof(is_new), (BYTE *)&is_new };
+    PCCERT_CONTEXT cert, existing;
+    unsigned int existing_count = 0, new_count = 0, deleted_count = 0;
+    BYTE sha1_hash[20];
+    HKEY import_key;
+    WCHAR hash_str[20 * 2 + 1];
+    DWORD value;
 
-    if (from)
+    if (RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"Software\\Wine\\HostImportedCertificates", 0, KEY_ALL_ACCESS, &import_key ))
     {
-        params.buffer = malloc( params.size );
-        while (!CRYPT32_CALL( enum_root_certs, &params ))
+        if (RegCreateKeyExW( HKEY_LOCAL_MACHINE, L"Software\\Wine\\HostImportedCertificates_tmp", 0, NULL, 0,
+                             KEY_ALL_ACCESS, NULL, &import_key, NULL ))
+            return;
+
+        /* If the key is absent existing certificates were added by an older Wine version, mark all cached certificates
+         * as imported (as it was previously assumed) so they can be deleted when are deleted on host. */
+        cert = NULL;
+        while ((cert = CertEnumCertificatesInStore( cached, cert )))
+            mark_cert_imported( import_key, cert );
+
+        if ((value = RegRenameKey( import_key, NULL, L"HostImportedCertificates" )))
         {
-            if (needed > params.size)
-            {
-                free( params.buffer );
-                params.buffer = malloc( needed );
-                params.size = needed;
-            }
-            else CertAddEncodedCertificateToStore( from, X509_ASN_ENCODING, params.buffer, needed,
-                                                   CERT_STORE_ADD_NEW, NULL );
+            ERR( "Error renaming key %#lx.\n", value );
+            RegCloseKey( import_key );
+            return;
         }
-        free( params.buffer );
-        check_and_store_certs(from, store);
     }
-    CertCloseStore(from, 0);
-}
 
-static HCERTSTORE create_root_store(void)
-{
-    HCERTSTORE memStore = CertOpenStore(CERT_STORE_PROV_MEMORY,
-     X509_ASN_ENCODING, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
-
-    if (memStore)
+    CryptAcquireContextW( &prov, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT );
+    params.buffer = CryptMemAlloc( params.size );
+    while (!CRYPT32_CALL( enum_root_certs, &params ))
     {
-        read_trusted_roots_from_known_locations(memStore);
-        add_ms_root_certs(memStore);
+        if (needed > params.size)
+        {
+            CryptMemFree( params.buffer );
+            params.buffer = CryptMemAlloc( needed );
+            params.size = needed;
+            continue;
+        }
+        CryptCreateHash( prov, CALG_SHA1, 0, 0, &hash );
+        CryptHashData( hash, params.buffer, needed, 0 );
+        hashlen = sizeof(hashval);
+        CryptGetHashParam( hash, HP_HASHVAL, hashval, &hashlen, 0 );
+        CryptDestroyHash( hash );
+        if ((existing = CertFindCertificateInStore( cached, X509_ASN_ENCODING, 0,
+                                                    CERT_FIND_SHA1_HASH, &hash_blob, NULL )))
+        {
+            /* Skip certificate which is already cached. CERT_FIRST_USER_PROP_ID is set once the cached cert
+             * is found among host imports. */
+            if (!CertGetCertificateContextProperty( existing, CERT_FIRST_USER_PROP_ID, NULL, &size ))
+            {
+                is_new = 0;
+                if (!CertSetCertificateContextProperty( existing, CERT_FIRST_USER_PROP_ID, 0, &exists_blob ))
+                    ERR( "Failed to set property.\n" );
+                ++existing_count;
+            }
+            CertFreeCertificateContext( existing );
+            continue;
+        }
+
+        CertAddEncodedCertificateToStore( cached, X509_ASN_ENCODING, params.buffer, needed, CERT_STORE_ADD_ALWAYS, &cert );
+        is_new = 1;
+        if (!CertSetCertificateContextProperty( cert, CERT_FIRST_USER_PROP_ID, 0, &exists_blob ))
+            ERR("Failed to set property.\n");
+        CertFreeCertificateContext( cert );
+        ++new_count;
+    }
+    CryptMemFree( params.buffer );
+    CryptReleaseContext( prov, 0 );
+
+    cert = NULL;
+    while ((cert = CertEnumCertificatesInStore( cached, cert )))
+    {
+        if (CertGetCertificateContextProperty( cert, CERT_FIRST_USER_PROP_ID, NULL, &size ))
+            continue;
+
+        get_cert_context_hash( cert, sha1_hash, hash_str );
+        size = sizeof(value);
+        if (RegQueryValueExW( import_key, hash_str, NULL, NULL, (BYTE *)&value, &size ))
+        {
+            TRACE( "key %s is not imported, not deleting.\n", debugstr_w(hash_str) );
+            continue;
+        }
+        ++deleted_count;
+        CRYPT_RegDeleteFromReg( key, sha1_hash );
+        RegDeleteValueW( import_key, hash_str );
+        /* Delete from cached so deleted certs do not participate in chain verification. */
+        CertDeleteCertificateFromStore( cert );
+        /* Restart enumeration as it is broken by deleting cert from store. */
+        cert = NULL;
     }
 
-    TRACE("returning %p\n", memStore);
-    return memStore;
+    if (new_count)
+        check_and_store_certs( cached, key, import_key );
+
+    RegCloseKey( import_key );
+    TRACE( "existing %u, deleted %u, new %u.\n", existing_count, deleted_count, new_count );
 }
 
 void CRYPT_ImportSystemRootCertsToReg(void)
 {
-    HCERTSTORE store = NULL;
-    HKEY key;
+    HCERTSTORE cached = NULL;
+    HKEY key = NULL;
     LONG rc;
     HANDLE hsem;
 
@@ -675,24 +775,28 @@ void CRYPT_ImportSystemRootCertsToReg(void)
     }
 
     if(GetLastError() == ERROR_ALREADY_EXISTS)
-        WaitForSingleObject(hsem, INFINITE);
-    else
     {
-        if ((store = create_root_store()))
-        {
-            rc = RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\SystemCertificates\\Root\\Certificates", 0, NULL, 0,
-                KEY_ALL_ACCESS, NULL, &key, 0);
-            if (!rc)
-            {
-                if (!CRYPT_SerializeContextsToReg(key, REG_OPTION_VOLATILE, pCertInterface, store))
-                    ERR("Failed to import system certs into registry, %08x\n", GetLastError());
-                RegCloseKey(key);
-            }
-            CertCloseStore(store, 0);
-        } else
-            ERR("Failed to create root store\n");
+        WaitForSingleObject(hsem, INFINITE);
+        goto done;
     }
 
+    rc = RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\SystemCertificates\\Root\\Certificates", 0, NULL, 0,
+            KEY_ALL_ACCESS, NULL, &key, 0);
+    if (rc)
+        goto done;
+
+    if (!(cached = CertOpenStore(CERT_STORE_PROV_MEMORY, X509_ASN_ENCODING, 0, CERT_STORE_CREATE_NEW_FLAG, NULL)))
+    {
+        ERR("Failed to create memory store.\n");
+        goto done;
+    }
+    CRYPT_RegReadSerializedFromReg(key, CERT_STORE_CERTIFICATE_CONTEXT_FLAG, cached, CERT_STORE_ADD_ALWAYS);
+    add_ms_root_certs(key, cached);
+    sync_trusted_roots_from_known_locations(key, cached);
+
+done:
+    RegCloseKey(key);
+    CertCloseStore(cached, 0);
     root_certs_imported = TRUE;
     ReleaseSemaphore(hsem, 1, NULL);
     CloseHandle(hsem);

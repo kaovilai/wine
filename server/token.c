@@ -72,7 +72,6 @@ struct sid_attrs
 
 const struct sid world_sid = { SID_REVISION, 1, SECURITY_WORLD_SID_AUTHORITY, { SECURITY_WORLD_RID } };
 const struct sid local_system_sid = { SID_REVISION, 1, SECURITY_NT_AUTHORITY, { SECURITY_LOCAL_SYSTEM_RID } };
-const struct sid high_label_sid = { SID_REVISION, 1, SECURITY_MANDATORY_LABEL_AUTHORITY, { SECURITY_MANDATORY_HIGH_RID } };
 const struct sid local_user_sid = { SID_REVISION, 5, SECURITY_NT_AUTHORITY, { SECURITY_NT_NON_UNIQUE, 0, 0, 0, 1000 } };
 const struct sid builtin_admins_sid = { SID_REVISION, 2, SECURITY_NT_AUTHORITY, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS } };
 const struct sid builtin_users_sid = { SID_REVISION, 2, SECURITY_NT_AUTHORITY, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_USERS } };
@@ -82,7 +81,7 @@ static const struct sid local_sid = { SID_REVISION, 1, SECURITY_LOCAL_SID_AUTHOR
 static const struct sid interactive_sid = { SID_REVISION, 1, SECURITY_NT_AUTHORITY, { SECURITY_INTERACTIVE_RID } };
 static const struct sid anonymous_logon_sid = { SID_REVISION, 1, SECURITY_NT_AUTHORITY, { SECURITY_ANONYMOUS_LOGON_RID } };
 static const struct sid authenticated_user_sid = { SID_REVISION, 1, SECURITY_NT_AUTHORITY, { SECURITY_AUTHENTICATED_USER_RID } };
-static const struct sid builtin_logon_sid = { SID_REVISION, 3, SECURITY_NT_AUTHORITY, { SECURITY_LOGON_IDS_RID, 0, 0 } };
+static const struct sid high_label_sid = { SID_REVISION, 1, SECURITY_MANDATORY_LABEL_AUTHORITY, { SECURITY_MANDATORY_HIGH_RID } };
 
 static struct luid prev_luid_value = { 1000, 0 };
 
@@ -128,19 +127,15 @@ struct privilege
 
 struct group
 {
-    struct list entry;
-    unsigned    enabled  : 1; /* is the sid currently enabled? */
-    unsigned    def      : 1; /* is the sid enabled by default? */
-    unsigned    logon    : 1; /* is this a logon sid? */
-    unsigned    mandatory: 1; /* is this sid always enabled? */
-    unsigned    owner    : 1; /* can this sid be an owner of an object? */
-    unsigned    resource : 1; /* is this a domain-local group? */
-    unsigned    deny_only: 1; /* is this a sid that should be use for denying only? */
-    struct sid  sid;
+    struct list    entry;
+    unsigned int   attrs;
+    struct sid     sid;
 };
 
 static void token_dump( struct object *obj, int verbose );
 static void token_destroy( struct object *obj );
+static int token_set_sd( struct object *obj, const struct security_descriptor *sd,
+                         unsigned int set_info );
 
 static const struct object_ops token_ops =
 {
@@ -155,7 +150,7 @@ static const struct object_ops token_ops =
     no_get_fd,                 /* get_fd */
     default_map_access,        /* map_access */
     default_get_sd,            /* get_sd */
-    default_set_sd,            /* set_sd */
+    token_set_sd,              /* set_sd */
     no_get_full_name,          /* get_full_name */
     no_lookup_name,            /* lookup_name */
     no_link_name,              /* link_name */
@@ -172,6 +167,12 @@ static void token_dump( struct object *obj, int verbose )
     assert( obj->ops == &token_ops );
     fprintf( stderr, "Token id=%d.%u primary=%u impersonation level=%d\n", token->token_id.high_part,
              token->token_id.low_part, token->primary, token->impersonation_level );
+}
+
+static int token_set_sd( struct object *obj, const struct security_descriptor *sd,
+                         unsigned int set_info )
+{
+    return default_set_sd( obj, sd, set_info & ~LABEL_SECURITY_INFORMATION );
 }
 
 void security_set_thread_token( struct thread *thread, obj_handle_t handle )
@@ -284,7 +285,6 @@ int sd_is_valid( const struct security_descriptor *sd, data_size_t size )
     dacl = sd_get_dacl( sd, &dummy );
     if (dacl && !acl_is_valid( dacl, sd->dacl_len ))
         return FALSE;
-    offset += sd->dacl_len;
 
     return TRUE;
 }
@@ -318,13 +318,9 @@ struct acl *extract_security_labels( const struct acl *sacl )
 
     label_ace = ace_first( label_acl );
     for (i = 0, ace = ace_first( sacl ); i < sacl->count; i++, ace = ace_next( ace ))
-    {
         if (ace->type == SYSTEM_MANDATORY_LABEL_ACE_TYPE)
-        {
-            memcpy( label_ace, ace, ace->size );
-            label_ace = ace_next( label_ace );
-        }
-    }
+            label_ace = mem_append( label_ace, ace, ace->size );
+
     return label_acl;
 }
 
@@ -378,21 +374,15 @@ struct acl *replace_security_labels( const struct acl *old_sacl, const struct ac
     if (old_sacl)
     {
         for (i = 0, ace = ace_first( old_sacl ); i < old_sacl->count; i++, ace = ace_next( ace ))
-        {
-            if (ace->type == SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
-            memcpy( replaced_ace, ace, ace->size );
-            replaced_ace = ace_next( replaced_ace );
-        }
+            if (ace->type != SYSTEM_MANDATORY_LABEL_ACE_TYPE)
+                replaced_ace = mem_append( replaced_ace, ace, ace->size );
     }
 
     if (new_sacl)
     {
         for (i = 0, ace = ace_first( new_sacl ); i < new_sacl->count; i++, ace = ace_next( ace ))
-        {
-            if (ace->type != SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
-            memcpy( replaced_ace, ace, ace->size );
-            replaced_ace = ace_next( replaced_ace );
-        }
+            if (ace->type == SYSTEM_MANDATORY_LABEL_ACE_TYPE)
+                replaced_ace = mem_append( replaced_ace, ace, ace->size );
     }
 
     return replaced_acl;
@@ -479,7 +469,7 @@ static struct token *create_token( unsigned int primary, unsigned int session_id
                                    const struct sid_attrs *groups, unsigned int group_count,
                                    const struct luid_attr *privs, unsigned int priv_count,
                                    const struct acl *default_dacl, const struct luid *modified_id,
-                                   int impersonation_level, int elevation )
+                                   unsigned int primary_group, int impersonation_level, int elevation )
 {
     struct token *token = alloc_object( &token_ops );
     if (token)
@@ -523,17 +513,11 @@ static struct token *create_token( unsigned int primary, unsigned int session_id
                 release_object( token );
                 return NULL;
             }
+            group->attrs = groups[i].attrs;
             copy_sid( &group->sid, groups[i].sid );
-            group->enabled = TRUE;
-            group->def = TRUE;
-            group->logon = (groups[i].attrs & SE_GROUP_LOGON_ID) != 0;
-            group->mandatory = (groups[i].attrs & SE_GROUP_MANDATORY) != 0;
-            group->owner = (groups[i].attrs & SE_GROUP_OWNER) != 0;
-            group->resource = FALSE;
-            group->deny_only = FALSE;
             list_add_tail( &token->groups, &group->entry );
-            /* Use first owner capable group as owner and primary group */
-            if (!token->primary_group && group->owner)
+
+            if (primary_group == i)
             {
                 token->owner = &group->sid;
                 token->primary_group = &group->sid;
@@ -611,7 +595,7 @@ struct token *token_duplicate( struct token *src_token, unsigned primary,
 
     token = create_token( primary, src_token->session_id, src_token->user, NULL, 0,
                           NULL, 0, src_token->default_dacl, modified_id,
-                          impersonation_level, src_token->elevation );
+                          0, impersonation_level, src_token->elevation );
     if (!token) return token;
 
     /* copy groups */
@@ -628,9 +612,8 @@ struct token *token_duplicate( struct token *src_token, unsigned primary,
         memcpy( newgroup, group, size );
         if (filter_group( group, remove_groups, remove_group_count ))
         {
-            newgroup->enabled = 0;
-            newgroup->def = 0;
-            newgroup->deny_only = 1;
+            newgroup->attrs &= ~(SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT);
+            newgroup->attrs |= SE_GROUP_USE_FOR_DENY_ONLY;
         }
         list_add_tail( &token->groups, &newgroup->entry );
         if (src_token->primary_group == &group->sid)
@@ -654,6 +637,24 @@ struct token *token_duplicate( struct token *src_token, unsigned primary,
 
     if (sd) default_set_sd( &token->obj, sd, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
                             DACL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION );
+
+    if (src_token->obj.sd)
+    {
+        const struct acl *sacl;
+        const struct ace *ace;
+        unsigned int i;
+        int present;
+
+        sacl = sd_get_sacl( src_token->obj.sd, &present );
+        if (present)
+        {
+            for (i = 0, ace = ace_first( sacl ); i < sacl->count; i++, ace = ace_next( ace ))
+            {
+                if (ace->type != SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
+                token_assign_label( token, (const struct sid *)(ace + 1) );
+            }
+        }
+    }
 
     return token;
 }
@@ -744,9 +745,9 @@ struct token *token_create_admin( unsigned primary, int impersonation_level, int
     struct sid alias_admins_sid = { SID_REVISION, 2, SECURITY_NT_AUTHORITY, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS }};
     struct sid alias_users_sid = { SID_REVISION, 2, SECURITY_NT_AUTHORITY, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_USERS }};
     /* on Windows, this value changes every time the user logs on */
-    struct sid logon_sid = { SID_REVISION, 3, SECURITY_NT_AUTHORITY, { SECURITY_LOGON_IDS_RID, 0, 1 /* FIXME: should be randomly generated when tokens are inherited by new processes */ }};
+    struct sid logon_sid = { SID_REVISION, 3, SECURITY_NT_AUTHORITY, { SECURITY_LOGON_IDS_RID, 0, 0 /* FIXME: should be randomly generated when tokens are inherited by new processes */ }};
     const struct sid *user_sid = security_unix_uid_to_sid( getuid() );
-    struct acl *default_dacl = create_default_dacl( user_sid );
+    struct acl *default_dacl = create_default_dacl( &domain_users_sid );
     const struct luid_attr admin_privs[] =
     {
         { SeChangeNotifyPrivilege, SE_PRIVILEGE_ENABLED },
@@ -787,9 +788,18 @@ struct token *token_create_admin( unsigned primary, int impersonation_level, int
 
     token = create_token( primary, session_id, user_sid, admin_groups, ARRAY_SIZE( admin_groups ),
                           admin_privs, ARRAY_SIZE( admin_privs ), default_dacl,
-                          NULL, impersonation_level, elevation );
+                          NULL, 4 /* domain_users */, impersonation_level, elevation );
     /* we really need a primary group */
     assert( token->primary_group );
+
+    /* Assign a high security label to the token. The default would be medium
+     * but Wine provides admin access to all applications right now so high
+     * makes more sense for the time being. */
+    if (!token_assign_label( token, &high_label_sid ))
+    {
+        release_object( token );
+        return NULL;
+    }
 
     free( default_dacl );
     return token;
@@ -888,8 +898,8 @@ int token_sid_present( struct token *token, const struct sid *sid, int deny )
 
     LIST_FOR_EACH_ENTRY( group, &token->groups, struct group, entry )
     {
-        if (!group->enabled) continue;
-        if (group->deny_only && !deny) continue;
+        if (!(group->attrs & SE_GROUP_ENABLED)) continue;
+        if (!deny && (group->attrs & SE_GROUP_USE_FOR_DENY_ONLY)) continue;
         if (equal_sid( &group->sid, sid )) return TRUE;
     }
 
@@ -907,7 +917,7 @@ static unsigned int token_access_check( struct token *token,
                                  unsigned int desired_access,
                                  struct luid_attr *privs,
                                  unsigned int *priv_count,
-                                 const generic_map_t *mapping,
+                                 const struct generic_map *mapping,
                                  unsigned int *granted_access,
                                  unsigned int *status )
 {
@@ -1058,9 +1068,9 @@ const struct acl *token_get_default_dacl( struct token *token )
     return token->default_dacl;
 }
 
-const struct sid *token_get_user( struct token *token )
+const struct sid *token_get_owner( struct token *token )
 {
-    return token->user;
+    return token->owner;
 }
 
 const struct sid *token_get_primary_group( struct token *token )
@@ -1075,7 +1085,7 @@ unsigned int token_get_session_id( struct token *token )
 
 int check_object_access(struct token *token, struct object *obj, unsigned int *access)
 {
-    generic_map_t mapping;
+    struct generic_map mapping;
     unsigned int status;
     int res;
 
@@ -1100,6 +1110,104 @@ int check_object_access(struct token *token, struct object *obj, unsigned int *a
 
     if (!res) set_error( STATUS_ACCESS_DENIED );
     return res;
+}
+
+
+/* create a security token */
+DECL_HANDLER(create_token)
+{
+    struct token *token;
+    struct object_attributes *objattr;
+    struct sid *user;
+    struct sid_attrs *groups;
+    struct luid_attr *privs;
+    struct acl *dacl = NULL;
+    unsigned int i;
+    data_size_t data_size, groups_size;
+    struct acl *default_dacl = NULL;
+    unsigned int *attrs;
+    struct sid *sid;
+
+    objattr = (struct object_attributes *)get_req_data();
+    user = (struct sid *)get_req_data_after_objattr( objattr, &data_size );
+
+    if (!user || !sid_valid_size( user, data_size ))
+    {
+        set_error( STATUS_INVALID_PARAMETER );
+        return;
+    }
+
+    data_size -= sid_len( user );
+    groups_size = req->group_count * sizeof( attrs[0] );
+
+    if (data_size < groups_size)
+    {
+        set_error( STATUS_INVALID_PARAMETER );
+        return;
+    }
+
+    if (req->primary_group < 0 || req->primary_group >= req->group_count)
+    {
+        set_error( STATUS_INVALID_PARAMETER );
+        return;
+    }
+
+    groups = mem_alloc( req->group_count * sizeof( groups[0] ) );
+    if (!groups) return;
+
+    attrs = (unsigned int *)((char *)user + sid_len( user ));
+    sid = (struct sid *)&attrs[req->group_count];
+
+    for (i = 0; i < req->group_count; i++)
+    {
+        groups[i].attrs = attrs[i];
+        groups[i].sid = sid;
+
+        if (!sid_valid_size( sid, data_size - groups_size ))
+        {
+            free( groups );
+            set_error( STATUS_INVALID_PARAMETER );
+            return;
+        }
+
+        groups_size += sid_len( sid );
+        sid = (struct sid *)((char *)sid + sid_len( sid ));
+    }
+
+    data_size -= groups_size;
+
+    if (data_size < req->priv_count * sizeof( privs[0] ))
+    {
+        free( groups );
+        set_error( STATUS_INVALID_PARAMETER );
+        return;
+    }
+
+    privs = (struct luid_attr *)((char *)attrs + groups_size);
+    data_size -= req->priv_count * sizeof( privs[0] );
+
+    if (data_size)
+    {
+        dacl = (struct acl *)((char *)privs + req->priv_count * sizeof(privs[0]));
+        if (!acl_is_valid( dacl, data_size ))
+        {
+            free( groups );
+            set_error( STATUS_INVALID_PARAMETER );
+            return;
+        }
+    }
+    else
+        dacl = default_dacl = create_default_dacl( &domain_users_sid );
+
+    token = create_token( req->primary, default_session_id, user, groups, req->group_count,
+                          privs, req->priv_count, dacl, NULL, req->primary_group, req->impersonation_level, 0 );
+    if (token)
+    {
+        reply->token = alloc_handle( current->process, token, req->access, objattr->attributes );
+        release_object( token );
+    }
+    free( default_dacl );
+    free( groups );
 }
 
 
@@ -1367,9 +1475,6 @@ DECL_HANDLER(get_token_sid)
         case TokenOwner:
             sid = token->owner;
             break;
-        case TokenLogonSid:
-            sid = &builtin_logon_sid;
-            break;
         default:
             set_error( STATUS_INVALID_PARAMETER );
             break;
@@ -1397,6 +1502,7 @@ DECL_HANDLER(get_token_groups)
 
         LIST_FOR_EACH_ENTRY( group, &token->groups, const struct group, entry )
         {
+            if (req->attr_mask && !(group->attrs & req->attr_mask)) continue;
             group_count++;
             reply->sid_len += sid_len( &group->sid );
         }
@@ -1411,16 +1517,9 @@ DECL_HANDLER(get_token_groups)
             {
                 LIST_FOR_EACH_ENTRY( group, &token->groups, const struct group, entry )
                 {
-                    *attr_ptr = 0;
-                    if (group->mandatory) *attr_ptr |= SE_GROUP_MANDATORY;
-                    if (group->def) *attr_ptr |= SE_GROUP_ENABLED_BY_DEFAULT;
-                    if (group->enabled) *attr_ptr |= SE_GROUP_ENABLED;
-                    if (group->owner) *attr_ptr |= SE_GROUP_OWNER;
-                    if (group->deny_only) *attr_ptr |= SE_GROUP_USE_FOR_DENY_ONLY;
-                    if (group->resource) *attr_ptr |= SE_GROUP_RESOURCE;
-                    if (group->logon) *attr_ptr |= SE_GROUP_LOGON_ID;
+                    if (req->attr_mask && !(group->attrs & req->attr_mask)) continue;
                     sid = copy_sid( sid, &group->sid );
-                    attr_ptr++;
+                    *attr_ptr++ = group->attrs;
                 }
             }
         }
@@ -1452,25 +1551,21 @@ DECL_HANDLER(get_token_default_dacl)
 {
     struct token *token;
 
-    reply->acl_len = 0;
+    if (!(token = (struct token *)get_handle_obj( current->process, req->handle,
+                                                  TOKEN_QUERY, &token_ops )))
+        return;
 
-    if ((token = (struct token *)get_handle_obj( current->process, req->handle,
-                                                 TOKEN_QUERY,
-                                                 &token_ops )))
+    if (token->default_dacl)
     {
-        if (token->default_dacl)
-            reply->acl_len = token->default_dacl->size;
-
+        reply->acl_len = token->default_dacl->size;
         if (reply->acl_len <= get_reply_max_size())
         {
             struct acl *acl_reply = set_reply_data_size( reply->acl_len );
-            if (acl_reply)
-                memcpy( acl_reply, token->default_dacl, reply->acl_len );
+            if (acl_reply) memcpy( acl_reply, token->default_dacl, reply->acl_len );
         }
         else set_error( STATUS_BUFFER_TOO_SMALL );
-
-        release_object( token );
     }
+    release_object( token );
 }
 
 DECL_HANDLER(set_token_default_dacl)

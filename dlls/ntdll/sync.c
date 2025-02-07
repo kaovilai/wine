@@ -30,11 +30,11 @@
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
-#define NONAMELESSUNION
 #include "windef.h"
 #include "winternl.h"
 #include "wine/debug.h"
 #include "wine/list.h"
+#include "wine/exception.h"
 #include "ntdll_misc.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(sync);
@@ -155,31 +155,25 @@ static BOOL crit_section_has_debuginfo( const RTL_CRITICAL_SECTION *crit )
     return crit->DebugInfo != NULL && crit->DebugInfo != no_debug_info_marker;
 }
 
+static const char *crit_section_get_name( const RTL_CRITICAL_SECTION *crit )
+{
+    if (crit_section_has_debuginfo( crit ))
+        return (char *)crit->DebugInfo->Spare[0];
+    return "?";
+}
+
 static inline HANDLE get_semaphore( RTL_CRITICAL_SECTION *crit )
 {
-    HANDLE ret = crit->LockSemaphore;
-    if (!ret)
-    {
-        HANDLE sem;
-        if (NtCreateSemaphore( &sem, SEMAPHORE_ALL_ACCESS, NULL, 0, 1 )) return 0;
-        if (!(ret = InterlockedCompareExchangePointer( &crit->LockSemaphore, sem, 0 )))
-            ret = sem;
-        else
-            NtClose(sem);  /* somebody beat us to it */
-    }
-    return ret;
+    if ((ULONG_PTR)crit->LockSemaphore > 1) return crit->LockSemaphore;
+    return NULL;
 }
 
 static inline NTSTATUS wait_semaphore( RTL_CRITICAL_SECTION *crit, int timeout )
 {
     LARGE_INTEGER time = {.QuadPart = timeout * (LONGLONG)-10000000};
+    HANDLE sem = get_semaphore( crit );
 
-    /* debug info is cleared by MakeCriticalSectionGlobal */
-    if (!crit_section_has_debuginfo( crit ))
-    {
-        HANDLE sem = get_semaphore( crit );
-        return NtWaitForSingleObject( sem, FALSE, &time );
-    }
+    if (sem) return NtWaitForSingleObject( sem, FALSE, &time );
     else
     {
         LONG *lock = (LONG *)&crit->LockSemaphore;
@@ -194,12 +188,19 @@ static inline NTSTATUS wait_semaphore( RTL_CRITICAL_SECTION *crit, int timeout )
     }
 }
 
+static ULONG crit_sect_default_flags(void)
+{
+    if (NtCurrentTeb()->Peb->OSMajorVersion > 6 ||
+        (NtCurrentTeb()->Peb->OSMajorVersion == 6 && NtCurrentTeb()->Peb->OSMinorVersion >= 2)) return 0;
+    return RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO;
+}
+
 /******************************************************************************
  *      RtlInitializeCriticalSection   (NTDLL.@)
  */
 NTSTATUS WINAPI RtlInitializeCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
-    return RtlInitializeCriticalSectionEx( crit, 0, 0 );
+    return RtlInitializeCriticalSectionEx( crit, 0, crit_sect_default_flags() );
 }
 
 
@@ -208,7 +209,7 @@ NTSTATUS WINAPI RtlInitializeCriticalSection( RTL_CRITICAL_SECTION *crit )
  */
 NTSTATUS WINAPI RtlInitializeCriticalSectionAndSpinCount( RTL_CRITICAL_SECTION *crit, ULONG spincount )
 {
-    return RtlInitializeCriticalSectionEx( crit, spincount, 0 );
+    return RtlInitializeCriticalSectionEx( crit, spincount, crit_sect_default_flags() );
 }
 
 
@@ -218,7 +219,7 @@ NTSTATUS WINAPI RtlInitializeCriticalSectionAndSpinCount( RTL_CRITICAL_SECTION *
 NTSTATUS WINAPI RtlInitializeCriticalSectionEx( RTL_CRITICAL_SECTION *crit, ULONG spincount, ULONG flags )
 {
     if (flags & (RTL_CRITICAL_SECTION_FLAG_DYNAMIC_SPIN|RTL_CRITICAL_SECTION_FLAG_STATIC_INIT))
-        FIXME("(%p,%u,0x%08x) semi-stub\n", crit, spincount, flags);
+        FIXME("(%p,%lu,0x%08lx) semi-stub\n", crit, spincount, flags);
 
     /* FIXME: if RTL_CRITICAL_SECTION_FLAG_STATIC_INIT is given, we should use
      * memory from a static pool to hold the debug info. Then heap.c could pass
@@ -226,7 +227,7 @@ NTSTATUS WINAPI RtlInitializeCriticalSectionEx( RTL_CRITICAL_SECTION *crit, ULON
      * is done, then debug info should be managed through Rtlp[Allocate|Free]DebugInfo
      * so (e.g.) MakeCriticalSectionGlobal() doesn't free it using HeapFree().
      */
-    if (flags & RTL_CRITICAL_SECTION_FLAG_NO_DEBUG_INFO)
+    if (!(flags & RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO))
         crit->DebugInfo = no_debug_info_marker;
     else
     {
@@ -270,6 +271,8 @@ ULONG WINAPI RtlSetCriticalSectionSpinCount( RTL_CRITICAL_SECTION *crit, ULONG s
  */
 NTSTATUS WINAPI RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
+    HANDLE sem;
+
     crit->LockCount      = -1;
     crit->RecursionCount = 0;
     crit->OwningThread   = 0;
@@ -282,7 +285,9 @@ NTSTATUS WINAPI RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
             crit->DebugInfo = NULL;
         }
     }
-    else NtClose( crit->LockSemaphore );
+    else crit->DebugInfo = NULL;
+
+    if ((sem = get_semaphore( crit ))) NtClose( sem );
     crit->LockSemaphore = 0;
     return STATUS_SUCCESS;
 }
@@ -293,7 +298,7 @@ NTSTATUS WINAPI RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
  */
 NTSTATUS WINAPI RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
-    LONGLONG timeout = NtCurrentTeb()->Peb->CriticalSectionTimeout.QuadPart / -10000000;
+    unsigned int timeout = 5;
 
     /* Don't allow blocking on a critical section during process termination */
     if (RtlDllShutdownInProgress())
@@ -305,43 +310,15 @@ NTSTATUS WINAPI RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit )
 
     for (;;)
     {
-        EXCEPTION_RECORD rec;
-        NTSTATUS status = wait_semaphore( crit, 5 );
-        timeout -= 5;
+        NTSTATUS status = wait_semaphore( crit, timeout );
 
-        if ( status == STATUS_TIMEOUT )
-        {
-            const char *name = NULL;
-            if (crit_section_has_debuginfo( crit )) name = (char *)crit->DebugInfo->Spare[0];
-            if (!name) name = "?";
-            ERR( "section %p %s wait timed out in thread %04x, blocked by %04x, retrying (60 sec)\n",
-                 crit, debugstr_a(name), GetCurrentThreadId(), HandleToULong(crit->OwningThread) );
-            status = wait_semaphore( crit, 60 );
-            timeout -= 60;
-
-            if ( status == STATUS_TIMEOUT && TRACE_ON(relay) )
-            {
-                ERR( "section %p %s wait timed out in thread %04x, blocked by %04x, retrying (5 min)\n",
-                     crit, debugstr_a(name), GetCurrentThreadId(), HandleToULong(crit->OwningThread) );
-                status = wait_semaphore( crit, 300 );
-                timeout -= 300;
-            }
-        }
         if (status == STATUS_WAIT_0) break;
+        if (status != WAIT_TIMEOUT) return status;
 
-        /* Throw exception only for Wine internal locks */
-        if (!crit_section_has_debuginfo( crit ) || !crit->DebugInfo->Spare[0]) continue;
+        timeout = (TRACE_ON(relay) ? 300 : 60);
 
-        /* only throw deadlock exception if configured timeout is reached */
-        if (timeout > 0) continue;
-
-        rec.ExceptionCode    = STATUS_POSSIBLE_DEADLOCK;
-        rec.ExceptionFlags   = 0;
-        rec.ExceptionRecord  = NULL;
-        rec.ExceptionAddress = RtlRaiseException;  /* sic */
-        rec.NumberParameters = 1;
-        rec.ExceptionInformation[0] = (ULONG_PTR)crit;
-        RtlRaiseException( &rec );
+        ERR( "section %p %s wait timed out in thread %04lx, blocked by %04lx, retrying (%u sec)\n",
+             crit, debugstr_a(crit_section_get_name(crit)), GetCurrentThreadId(), HandleToULong(crit->OwningThread), timeout );
     }
     if (crit_section_has_debuginfo( crit )) crit->DebugInfo->ContentionCount++;
     return STATUS_SUCCESS;
@@ -354,13 +331,9 @@ NTSTATUS WINAPI RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit )
 NTSTATUS WINAPI RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
     NTSTATUS ret;
+    HANDLE sem = get_semaphore( crit );
 
-    /* debug info is cleared by MakeCriticalSectionGlobal */
-    if (!crit_section_has_debuginfo( crit ))
-    {
-        HANDLE sem = get_semaphore( crit );
-        ret = NtReleaseSemaphore( sem, 1, NULL );
-    }
+    if (sem) ret = NtReleaseSemaphore( sem, 1, NULL );
     else
     {
         LONG *lock = (LONG *)&crit->LockSemaphore;
@@ -372,15 +345,6 @@ NTSTATUS WINAPI RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
     return ret;
 }
 
-
-static inline void small_pause(void)
-{
-#ifdef __i386__
-    __asm__ __volatile__( "rep;nop" : : : "memory" );
-#else
-    __asm__ __volatile__( "" : : : "memory" );
-#endif
-}
 
 /******************************************************************************
  *      RtlEnterCriticalSection   (NTDLL.@)
@@ -399,12 +363,14 @@ NTSTATUS WINAPI RtlEnterCriticalSection( RTL_CRITICAL_SECTION *crit )
             {
                 if (InterlockedCompareExchange( &crit->LockCount, 0, -1 ) == -1) goto done;
             }
-            small_pause();
+            YieldProcessor();
         }
     }
 
     if (InterlockedIncrement( &crit->LockCount ))
     {
+        NTSTATUS status;
+
         if (crit->OwningThread == ULongToHandle(GetCurrentThreadId()))
         {
             crit->RecursionCount++;
@@ -412,7 +378,7 @@ NTSTATUS WINAPI RtlEnterCriticalSection( RTL_CRITICAL_SECTION *crit )
         }
 
         /* Now wait for it */
-        RtlpWaitForCriticalSection( crit );
+        if ((status = RtlpWaitForCriticalSection( crit ))) RtlRaiseStatus( status );
     }
 done:
     crit->OwningThread   = ULongToHandle(GetCurrentThreadId());
@@ -470,7 +436,7 @@ NTSTATUS WINAPI RtlLeaveCriticalSection( RTL_CRITICAL_SECTION *crit )
     if (--crit->RecursionCount)
     {
         if (crit->RecursionCount > 0) InterlockedDecrement( &crit->LockCount );
-        else ERR( "section %p is not acquired\n", crit );
+        else ERR( "section %p %s is not acquired\n", crit, debugstr_a( crit_section_get_name( crit )));
     }
     else
     {
@@ -505,9 +471,10 @@ DWORD WINAPI RtlRunOnceExecuteOnce( RTL_RUN_ONCE *once, PRTL_RUN_ONCE_INIT_FN fu
 
 struct srw_lock
 {
+    /* bit 0 - if the lock is held exclusive. bit 1.. - number of exclusive waiters. */
     short exclusive_waiters;
 
-    /* Number of shared owners, or -1 if owned exclusive.
+    /* Number of owners.
      *
      * Sadly Windows has no equivalent to FUTEX_WAIT_BITSET, so in order to wake
      * up *only* exclusive or *only* shared waiters (and thus avoid spurious
@@ -518,7 +485,7 @@ struct srw_lock
      * the latter waits only on the "owners" member. Note then that "owners"
      * must not be the first element in the structure.
      */
-    short owners;
+    unsigned short owners;
 };
 C_ASSERT( sizeof(struct srw_lock) == 4 );
 
@@ -549,7 +516,7 @@ void WINAPI RtlAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
 {
     union { RTL_SRWLOCK *rtl; struct srw_lock *s; LONG *l; } u = { lock };
 
-    InterlockedIncrement16( &u.s->exclusive_waiters );
+    InterlockedExchangeAdd16( &u.s->exclusive_waiters, 2 );
 
     for (;;)
     {
@@ -564,8 +531,9 @@ void WINAPI RtlAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
             if (!old.s.owners)
             {
                 /* Not locked exclusive or shared. We can try to grab it. */
-                new.s.owners = -1;
-                --new.s.exclusive_waiters;
+                new.s.owners = 1;
+                new.s.exclusive_waiters -= 2;
+                new.s.exclusive_waiters |= 1;
                 wait = FALSE;
             }
             else
@@ -600,7 +568,7 @@ void WINAPI RtlAcquireSRWLockShared( RTL_SRWLOCK *lock )
             old.s = *u.s;
             new = old;
 
-            if (old.s.owners != -1 && !old.s.exclusive_waiters)
+            if (!old.s.exclusive_waiters)
             {
                 /* Not locked exclusive, and no exclusive waiters.
                  * We can try to grab it. */
@@ -631,9 +599,10 @@ void WINAPI RtlReleaseSRWLockExclusive( RTL_SRWLOCK *lock )
         old.s = *u.s;
         new = old;
 
-        if (old.s.owners != -1) ERR("Lock %p is not owned exclusive!\n", lock);
+        if (!(old.s.exclusive_waiters & 1)) ERR("Lock %p is not owned exclusive!\n", lock);
 
         new.s.owners = 0;
+        new.s.exclusive_waiters &= ~1;
     } while (InterlockedCompareExchange( u.l, new.l, old.l ) != old.l);
 
     if (new.s.exclusive_waiters)
@@ -655,7 +624,7 @@ void WINAPI RtlReleaseSRWLockShared( RTL_SRWLOCK *lock )
         old.s = *u.s;
         new = old;
 
-        if (old.s.owners == -1) ERR("Lock %p is owned exclusive!\n", lock);
+        if (old.s.exclusive_waiters & 1) ERR("Lock %p is owned exclusive!\n", lock);
         else if (!old.s.owners) ERR("Lock %p is not owned shared!\n", lock);
 
         --new.s.owners;
@@ -686,7 +655,8 @@ BOOLEAN WINAPI RtlTryAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
         if (!old.s.owners)
         {
             /* Not locked exclusive or shared. We can try to grab it. */
-            new.s.owners = -1;
+            new.s.owners = 1;
+            new.s.exclusive_waiters |= 1;
             ret = TRUE;
         }
         else
@@ -712,7 +682,7 @@ BOOLEAN WINAPI RtlTryAcquireSRWLockShared( RTL_SRWLOCK *lock )
         old.s = *u.s;
         new.s = old.s;
 
-        if (old.s.owners != -1 && !old.s.exclusive_waiters)
+        if (!old.s.exclusive_waiters)
         {
             /* Not locked exclusive, and no exclusive waiters.
              * We can try to grab it. */
@@ -939,13 +909,16 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
 
     ret = NtWaitForAlertByThreadId( NULL, timeout );
 
-    spin_lock( &queue->lock );
-    /* We may have already been removed by a call to RtlWakeAddressSingle(). */
+    /* We may have already been removed by a call to RtlWakeAddressSingle() or RtlWakeAddressAll(). */
     if (entry.addr)
-        list_remove( &entry.entry );
-    spin_unlock( &queue->lock );
+    {
+        spin_lock( &queue->lock );
+        if (entry.addr)
+            list_remove( &entry.entry );
+        spin_unlock( &queue->lock );
+    }
 
-    TRACE("returning %#x\n", ret);
+    TRACE("returning %#lx\n", ret);
 
     if (ret == STATUS_ALERTED) ret = STATUS_SUCCESS;
     return ret;
@@ -957,8 +930,8 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
 void WINAPI RtlWakeAddressAll( const void *addr )
 {
     struct futex_queue *queue = get_futex_queue( addr );
+    struct futex_entry *entry, *next;
     unsigned int count = 0, i;
-    struct futex_entry *entry;
     DWORD tids[256];
 
     TRACE("%p\n", addr);
@@ -970,10 +943,12 @@ void WINAPI RtlWakeAddressAll( const void *addr )
     if (!queue->queue.next)
         list_init(&queue->queue);
 
-    LIST_FOR_EACH_ENTRY( entry, &queue->queue, struct futex_entry, entry )
+    LIST_FOR_EACH_ENTRY_SAFE( entry, next, &queue->queue, struct futex_entry, entry )
     {
         if (entry->addr == addr)
         {
+            entry->addr = NULL;
+            list_remove( &entry->entry );
             /* Try to buffer wakes, so that we don't make a system call while
              * holding a spinlock. */
             if (count < ARRAY_SIZE(tids))
@@ -1027,4 +1002,375 @@ void WINAPI RtlWakeAddressSingle( const void *addr )
     spin_unlock( &queue->lock );
 
     if (tid) NtAlertThreadByThreadId( (HANDLE)(DWORD_PTR)tid );
+}
+
+/*************************************************************************
+ *           RtlInitializeSListHead (NTDLL.@)
+ */
+void WINAPI RtlInitializeSListHead(PSLIST_HEADER list)
+{
+#ifdef _WIN64
+    list->Alignment = list->Region = 0;
+    list->Header16.HeaderType = 1;  /* we use the 16-byte header */
+#else
+    list->Alignment = 0;
+#endif
+}
+
+/*************************************************************************
+ *           RtlQueryDepthSList (NTDLL.@)
+ */
+WORD WINAPI RtlQueryDepthSList(PSLIST_HEADER list)
+{
+#ifdef _WIN64
+    return list->Header16.Depth;
+#else
+    return list->Depth;
+#endif
+}
+
+/*************************************************************************
+ *           RtlFirstEntrySList (NTDLL.@)
+ */
+PSLIST_ENTRY WINAPI RtlFirstEntrySList(const SLIST_HEADER* list)
+{
+#ifdef _WIN64
+    return (SLIST_ENTRY *)((ULONG_PTR)list->Header16.NextEntry << 4);
+#else
+    return list->Next.Next;
+#endif
+}
+
+/*************************************************************************
+ *           RtlInterlockedFlushSList (NTDLL.@)
+ */
+PSLIST_ENTRY WINAPI RtlInterlockedFlushSList(PSLIST_HEADER list)
+{
+    SLIST_HEADER old, new;
+
+#ifdef _WIN64
+    if (!list->Header16.NextEntry) return NULL;
+    new.Alignment = new.Region = 0;
+    new.Header16.HeaderType = 1;  /* we use the 16-byte header */
+    do
+    {
+        old = *list;
+        new.Header16.Sequence = old.Header16.Sequence + 1;
+    } while (!InterlockedCompareExchange128((__int64 *)list, new.Region, new.Alignment, (__int64 *)&old));
+    return (SLIST_ENTRY *)((ULONG_PTR)old.Header16.NextEntry << 4);
+#else
+    if (!list->Next.Next) return NULL;
+    new.Alignment = 0;
+    do
+    {
+        old = *list;
+        new.Sequence = old.Sequence + 1;
+    } while (InterlockedCompareExchange64((__int64 *)&list->Alignment, new.Alignment,
+                                          old.Alignment) != old.Alignment);
+    return old.Next.Next;
+#endif
+}
+
+/*************************************************************************
+ *           RtlInterlockedPushEntrySList (NTDLL.@)
+ */
+PSLIST_ENTRY WINAPI RtlInterlockedPushEntrySList(PSLIST_HEADER list, PSLIST_ENTRY entry)
+{
+    SLIST_HEADER old, new;
+
+#ifdef _WIN64
+    new.Header16.NextEntry = (ULONG_PTR)entry >> 4;
+    do
+    {
+        old = *list;
+        entry->Next = (SLIST_ENTRY *)((ULONG_PTR)old.Header16.NextEntry << 4);
+        new.Header16.Depth = old.Header16.Depth + 1;
+        new.Header16.Sequence = old.Header16.Sequence + 1;
+    } while (!InterlockedCompareExchange128((__int64 *)list, new.Region, new.Alignment, (__int64 *)&old));
+    return (SLIST_ENTRY *)((ULONG_PTR)old.Header16.NextEntry << 4);
+#else
+    new.Next.Next = entry;
+    do
+    {
+        old = *list;
+        entry->Next = old.Next.Next;
+        new.Depth = old.Depth + 1;
+        new.Sequence = old.Sequence + 1;
+    } while (InterlockedCompareExchange64((__int64 *)&list->Alignment, new.Alignment,
+                                          old.Alignment) != old.Alignment);
+    return old.Next.Next;
+#endif
+}
+
+/*************************************************************************
+ *           RtlInterlockedPopEntrySList (NTDLL.@)
+ */
+PSLIST_ENTRY WINAPI RtlInterlockedPopEntrySList(PSLIST_HEADER list)
+{
+    SLIST_HEADER old, new;
+    PSLIST_ENTRY entry;
+
+#ifdef _WIN64
+    do
+    {
+        old = *list;
+        if (!(entry = (SLIST_ENTRY *)((ULONG_PTR)old.Header16.NextEntry << 4))) return NULL;
+        /* entry could be deleted by another thread */
+        __TRY
+        {
+            new.Header16.NextEntry = (ULONG_PTR)entry->Next >> 4;
+            new.Header16.Depth = old.Header16.Depth - 1;
+            new.Header16.Sequence = old.Header16.Sequence + 1;
+        }
+        __EXCEPT_PAGE_FAULT
+        {
+        }
+        __ENDTRY
+    } while (!InterlockedCompareExchange128((__int64 *)list, new.Region, new.Alignment, (__int64 *)&old));
+#else
+    do
+    {
+        old = *list;
+        if (!(entry = old.Next.Next)) return NULL;
+        /* entry could be deleted by another thread */
+        __TRY
+        {
+            new.Next.Next = entry->Next;
+            new.Depth = old.Depth - 1;
+            new.Sequence = old.Sequence + 1;
+        }
+        __EXCEPT_PAGE_FAULT
+        {
+        }
+        __ENDTRY
+    } while (InterlockedCompareExchange64((__int64 *)&list->Alignment, new.Alignment,
+                                          old.Alignment) != old.Alignment);
+#endif
+    return entry;
+}
+
+/*************************************************************************
+ *           RtlInterlockedPushListSListEx (NTDLL.@)
+ */
+PSLIST_ENTRY WINAPI RtlInterlockedPushListSListEx(PSLIST_HEADER list, PSLIST_ENTRY first,
+                                                  PSLIST_ENTRY last, ULONG count)
+{
+    SLIST_HEADER old, new;
+
+#ifdef _WIN64
+    new.Header16.NextEntry = (ULONG_PTR)first >> 4;
+    do
+    {
+        old = *list;
+        new.Header16.Depth = old.Header16.Depth + count;
+        new.Header16.Sequence = old.Header16.Sequence + 1;
+        last->Next = (SLIST_ENTRY *)((ULONG_PTR)old.Header16.NextEntry << 4);
+    } while (!InterlockedCompareExchange128((__int64 *)list, new.Region, new.Alignment, (__int64 *)&old));
+    return (SLIST_ENTRY *)((ULONG_PTR)old.Header16.NextEntry << 4);
+#else
+    new.Next.Next = first;
+    do
+    {
+        old = *list;
+        new.Depth = old.Depth + count;
+        new.Sequence = old.Sequence + 1;
+        last->Next = old.Next.Next;
+    } while (InterlockedCompareExchange64((__int64 *)&list->Alignment, new.Alignment,
+                                          old.Alignment) != old.Alignment);
+    return old.Next.Next;
+#endif
+}
+
+/*************************************************************************
+ *           RtlInterlockedPushListSList (NTDLL.@)
+ */
+DEFINE_FASTCALL_WRAPPER(RtlInterlockedPushListSList, 16)
+PSLIST_ENTRY FASTCALL RtlInterlockedPushListSList(PSLIST_HEADER list, PSLIST_ENTRY first,
+                                                  PSLIST_ENTRY last, ULONG count)
+{
+    return RtlInterlockedPushListSListEx(list, first, last, count);
+}
+
+/***********************************************************************
+ *           RtlInitializeResource  (NTDLL.@)
+ *
+ * xxxResource() functions implement multiple-reader-single-writer lock.
+ * The code is based on information published in WDJ January 1999 issue.
+ */
+void WINAPI RtlInitializeResource(LPRTL_RWLOCK rwl)
+{
+    if (!rwl) return;
+    rwl->iNumberActive = 0;
+    rwl->uExclusiveWaiters = 0;
+    rwl->uSharedWaiters = 0;
+    rwl->hOwningThreadId = 0;
+    rwl->dwTimeoutBoost = 0; /* no info on this one, default value is 0 */
+    RtlInitializeCriticalSectionEx( &rwl->rtlCS, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
+    rwl->rtlCS.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": RTL_RWLOCK.rtlCS");
+    NtCreateSemaphore( &rwl->hExclusiveReleaseSemaphore, SEMAPHORE_ALL_ACCESS, NULL, 0, 65535 );
+    NtCreateSemaphore( &rwl->hSharedReleaseSemaphore, SEMAPHORE_ALL_ACCESS, NULL, 0, 65535 );
+}
+
+/***********************************************************************
+ *           RtlDeleteResource   (NTDLL.@)
+ */
+void WINAPI RtlDeleteResource(LPRTL_RWLOCK rwl)
+{
+    if (!rwl) return;
+    RtlEnterCriticalSection( &rwl->rtlCS );
+    if( rwl->iNumberActive || rwl->uExclusiveWaiters || rwl->uSharedWaiters )
+        ERR("Deleting active MRSW lock (%p), expect failure\n", rwl );
+    rwl->hOwningThreadId = 0;
+    rwl->uExclusiveWaiters = rwl->uSharedWaiters = 0;
+    rwl->iNumberActive = 0;
+    NtClose( rwl->hExclusiveReleaseSemaphore );
+    NtClose( rwl->hSharedReleaseSemaphore );
+    RtlLeaveCriticalSection( &rwl->rtlCS );
+    rwl->rtlCS.DebugInfo->Spare[0] = 0;
+    RtlDeleteCriticalSection( &rwl->rtlCS );
+}
+
+/***********************************************************************
+ *          RtlAcquireResourceExclusive	(NTDLL.@)
+ */
+BYTE WINAPI RtlAcquireResourceExclusive(LPRTL_RWLOCK rwl, BYTE fWait)
+{
+    BYTE retVal = 0;
+
+    if (!rwl) return 0;
+
+    for (;;)
+    {
+        RtlEnterCriticalSection( &rwl->rtlCS );
+        if( rwl->iNumberActive == 0 ) /* lock is free */
+        {
+            rwl->iNumberActive = -1;
+            retVal = 1;
+        }
+        else if( rwl->iNumberActive < 0 ) /* exclusive lock in progress */
+        {
+            if( rwl->hOwningThreadId == ULongToHandle(GetCurrentThreadId()) )
+            {
+                retVal = 1;
+                rwl->iNumberActive--;
+                break;
+            }
+        wait:
+            if( fWait )
+            {
+                NTSTATUS status;
+
+                rwl->uExclusiveWaiters++;
+
+                RtlLeaveCriticalSection( &rwl->rtlCS );
+                status = NtWaitForSingleObject( rwl->hExclusiveReleaseSemaphore, FALSE, NULL );
+                if( HIWORD(status) ) break;
+                continue; /* restart the acquisition to avoid deadlocks */
+            }
+        }
+        else  /* one or more shared locks are in progress */
+            if( fWait )
+                goto wait;
+
+        if( retVal == 1 ) rwl->hOwningThreadId = ULongToHandle(GetCurrentThreadId());
+        break;
+    }
+    RtlLeaveCriticalSection( &rwl->rtlCS );
+    return retVal;
+}
+
+/***********************************************************************
+ *          RtlAcquireResourceShared  (NTDLL.@)
+ */
+BYTE WINAPI RtlAcquireResourceShared(LPRTL_RWLOCK rwl, BYTE fWait)
+{
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
+    BYTE retVal = 0;
+
+    if (!rwl) return 0;
+    for (;;)
+    {
+        RtlEnterCriticalSection( &rwl->rtlCS );
+        if( rwl->iNumberActive < 0 )
+        {
+            if( rwl->hOwningThreadId == ULongToHandle(GetCurrentThreadId()) )
+            {
+                rwl->iNumberActive--;
+                retVal = 1;
+                break;
+            }
+
+            if( fWait )
+            {
+                rwl->uSharedWaiters++;
+                RtlLeaveCriticalSection( &rwl->rtlCS );
+                status = NtWaitForSingleObject( rwl->hSharedReleaseSemaphore, FALSE, NULL );
+                if( HIWORD(status) ) break;
+                continue;
+            }
+        }
+        else
+        {
+            if( status != STATUS_WAIT_0 ) /* otherwise RtlReleaseResource() has already done it */
+                rwl->iNumberActive++;
+            retVal = 1;
+        }
+        break;
+    }
+    RtlLeaveCriticalSection( &rwl->rtlCS );
+    return retVal;
+}
+
+
+/***********************************************************************
+ *           RtlReleaseResource  (NTDLL.@)
+ */
+void WINAPI RtlReleaseResource(LPRTL_RWLOCK rwl)
+{
+    RtlEnterCriticalSection( &rwl->rtlCS );
+
+    if( rwl->iNumberActive > 0 ) /* have one or more readers */
+    {
+	if( --rwl->iNumberActive == 0 )
+	{
+	    if( rwl->uExclusiveWaiters )
+	    {
+		rwl->uExclusiveWaiters--;
+		NtReleaseSemaphore( rwl->hExclusiveReleaseSemaphore, 1, NULL );
+	    }
+	}
+    }
+    else if( rwl->iNumberActive < 0 ) /* have a writer, possibly recursive */
+    {
+	if( ++rwl->iNumberActive == 0 )
+	{
+	    rwl->hOwningThreadId = 0;
+	    if( rwl->uExclusiveWaiters )
+	    {
+		rwl->uExclusiveWaiters--;
+		NtReleaseSemaphore( rwl->hExclusiveReleaseSemaphore, 1, NULL );
+	    }
+	    else if( rwl->uSharedWaiters )
+            {
+                UINT n = rwl->uSharedWaiters;
+                rwl->iNumberActive = rwl->uSharedWaiters; /* prevent new writers from joining until
+                                                           * all queued readers have done their thing */
+                rwl->uSharedWaiters = 0;
+                NtReleaseSemaphore( rwl->hSharedReleaseSemaphore, n, NULL );
+            }
+	}
+    }
+    RtlLeaveCriticalSection( &rwl->rtlCS );
+}
+
+
+/***********************************************************************
+ *           RtlDumpResource		(NTDLL.@)
+ */
+void WINAPI RtlDumpResource(LPRTL_RWLOCK rwl)
+{
+    if (!rwl) return;
+    ERR( "%p: active count = %i waiting readers = %i waiting writers = %i owner thread = %p",
+         rwl, rwl->iNumberActive, rwl->uSharedWaiters, rwl->uExclusiveWaiters, rwl->hOwningThreadId );
+    ERR( "\n" );
 }

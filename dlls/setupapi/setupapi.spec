@@ -208,6 +208,14 @@
 @ stub DelimStringToMultiSz
 @ stub DestroyTextFileReadBuffer
 @ stdcall DoesUserHavePrivilege(wstr)
+@ stdcall DriverStoreAddDriverPackageA(ptr ptr ptr long ptr ptr)
+@ stdcall DriverStoreAddDriverPackageW(ptr ptr ptr long ptr ptr)
+@ stdcall DriverStoreDeleteDriverPackageA(ptr ptr ptr)
+@ stdcall DriverStoreDeleteDriverPackageW(ptr ptr ptr)
+@ stub DriverStoreEnumDriverPackageA
+@ stub DriverStoreEnumDriverPackageW
+@ stdcall DriverStoreFindDriverPackageA(ptr ptr ptr long ptr ptr ptr)
+@ stdcall DriverStoreFindDriverPackageW(ptr ptr ptr long ptr ptr ptr)
 @ stdcall DuplicateString(wstr)
 @ stdcall EnablePrivilege(wstr long)
 @ stub ExtensionPropSheetPageProc
@@ -336,6 +344,9 @@
 @ stub SetupDiGetClassImageListExW
 @ stub SetupDiGetClassInstallParamsA
 @ stub SetupDiGetClassInstallParamsW
+@ stdcall SetupDiGetClassRegistryPropertyW(ptr long ptr ptr long ptr wstr ptr)
+@ stdcall SetupDiGetCustomDevicePropertyA(ptr ptr str long ptr ptr long ptr)
+@ stdcall SetupDiGetCustomDevicePropertyW(ptr ptr wstr long ptr ptr long ptr)
 @ stub SetupDiGetDeviceInfoListClass
 @ stdcall SetupDiGetDeviceInfoListDetailA(ptr ptr)
 @ stdcall SetupDiGetDeviceInfoListDetailW(ptr ptr)
@@ -346,6 +357,7 @@
 @ stub SetupDiGetDeviceInterfaceAlias
 @ stdcall SetupDiGetDeviceInterfaceDetailA(long ptr ptr long ptr ptr)
 @ stdcall SetupDiGetDeviceInterfaceDetailW(long ptr ptr long ptr ptr)
+@ stdcall SetupDiGetDevicePropertyKeys(ptr ptr ptr long ptr long)
 @ stdcall SetupDiGetDevicePropertyW(ptr ptr ptr ptr ptr long ptr long)
 @ stdcall SetupDiGetDeviceRegistryPropertyA(long ptr long ptr ptr long ptr)
 @ stdcall SetupDiGetDeviceRegistryPropertyW(long ptr long ptr ptr long ptr)
@@ -491,8 +503,8 @@
 @ stdcall SetupQueryInfFileInformationW(ptr long wstr long ptr)
 @ stdcall SetupQueryInfOriginalFileInformationA(ptr long ptr ptr)
 @ stdcall SetupQueryInfOriginalFileInformationW(ptr long ptr ptr)
-@ stub SetupQueryInfVersionInformationA
-@ stub SetupQueryInfVersionInformationW
+@ stdcall SetupQueryInfVersionInformationA(ptr long str ptr long ptr)
+@ stdcall SetupQueryInfVersionInformationW(ptr long wstr ptr long ptr)
 @ stub SetupQuerySourceListA
 @ stub SetupQuerySourceListW
 @ stdcall SetupQuerySpaceRequiredOnDriveA(long str ptr ptr long)

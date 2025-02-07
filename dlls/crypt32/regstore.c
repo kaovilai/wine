@@ -45,7 +45,7 @@ typedef struct _WINE_REGSTOREINFO
     struct list      ctlsToDelete;
 } WINE_REGSTOREINFO;
 
-static void CRYPT_HashToStr(const BYTE *hash, LPWSTR asciiHash)
+void CRYPT_HashToStr(const BYTE *hash, LPWSTR asciiHash)
 {
     DWORD i;
 
@@ -56,8 +56,7 @@ static void CRYPT_HashToStr(const BYTE *hash, LPWSTR asciiHash)
         wsprintfW(asciiHash + i * 2, L"%02X", hash[i]);
 }
 
-static void CRYPT_RegReadSerializedFromReg(HKEY key, DWORD contextType,
- HCERTSTORE store)
+void CRYPT_RegReadSerializedFromReg(HKEY key, DWORD contextType, HCERTSTORE store, DWORD disposition)
 {
     LONG rc;
     DWORD index = 0;
@@ -130,7 +129,7 @@ static void CRYPT_RegReadSerializedFromReg(HKEY key, DWORD contextType,
                                         TRACE("hash matches, adding\n");
                                         contextInterface->addContextToStore(
                                          store, context,
-                                         CERT_STORE_ADD_REPLACE_EXISTING, NULL);
+                                         disposition, NULL);
                                     }
                                     else
                                         TRACE("hash doesn't match, ignoring\n");
@@ -149,7 +148,7 @@ static void CRYPT_RegReadSerializedFromReg(HKEY key, DWORD contextType,
     } while (!rc);
 }
 
-static void CRYPT_RegReadFromReg(HKEY key, HCERTSTORE store)
+static void CRYPT_RegReadFromReg(HKEY key, HCERTSTORE store, DWORD disposition)
 {
     static const WCHAR * const subKeys[] = { L"Certificates", L"CRLs", L"CTLs" };
     static const DWORD contextFlags[] = { CERT_STORE_CERTIFICATE_CONTEXT_FLAG,
@@ -165,7 +164,7 @@ static void CRYPT_RegReadFromReg(HKEY key, HCERTSTORE store)
          &hKey, NULL);
         if (!rc)
         {
-            CRYPT_RegReadSerializedFromReg(hKey, contextFlags[i], store);
+            CRYPT_RegReadSerializedFromReg(hKey, contextFlags[i], store, disposition);
             RegCloseKey(hKey);
         }
     }
@@ -198,7 +197,36 @@ static BOOL CRYPT_WriteSerializedToReg(HKEY key, DWORD flags, const BYTE *hash, 
     return ret;
 }
 
-BOOL CRYPT_SerializeContextsToReg(HKEY key, DWORD flags,
+BOOL CRYPT_SerializeContextToReg(HKEY key, DWORD flags, const WINE_CONTEXT_INTERFACE *context_iface,
+ const void *context)
+{
+    BYTE hash[20];
+    DWORD hash_size = sizeof(hash);
+    DWORD size = 0;
+    BYTE *buf;
+    BOOL ret;
+
+    if (!context_iface->getProp(context, CERT_HASH_PROP_ID, hash,  &hash_size))
+        return FALSE;
+
+    context_iface->serialize(context, 0, NULL, &size);
+    if (!size)
+        return FALSE;
+
+    if (!(buf = CryptMemAlloc(size)))
+        return FALSE;
+
+    if (!(context_iface->serialize(context, 0, buf, &size)))
+    {
+        CryptMemFree(buf);
+        return FALSE;
+    }
+    ret = CRYPT_WriteSerializedToReg(key, flags, hash, buf, size);
+    CryptMemFree(buf);
+    return ret;
+}
+
+static BOOL CRYPT_SerializeContextsToReg(HKEY key, DWORD flags,
  const WINE_CONTEXT_INTERFACE *contextInterface, HCERTSTORE memStore)
 {
     const void *context = NULL;
@@ -206,36 +234,20 @@ BOOL CRYPT_SerializeContextsToReg(HKEY key, DWORD flags,
 
     do {
         context = contextInterface->enumContextsInStore(memStore, context);
-        if (context)
-        {
-            BYTE hash[20];
-            DWORD hashSize = sizeof(hash);
-
-            ret = contextInterface->getProp(context, CERT_HASH_PROP_ID, hash,
-             &hashSize);
-            if (ret)
-            {
-                DWORD size = 0;
-                LPBYTE buf = NULL;
-
-                ret = contextInterface->serialize(context, 0, NULL, &size);
-                if (size)
-                    buf = CryptMemAlloc(size);
-                if (buf)
-                {
-                    ret = contextInterface->serialize(context, 0, buf, &size);
-                    if (ret)
-                        ret = CRYPT_WriteSerializedToReg(key, flags, hash, buf, size);
-                }
-                CryptMemFree(buf);
-            }
-        }
-        else
-            ret = TRUE;
+        ret = !context || CRYPT_SerializeContextToReg(key, flags, contextInterface, context);
     } while (ret && context != NULL);
     if (context)
         Context_Release(context_from_ptr(context));
     return ret;
+}
+
+void CRYPT_RegDeleteFromReg(HKEY key, const BYTE *sha1_hash)
+{
+    WCHAR hash[20 * 2 + 1];
+
+    CRYPT_HashToStr(sha1_hash, hash);
+    TRACE("Removing %s\n", debugstr_w(hash));
+    RegDeleteKeyW(key, hash);
 }
 
 static BOOL CRYPT_RegWriteToReg(WINE_REGSTOREINFO *store)
@@ -259,22 +271,12 @@ static BOOL CRYPT_RegWriteToReg(WINE_REGSTOREINFO *store)
             if (listToDelete[i])
             {
                 WINE_HASH_TO_DELETE *toDelete, *next;
-                WCHAR asciiHash[20 * 2 + 1];
 
                 EnterCriticalSection(&store->cs);
                 LIST_FOR_EACH_ENTRY_SAFE(toDelete, next, listToDelete[i],
                  WINE_HASH_TO_DELETE, entry)
                 {
-                    LONG rc;
-
-                    CRYPT_HashToStr(toDelete->hash, asciiHash);
-                    TRACE("Removing %s\n", debugstr_w(asciiHash));
-                    rc = RegDeleteKeyW(key, asciiHash);
-                    if (rc != ERROR_SUCCESS && rc != ERROR_FILE_NOT_FOUND)
-                    {
-                        SetLastError(rc);
-                        ret = FALSE;
-                    }
+                    CRYPT_RegDeleteFromReg(key, toDelete->hash);
                     list_remove(&toDelete->entry);
                     CryptMemFree(toDelete);
                 }
@@ -316,9 +318,9 @@ static void WINAPI CRYPT_RegCloseStore(HCERTSTORE hCertStore, DWORD dwFlags)
 {
     WINE_REGSTOREINFO *store = hCertStore;
 
-    TRACE("(%p, %08x)\n", store, dwFlags);
+    TRACE("(%p, %08lx)\n", store, dwFlags);
     if (dwFlags)
-        FIXME("Unimplemented flags: %08x\n", dwFlags);
+        FIXME("Unimplemented flags: %08lx\n", dwFlags);
 
     CRYPT_RegFlushStore(store, FALSE);
     RegCloseKey(store->key);
@@ -388,7 +390,7 @@ static BOOL WINAPI CRYPT_RegWriteCert(HCERTSTORE hCertStore,
 {
     WINE_REGSTOREINFO *store = hCertStore;
 
-    TRACE("(%p, %p, %d)\n", hCertStore, cert, dwFlags);
+    TRACE("(%p, %p, %ld)\n", hCertStore, cert, dwFlags);
 
     return CRYPT_RegWriteContext(store, cert, dwFlags);
 }
@@ -398,7 +400,7 @@ static BOOL WINAPI CRYPT_RegDeleteCert(HCERTSTORE hCertStore,
 {
     WINE_REGSTOREINFO *store = hCertStore;
 
-    TRACE("(%p, %p, %08x)\n", store, pCertContext, dwFlags);
+    TRACE("(%p, %p, %08lx)\n", store, pCertContext, dwFlags);
 
     return CRYPT_RegDeleteContext(store, &store->certsToDelete, pCertContext,
      pCertInterface);
@@ -409,7 +411,7 @@ static BOOL WINAPI CRYPT_RegWriteCRL(HCERTSTORE hCertStore,
 {
     WINE_REGSTOREINFO *store = hCertStore;
 
-    TRACE("(%p, %p, %d)\n", hCertStore, crl, dwFlags);
+    TRACE("(%p, %p, %ld)\n", hCertStore, crl, dwFlags);
 
     return CRYPT_RegWriteContext(store, crl, dwFlags);
 }
@@ -419,7 +421,7 @@ static BOOL WINAPI CRYPT_RegDeleteCRL(HCERTSTORE hCertStore,
 {
     WINE_REGSTOREINFO *store = hCertStore;
 
-    TRACE("(%p, %p, %08x)\n", store, pCrlContext, dwFlags);
+    TRACE("(%p, %p, %08lx)\n", store, pCrlContext, dwFlags);
 
     return CRYPT_RegDeleteContext(store, &store->crlsToDelete, pCrlContext,
      pCRLInterface);
@@ -430,7 +432,7 @@ static BOOL WINAPI CRYPT_RegWriteCTL(HCERTSTORE hCertStore,
 {
     WINE_REGSTOREINFO *store = hCertStore;
 
-    TRACE("(%p, %p, %d)\n", hCertStore, ctl, dwFlags);
+    TRACE("(%p, %p, %ld)\n", hCertStore, ctl, dwFlags);
 
     return CRYPT_RegWriteContext(store, ctl, dwFlags);
 }
@@ -440,7 +442,7 @@ static BOOL WINAPI CRYPT_RegDeleteCTL(HCERTSTORE hCertStore,
 {
     WINE_REGSTOREINFO *store = hCertStore;
 
-    TRACE("(%p, %p, %08x)\n", store, pCtlContext, dwFlags);
+    TRACE("(%p, %p, %08lx)\n", store, pCtlContext, dwFlags);
 
     return CRYPT_RegDeleteContext(store, &store->ctlsToDelete, pCtlContext,
      pCTLInterface);
@@ -452,7 +454,7 @@ static BOOL WINAPI CRYPT_RegControl(HCERTSTORE hCertStore, DWORD dwFlags,
     WINE_REGSTOREINFO *store = hCertStore;
     BOOL ret = TRUE;
 
-    TRACE("(%p, %08x, %d, %p)\n", hCertStore, dwFlags, dwCtrlType,
+    TRACE("(%p, %08lx, %ld, %p)\n", hCertStore, dwFlags, dwCtrlType,
      pvCtrlPara);
 
     switch (dwCtrlType)
@@ -463,7 +465,7 @@ static BOOL WINAPI CRYPT_RegControl(HCERTSTORE hCertStore, DWORD dwFlags,
          CERT_STORE_CREATE_NEW_FLAG, NULL);
 
         CRYPT_RegFlushStore(store, FALSE);
-        CRYPT_RegReadFromReg(store->key, memStore);
+        CRYPT_RegReadFromReg(store->key, memStore, CERT_STORE_ADD_REPLACE_EXISTING);
         I_CertUpdateStore(store->memStore, memStore, 0, 0);
         CertCloseStore(memStore, 0);
         break;
@@ -479,7 +481,7 @@ static BOOL WINAPI CRYPT_RegControl(HCERTSTORE hCertStore, DWORD dwFlags,
         FIXME("CERT_STORE_CTRL_NOTIFY_CHANGE: stub\n");
         break;
     default:
-        FIXME("%u: stub\n", dwCtrlType);
+        FIXME("%lu: stub\n", dwCtrlType);
         ret = FALSE;
     }
     return ret;
@@ -507,7 +509,7 @@ WINECRYPT_CERTSTORE *CRYPT_RegOpenStore(HCRYPTPROV hCryptProv, DWORD dwFlags,
 {
     WINECRYPT_CERTSTORE *store = NULL;
 
-    TRACE("(%ld, %08x, %p)\n", hCryptProv, dwFlags, pvPara);
+    TRACE("(%Id, %08lx, %p)\n", hCryptProv, dwFlags, pvPara);
 
     if (dwFlags & CERT_STORE_DELETE_FLAG)
     {
@@ -546,12 +548,12 @@ WINECRYPT_CERTSTORE *CRYPT_RegOpenStore(HCRYPTPROV hCryptProv, DWORD dwFlags,
                     regInfo->dwOpenFlags = dwFlags;
                     regInfo->memStore = memStore;
                     regInfo->key = key;
-                    InitializeCriticalSection(&regInfo->cs);
+                    InitializeCriticalSectionEx(&regInfo->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
                     regInfo->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": PWINE_REGSTOREINFO->cs");
                     list_init(&regInfo->certsToDelete);
                     list_init(&regInfo->crlsToDelete);
                     list_init(&regInfo->ctlsToDelete);
-                    CRYPT_RegReadFromReg(regInfo->key, regInfo->memStore);
+                    CRYPT_RegReadFromReg(regInfo->key, regInfo->memStore, CERT_STORE_ADD_ALWAYS);
                     regInfo->dirty = FALSE;
                     provInfo.cbSize = sizeof(provInfo);
                     provInfo.cStoreProvFunc = ARRAY_SIZE(regProvFuncs);

@@ -12,10 +12,11 @@ SOURCES = \
 
 PROGRAMS = $(WINELOADER_PROGRAMS)
 INSTALL_LIB = $(WINELOADER_PROGRAMS)
+UNIX_CFLAGS = -fPIE
 
 preloader_EXTRADEFS = -fno-builtin
 
-main_EXTRADEFS = -DDLLDIR=\"${dlldir}\" -DBIN_TO_DLLDIR=\"`${MAKEDEP} -R ${bindir} ${dlldir}`\"
+main_EXTRADEFS = -DBINDIR=\"${bindir}\" -DLIBDIR=\"${libdir}\"
 
 wine_OBJS = main.o
 wine_DEPS = $(WINELOADER_DEPENDS)

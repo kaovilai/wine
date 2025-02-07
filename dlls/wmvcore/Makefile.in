@@ -1,4 +1,3 @@
-EXTRADEFS = -DWINE_NO_LONG_TYPES
 MODULE    = wmvcore.dll
 IMPORTLIB = wmvcore
 IMPORTS   = kernel32
@@ -6,8 +5,8 @@ DELAYIMPORTS = winegstreamer
 
 EXTRADLLFLAGS = -Wb,--prefer-native
 
-C_SRCS = \
+SOURCES = \
+	async_reader.c \
+	version.rc \
 	wmvcore_main.c \
 	writer.c
-
-RC_SRCS = version.rc

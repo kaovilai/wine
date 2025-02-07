@@ -116,13 +116,9 @@ static inline struct base_device *impl_from_unix_device(struct unix_device *ifac
     return CONTAINING_RECORD(iface, struct base_device, unix_device);
 }
 
-#define QUIRK_DS4_BT 0x1
-#define QUIRK_DUALSENSE_BT 0x2
-
 struct hidraw_device
 {
     struct base_device base;
-    DWORD quirks;
 };
 
 static inline struct hidraw_device *hidraw_impl_from_unix_device(struct unix_device *iface)
@@ -260,12 +256,12 @@ static struct base_device *find_device_from_fd(int fd)
     return NULL;
 }
 
-static struct base_device *find_device_from_udev(struct udev_device *dev)
+static struct base_device *find_device_from_devnode(const char *path)
 {
     struct base_device *impl;
 
     LIST_FOR_EACH_ENTRY(impl, &device_list, struct base_device, unix_device.entry)
-        if (impl->udev_device == dev) return impl;
+        if (!strcmp(impl->devnode, path)) return impl;
 
     return NULL;
 }
@@ -339,77 +335,7 @@ static void hidraw_device_read_report(struct unix_device *iface)
     else if (size == 0)
         TRACE("Failed to read report\n");
     else
-    {
-        /* As described in the Linux kernel driver, when connected over bluetooth, DS4 controllers
-         * start sending input through report #17 as soon as they receive a feature report #2, which
-         * the kernel sends anyway for calibration.
-         *
-         * Input report #17 is the same as the default input report #1, with additional gyro data and
-         * two additional bytes in front, but is only described as vendor specific in the report descriptor,
-         * and applications aren't expecting it.
-         *
-         * We have to translate it to input report #1, like native driver does.
-         */
-        if ((impl->quirks & QUIRK_DS4_BT) && report_buffer[0] == 0x11 && size >= 12)
-        {
-            size = 10;
-            buff += 2;
-            buff[0] = 1;
-        }
-
-        /* The behavior of DualSense is very similar to DS4 described above with a few exceptions.
-         *
-         * The report number #41 is used for the extended bluetooth input report. The report comes
-         * with only one extra byte in front and the format is not exactly the same as the one used
-         * for the report #1 so we need to shuffle a few bytes around.
-         *
-         * Basic #1 report:
-         *   X  Y  Z  RZ  Buttons[3]  TriggerLeft  TriggerRight
-         *
-         * Extended #41 report:
-         *   Prefix X  Y  Z  Rz  TriggerLeft  TriggerRight  Counter  Buttons[3] ...
-         */
-        if ((impl->quirks & QUIRK_DUALSENSE_BT) && report_buffer[0] == 0x31 && size >= 11)
-        {
-            BYTE trigger[2];
-            size = 10;
-            buff += 1;
-
-            buff[0] = 1; /* fake report #1 */
-
-            trigger[0] = buff[5]; /* TriggerLeft*/
-            trigger[1] = buff[6]; /* TriggerRight */
-
-            buff[5] = buff[8];    /* Buttons[0] */
-            buff[6] = buff[9];    /* Buttons[1] */
-            buff[7] = buff[10];   /* Buttons[2] */
-            buff[8] = trigger[0]; /* TriggerLeft */
-            buff[9] = trigger[1]; /* TirggerRight */
-        }
-
         bus_event_queue_input_report(&event_queue, iface, buff, size);
-    }
-}
-
-static void hidraw_disable_sony_quirks(struct unix_device *iface)
-{
-    struct hidraw_device *impl = hidraw_impl_from_unix_device(iface);
-
-    /* FIXME: we may want to validate CRC at the end of the outbound HID reports,
-     * as controllers do not switch modes if it is incorrect.
-     */
-
-    if ((impl->quirks & QUIRK_DS4_BT))
-    {
-        TRACE("Disabling report quirk for Bluetooth DualShock4 controller iface %p\n", iface);
-        impl->quirks &= ~QUIRK_DS4_BT;
-    }
-
-    if ((impl->quirks & QUIRK_DUALSENSE_BT))
-    {
-        TRACE("Disabling report quirk for Bluetooth DualSense controller iface %p\n", iface);
-        impl->quirks &= ~QUIRK_DUALSENSE_BT;
-    }
 }
 
 static void hidraw_device_set_output_report(struct unix_device *iface, HID_XFER_PACKET *packet, IO_STATUS_BLOCK *io)
@@ -431,7 +357,6 @@ static void hidraw_device_set_output_report(struct unix_device *iface, HID_XFER_
 
     if (count > 0)
     {
-        hidraw_disable_sony_quirks(iface);
         io->Information = count;
         io->Status = STATUS_SUCCESS;
     }
@@ -464,7 +389,6 @@ static void hidraw_device_get_feature_report(struct unix_device *iface, HID_XFER
 
     if (count > 0)
     {
-        hidraw_disable_sony_quirks(iface);
         io->Information = count;
         io->Status = STATUS_SUCCESS;
     }
@@ -501,7 +425,6 @@ static void hidraw_device_set_feature_report(struct unix_device *iface, HID_XFER
 
     if (count > 0)
     {
-        hidraw_disable_sony_quirks(iface);
         io->Information = count;
         io->Status = STATUS_SUCCESS;
     }
@@ -530,41 +453,18 @@ static const struct raw_device_vtbl hidraw_device_vtbl =
 
 #ifdef HAS_PROPER_INPUT_HEADER
 
-static const char *get_device_syspath(struct udev_device *dev)
-{
-    struct udev_device *parent;
-
-    if ((parent = udev_device_get_parent_with_subsystem_devtype(dev, "hid", NULL)))
-        return udev_device_get_syspath(parent);
-
-    if ((parent = udev_device_get_parent_with_subsystem_devtype(dev, "usb", "usb_device")))
-        return udev_device_get_syspath(parent);
-
-    return "";
-}
-
-static struct base_device *find_device_from_syspath(const char *path)
-{
-    struct base_device *impl;
-
-    LIST_FOR_EACH_ENTRY(impl, &device_list, struct base_device, unix_device.entry)
-        if (!strcmp(get_device_syspath(impl->udev_device), path)) return impl;
-
-    return NULL;
-}
-
 #define test_bit(arr,bit) (((BYTE*)(arr))[(bit)>>3]&(1<<((bit)&7)))
 
-static const BYTE* what_am_I(struct udev_device *dev)
+static const USAGE_AND_PAGE *what_am_I(struct udev_device *dev, int fd)
 {
-    static const BYTE Unknown[2]     = {HID_USAGE_PAGE_GENERIC, 0};
-    static const BYTE Mouse[2]       = {HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_MOUSE};
-    static const BYTE Keyboard[2]    = {HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_KEYBOARD};
-    static const BYTE Gamepad[2]     = {HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_GAMEPAD};
-    static const BYTE Keypad[2]      = {HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_KEYPAD};
-    static const BYTE Tablet[2]      = {HID_USAGE_PAGE_DIGITIZER, HID_USAGE_DIGITIZER_PEN};
-    static const BYTE Touchscreen[2] = {HID_USAGE_PAGE_DIGITIZER, HID_USAGE_DIGITIZER_TOUCH_SCREEN};
-    static const BYTE Touchpad[2]    = {HID_USAGE_PAGE_DIGITIZER, HID_USAGE_DIGITIZER_TOUCH_PAD};
+    static const USAGE_AND_PAGE Unknown     = {.UsagePage = HID_USAGE_PAGE_GENERIC, .Usage = 0};
+    static const USAGE_AND_PAGE Mouse       = {.UsagePage = HID_USAGE_PAGE_GENERIC, .Usage = HID_USAGE_GENERIC_MOUSE};
+    static const USAGE_AND_PAGE Keyboard    = {.UsagePage = HID_USAGE_PAGE_GENERIC, .Usage = HID_USAGE_GENERIC_KEYBOARD};
+    static const USAGE_AND_PAGE Gamepad     = {.UsagePage = HID_USAGE_PAGE_GENERIC, .Usage = HID_USAGE_GENERIC_GAMEPAD};
+    static const USAGE_AND_PAGE Keypad      = {.UsagePage = HID_USAGE_PAGE_GENERIC, .Usage = HID_USAGE_GENERIC_KEYPAD};
+    static const USAGE_AND_PAGE Tablet      = {.UsagePage = HID_USAGE_PAGE_DIGITIZER, .Usage = HID_USAGE_DIGITIZER_PEN};
+    static const USAGE_AND_PAGE Touchscreen = {.UsagePage = HID_USAGE_PAGE_DIGITIZER, .Usage = HID_USAGE_DIGITIZER_TOUCH_SCREEN};
+    static const USAGE_AND_PAGE Touchpad    = {.UsagePage = HID_USAGE_PAGE_DIGITIZER, .Usage = HID_USAGE_DIGITIZER_TOUCH_PAD};
 
     struct udev_device *parent = dev;
 
@@ -572,23 +472,24 @@ static const BYTE* what_am_I(struct udev_device *dev)
     while (parent)
     {
         if (udev_device_get_property_value(parent, "ID_INPUT_MOUSE"))
-            return Mouse;
+            return &Mouse;
         else if (udev_device_get_property_value(parent, "ID_INPUT_KEYBOARD"))
-            return Keyboard;
+            return &Keyboard;
         else if (udev_device_get_property_value(parent, "ID_INPUT_JOYSTICK"))
-            return Gamepad;
+            return &Gamepad;
         else if (udev_device_get_property_value(parent, "ID_INPUT_KEY"))
-            return Keypad;
+            return &Keypad;
         else if (udev_device_get_property_value(parent, "ID_INPUT_TOUCHPAD"))
-            return Touchpad;
+            return &Touchpad;
         else if (udev_device_get_property_value(parent, "ID_INPUT_TOUCHSCREEN"))
-            return Touchscreen;
+            return &Touchscreen;
         else if (udev_device_get_property_value(parent, "ID_INPUT_TABLET"))
-            return Tablet;
+            return &Tablet;
 
         parent = udev_device_get_parent_with_subsystem_devtype(parent, "input", NULL);
     }
-    return Unknown;
+
+    return &Unknown;
 }
 
 static INT count_buttons(int device_fd, BYTE *map)
@@ -642,8 +543,8 @@ static NTSTATUS build_report_descriptor(struct unix_device *iface, struct udev_d
     USHORT count = 0;
     USAGE usages[16];
     INT i, button_count, abs_count, rel_count, hat_count;
-    const BYTE *device_usage = what_am_I(dev);
     struct lnxev_device *impl = lnxev_impl_from_unix_device(iface);
+    const USAGE_AND_PAGE device_usage = *what_am_I(dev, impl->base.device_fd);
 
     if (ioctl(impl->base.device_fd, EVIOCGBIT(EV_REL, sizeof(relbits)), relbits) == -1)
     {
@@ -661,10 +562,10 @@ static NTSTATUS build_report_descriptor(struct unix_device *iface, struct udev_d
         memset(ffbits, 0, sizeof(ffbits));
     }
 
-    if (!hid_device_begin_report_descriptor(iface, device_usage[0], device_usage[1]))
+    if (!hid_device_begin_report_descriptor(iface, &device_usage))
         return STATUS_NO_MEMORY;
 
-    if (!hid_device_begin_input_report(iface))
+    if (!hid_device_begin_input_report(iface, &device_usage))
         return STATUS_NO_MEMORY;
 
     abs_count = 0;
@@ -827,12 +728,6 @@ static void lnxev_device_destroy(struct unix_device *iface)
 
 static NTSTATUS lnxev_device_start(struct unix_device *iface)
 {
-    struct lnxev_device *impl = lnxev_impl_from_unix_device(iface);
-    NTSTATUS status;
-
-    if ((status = build_report_descriptor(iface, impl->base.udev_device)))
-        return status;
-
     pthread_mutex_lock(&udev_cs);
     start_polling_device(iface);
     pthread_mutex_unlock(&udev_cs);
@@ -866,7 +761,8 @@ static void lnxev_device_read_report(struct unix_device *iface)
 }
 
 static NTSTATUS lnxev_device_haptics_start(struct unix_device *iface, UINT duration_ms,
-                                           USHORT rumble_intensity, USHORT buzz_intensity)
+                                           USHORT rumble_intensity, USHORT buzz_intensity,
+                                           USHORT left_intensity, USHORT right_intensity)
 {
     struct lnxev_device *impl = lnxev_impl_from_unix_device(iface);
     struct ff_effect effect =
@@ -876,8 +772,8 @@ static NTSTATUS lnxev_device_haptics_start(struct unix_device *iface, UINT durat
     };
     struct input_event event;
 
-    TRACE("iface %p, duration_ms %u, rumble_intensity %u, buzz_intensity %u.\n", iface,
-          duration_ms, rumble_intensity, buzz_intensity);
+    TRACE("iface %p, duration_ms %u, rumble_intensity %u, buzz_intensity %u, left_intensity %u, right_intensity %u.\n",
+          iface, duration_ms, rumble_intensity, buzz_intensity, left_intensity, right_intensity);
 
     effect.replay.length = duration_ms;
     effect.u.rumble.strong_magnitude = rumble_intensity;
@@ -906,6 +802,29 @@ static NTSTATUS lnxev_device_haptics_start(struct unix_device *iface, UINT durat
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS lnxev_device_haptics_stop(struct unix_device *iface)
+{
+    struct lnxev_device *impl = lnxev_impl_from_unix_device(iface);
+    struct ff_effect effect =
+    {
+        .id = impl->haptic_effect_id,
+        .type = FF_RUMBLE,
+    };
+    struct input_event event;
+
+    TRACE("iface %p.\n", iface);
+
+    if (effect.id == -1) return STATUS_SUCCESS;
+
+    event.type = EV_FF;
+    event.code = effect.id;
+    event.value = 0;
+    if (write(impl->base.device_fd, &event, sizeof(event)) == -1)
+        WARN("couldn't stop haptics rumble effect: %d %s\n", errno, strerror(errno));
+
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS lnxev_device_physical_effect_run(struct lnxev_device *impl, BYTE index,
                                                  int iterations)
 {
@@ -923,6 +842,24 @@ static NTSTATUS lnxev_device_physical_effect_run(struct lnxev_device *impl, BYTE
         WARN("couldn't stop effect, write failed %d %s\n", errno, strerror(errno));
         return STATUS_UNSUCCESSFUL;
     }
+
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS lnxev_device_physical_device_set_autocenter(struct unix_device *iface, BYTE percent)
+{
+    struct lnxev_device *impl = lnxev_impl_from_unix_device(iface);
+    struct input_event ie =
+    {
+        .type = EV_FF,
+        .code = FF_AUTOCENTER,
+        .value = 0xffff * percent / 100,
+    };
+
+    TRACE("iface %p, percent %#x.\n", iface, percent);
+
+    if (write(impl->base.device_fd, &ie, sizeof(ie)) == -1)
+        WARN("write failed %d %s\n", errno, strerror(errno));
 
     return STATUS_SUCCESS;
 }
@@ -970,6 +907,7 @@ static NTSTATUS lnxev_device_physical_device_control(struct unix_device *iface, 
             if (impl->effect_ids[i] < 0) continue;
             lnxev_device_physical_effect_run(impl, i, 0);
         }
+        lnxev_device_physical_device_set_autocenter(iface, 0);
         return STATUS_SUCCESS;
     case PID_USAGE_DC_DEVICE_RESET:
         for (i = 0; i < ARRAY_SIZE(impl->effect_ids); ++i)
@@ -979,6 +917,7 @@ static NTSTATUS lnxev_device_physical_device_control(struct unix_device *iface, 
                 WARN("couldn't free effect, EVIOCRMFF ioctl failed: %d %s\n", errno, strerror(errno));
             impl->effect_ids[i] = -1;
         }
+        lnxev_device_physical_device_set_autocenter(iface, 100);
         return STATUS_SUCCESS;
     case PID_USAGE_DC_DEVICE_PAUSE:
         WARN("device pause not supported\n");
@@ -1113,7 +1052,7 @@ static NTSTATUS lnxev_device_physical_effect_update(struct unix_device *iface, B
     case PID_USAGE_ET_SAWTOOTH_UP:
     case PID_USAGE_ET_SAWTOOTH_DOWN:
         effect.u.periodic.period = params->periodic.period;
-        effect.u.periodic.magnitude = params->periodic.magnitude;
+        effect.u.periodic.magnitude = (params->periodic.magnitude * params->gain_percent) / 100;
         effect.u.periodic.offset = params->periodic.offset;
         effect.u.periodic.phase = params->periodic.phase * 0x800 / 1125;
         effect.u.periodic.envelope.attack_length = params->envelope.attack_time;
@@ -1147,7 +1086,7 @@ static NTSTATUS lnxev_device_physical_effect_update(struct unix_device *iface, B
         break;
 
     case PID_USAGE_ET_CONSTANT_FORCE:
-        effect.u.constant.level = params->constant_force.magnitude;
+        effect.u.constant.level = (params->constant_force.magnitude * params->gain_percent) / 100;
         effect.u.constant.envelope.attack_length = params->envelope.attack_time;
         effect.u.constant.envelope.attack_level = params->envelope.attack_level;
         effect.u.constant.envelope.fade_length = params->envelope.fade_time;
@@ -1155,8 +1094,8 @@ static NTSTATUS lnxev_device_physical_effect_update(struct unix_device *iface, B
         break;
 
     case PID_USAGE_ET_RAMP:
-        effect.u.ramp.start_level = params->ramp_force.ramp_start;
-        effect.u.ramp.end_level = params->ramp_force.ramp_end;
+        effect.u.ramp.start_level = (params->ramp_force.ramp_start * params->gain_percent) / 100;
+        effect.u.ramp.end_level = (params->ramp_force.ramp_end * params->gain_percent) / 100;
         effect.u.ramp.envelope.attack_length = params->envelope.attack_time;
         effect.u.ramp.envelope.attack_level = params->envelope.attack_level;
         effect.u.ramp.envelope.fade_length = params->envelope.fade_time;
@@ -1185,6 +1124,7 @@ static const struct hid_device_vtbl lnxev_device_vtbl =
     lnxev_device_start,
     lnxev_device_stop,
     lnxev_device_haptics_start,
+    lnxev_device_haptics_stop,
     lnxev_device_physical_device_control,
     lnxev_device_physical_device_set_gain,
     lnxev_device_physical_effect_control,
@@ -1192,14 +1132,14 @@ static const struct hid_device_vtbl lnxev_device_vtbl =
 };
 #endif /* HAS_PROPER_INPUT_HEADER */
 
-static void get_device_subsystem_info(struct udev_device *dev, char const *subsystem, struct device_desc *desc,
-                                      int *bus)
+static void get_device_subsystem_info(struct udev_device *dev, const char *subsystem, const char *devtype,
+                                      struct device_desc *desc, int *bus)
 {
     struct udev_device *parent = NULL;
     const char *ptr, *next, *tmp;
     char buffer[MAX_PATH];
 
-    if (!(parent = udev_device_get_parent_with_subsystem_devtype(dev, subsystem, NULL))) return;
+    if (!(parent = udev_device_get_parent_with_subsystem_devtype(dev, subsystem, devtype))) return;
 
     if ((next = udev_device_get_sysattr_value(parent, "uevent")))
     {
@@ -1231,34 +1171,32 @@ static void get_device_subsystem_info(struct udev_device *dev, char const *subsy
                 if (*bus || desc->vid || desc->pid) continue;
                 sscanf(ptr, "HID_ID=%x:%x:%x\n", bus, &desc->vid, &desc->pid);
             }
-            if (!strncmp(ptr, "PRODUCT=", 8) && *bus != BUS_BLUETOOTH)
+
+            if (!strcmp(subsystem, "input"))
             {
-                if (desc->version) continue;
-                if (!strcmp(subsystem, "usb"))
-                    sscanf(ptr, "PRODUCT=%x/%x/%x\n", &desc->vid, &desc->pid, &desc->version);
-                else
+                if (!strncmp(ptr, "PRODUCT=", 8))
                     sscanf(ptr, "PRODUCT=%x/%x/%x/%x\n", bus, &desc->vid, &desc->pid, &desc->version);
+            }
+
+            if (!strcmp(subsystem, "usb") && *bus != BUS_BLUETOOTH)
+            {
+                if (!strncmp(ptr, "PRODUCT=", 8))
+                    sscanf(ptr, "PRODUCT=%x/%x/%x\n", &desc->vid, &desc->pid, &desc->version);
             }
         }
     }
 
-    if (!desc->manufacturer[0] && (tmp = udev_device_get_sysattr_value(dev, "manufacturer")))
-        ntdll_umbstowcs(tmp, strlen(tmp) + 1, desc->manufacturer, ARRAY_SIZE(desc->manufacturer));
+    if (!strcmp(subsystem, "usb") && *bus != BUS_BLUETOOTH)
+    {
+        if ((tmp = udev_device_get_sysattr_value(parent, "manufacturer")))
+            ntdll_umbstowcs(tmp, strlen(tmp) + 1, desc->manufacturer, ARRAY_SIZE(desc->manufacturer));
 
-    if (!desc->product[0] && (tmp = udev_device_get_sysattr_value(dev, "product")))
-        ntdll_umbstowcs(tmp, strlen(tmp) + 1, desc->product, ARRAY_SIZE(desc->product));
+        if ((tmp = udev_device_get_sysattr_value(parent, "product")))
+            ntdll_umbstowcs(tmp, strlen(tmp) + 1, desc->product, ARRAY_SIZE(desc->product));
 
-    if (!desc->serialnumber[0] && (tmp = udev_device_get_sysattr_value(dev, "serial")))
-        ntdll_umbstowcs(tmp, strlen(tmp) + 1, desc->serialnumber, ARRAY_SIZE(desc->serialnumber));
-}
-
-static void hidraw_set_quirks(struct hidraw_device *impl, DWORD bus_type, WORD vid, WORD pid)
-{
-    if (bus_type == BUS_BLUETOOTH && is_dualshock4_gamepad(vid, pid))
-        impl->quirks |= QUIRK_DS4_BT;
-
-    if (bus_type == BUS_BLUETOOTH && is_dualsense_gamepad(vid, pid))
-        impl->quirks |= QUIRK_DUALSENSE_BT;
+        if ((tmp = udev_device_get_sysattr_value(parent, "serial")))
+            ntdll_umbstowcs(tmp, strlen(tmp) + 1, desc->serialnumber, ARRAY_SIZE(desc->serialnumber));
+    }
 }
 
 static void udev_add_device(struct udev_device *dev, int fd)
@@ -1286,26 +1224,21 @@ static void udev_add_device(struct udev_device *dev, int fd)
 
     TRACE("udev %s syspath %s\n", debugstr_a(devnode), udev_device_get_syspath(dev));
 
-#ifdef HAS_PROPER_INPUT_HEADER
-    if ((impl = find_device_from_syspath(get_device_syspath(dev))))
-    {
-        TRACE("duplicate device found, not adding the new one\n");
-        close(fd);
-        return;
-    }
-#endif
-
-    get_device_subsystem_info(dev, "hid", &desc, &bus);
-    get_device_subsystem_info(dev, "input", &desc, &bus);
-    get_device_subsystem_info(dev, "usb", &desc, &bus);
+    get_device_subsystem_info(dev, "hid", NULL, &desc, &bus);
+    get_device_subsystem_info(dev, "input", NULL, &desc, &bus);
+    get_device_subsystem_info(dev, "usb", "usb_device", &desc, &bus);
+    if (bus == BUS_BLUETOOTH) desc.is_bluetooth = TRUE;
 
     subsystem = udev_device_get_subsystem(dev);
     if (!strcmp(subsystem, "hidraw"))
     {
         static const WCHAR hidraw[] = {'h','i','d','r','a','w',0};
+#ifdef HAVE_LINUX_HIDRAW_H
         char product[MAX_PATH];
+#endif
 
         if (!desc.manufacturer[0]) memcpy(desc.manufacturer, hidraw, sizeof(hidraw));
+        desc.is_hidraw = TRUE;
 
 #ifdef HAVE_LINUX_HIDRAW_H
         if (!desc.product[0] && ioctl(fd, HIDIOCGRAWNAME(sizeof(product) - 1), product) >= 0)
@@ -1347,7 +1280,7 @@ static void udev_add_device(struct udev_device *dev, int fd)
     if (is_xbox_gamepad(desc.vid, desc.pid))
         desc.is_gamepad = TRUE;
 #ifdef HAS_PROPER_INPUT_HEADER
-    else
+    else if (!strcmp(subsystem, "input"))
     {
         int axes=0, buttons=0;
         axes = count_abs_axis(fd);
@@ -1366,7 +1299,6 @@ static void udev_add_device(struct udev_device *dev, int fd)
         impl->udev_device = udev_device_ref(dev);
         strcpy(impl->devnode, devnode);
         impl->device_fd = fd;
-        hidraw_set_quirks((struct hidraw_device *)impl, bus, desc.vid, desc.pid);
 
         bus_event_queue_device_created(&event_queue, &impl->unix_device, &desc);
     }
@@ -1379,6 +1311,13 @@ static void udev_add_device(struct udev_device *dev, int fd)
         impl->udev_device = udev_device_ref(dev);
         strcpy(impl->devnode, devnode);
         impl->device_fd = fd;
+
+        if (build_report_descriptor(&impl->unix_device, impl->udev_device))
+        {
+            list_remove(&impl->unix_device.entry);
+            impl->unix_device.vtbl->destroy(&impl->unix_device);
+            return;
+        }
 
         bus_event_queue_device_created(&event_queue, &impl->unix_device, &desc);
     }
@@ -1528,16 +1467,6 @@ static int create_inotify(void)
     }
 
     return fd;
-}
-
-static struct base_device *find_device_from_devnode(const char *path)
-{
-    struct base_device *impl;
-
-    LIST_FOR_EACH_ENTRY(impl, &device_list, struct base_device, unix_device.entry)
-        if (!strcmp(impl->devnode, path)) return impl;
-
-    return NULL;
 }
 
 static void maybe_remove_devnode(const char *base, const char *dir)
@@ -1700,26 +1629,38 @@ static void process_monitor_event(struct udev_monitor *monitor)
 {
     struct base_device *impl;
     struct udev_device *dev;
-    const char *action;
+    const char *action, *devnode, *syspath;
 
     dev = udev_monitor_receive_device(monitor);
     if (!dev)
     {
-        FIXME("Failed to get device that has changed\n");
+        ERR("Failed to get device that has changed\n");
         return;
     }
 
     action = udev_device_get_action(dev);
-    TRACE("Received action %s for udev device %s\n", debugstr_a(action),
-          debugstr_a(udev_device_get_devnode(dev)));
+    syspath = udev_device_get_syspath(dev);
+    devnode = udev_device_get_devnode(dev);
+    TRACE("Received action %s for udev device %s (%p) devnode %s\n",
+          debugstr_a(action), debugstr_a(syspath), dev, debugstr_a(devnode));
 
-    if (!action)
-        WARN("No action received\n");
+    if (!syspath)
+        ERR("udev device %p does not have syspath!\n", dev);
+    else if (!action)
+        ERR("event for udev device %s does not have any action!\n", syspath);
+    else if (!devnode)
+    {
+        /* Pretty normal case, not all devices have associated
+         * devnodes. For example root input devices do not, but
+         * related/child mouse and event devices do.
+         */
+        TRACE("udev device %s does not have devnode, ignoring\n", syspath);
+    }
     else if (strcmp(action, "remove"))
         udev_add_device(dev, -1);
     else
     {
-        impl = find_device_from_udev(dev);
+        impl = find_device_from_devnode(devnode);
         if (impl) bus_event_queue_device_removed(&event_queue, &impl->unix_device);
         else WARN("failed to find device for udev device %p\n", dev);
     }
@@ -1747,7 +1688,7 @@ NTSTATUS udev_bus_init(void *args)
         goto error;
     }
 
-#if HAVE_SYS_INOTIFY_H
+#ifdef HAVE_SYS_INOTIFY_H
     if (options.disable_udevd) monitor_fd = create_inotify();
     if (monitor_fd < 0) options.disable_udevd = FALSE;
 #else
@@ -1772,7 +1713,7 @@ NTSTATUS udev_bus_init(void *args)
     poll_count = 2;
 
     if (!options.disable_udevd) build_initial_deviceset_udevd();
-#if HAVE_SYS_INOTIFY_H
+#ifdef HAVE_SYS_INOTIFY_H
     else build_initial_deviceset_direct();
 #endif
 
@@ -1815,7 +1756,7 @@ NTSTATUS udev_bus_wait(void *args)
         if (pfd[0].revents)
         {
             if (udev_monitor) process_monitor_event(udev_monitor);
-#if HAVE_SYS_INOTIFY_H
+#ifdef HAVE_SYS_INOTIFY_H
             else process_inotify_event(pfd[0].fd);
 #endif
         }

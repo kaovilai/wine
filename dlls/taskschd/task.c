@@ -39,6 +39,7 @@ typedef struct {
     LONG ref;
     short interval;
     WCHAR *start_boundary;
+    WCHAR *end_boundary;
     BOOL enabled;
 } DailyTrigger;
 
@@ -76,7 +77,7 @@ static ULONG WINAPI DailyTrigger_AddRef(IDailyTrigger *iface)
     DailyTrigger *This = impl_from_IDailyTrigger(iface);
     LONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     return ref;
 }
@@ -86,13 +87,14 @@ static ULONG WINAPI DailyTrigger_Release(IDailyTrigger *iface)
     DailyTrigger *This = impl_from_IDailyTrigger(iface);
     LONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     if(!ref)
     {
         TRACE("destroying %p\n", iface);
-        heap_free(This->start_boundary);
-        heap_free(This);
+        free(This->start_boundary);
+        free(This->end_boundary);
+        free(This);
     }
 
     return ref;
@@ -108,7 +110,7 @@ static HRESULT WINAPI DailyTrigger_GetTypeInfoCount(IDailyTrigger *iface, UINT *
 static HRESULT WINAPI DailyTrigger_GetTypeInfo(IDailyTrigger *iface, UINT index, LCID lcid, ITypeInfo **info)
 {
     DailyTrigger *This = impl_from_IDailyTrigger(iface);
-    FIXME("(%p)->(%u %u %p)\n", This, index, lcid, info);
+    FIXME("(%p)->(%u %lu %p)\n", This, index, lcid, info);
     return E_NOTIMPL;
 }
 
@@ -116,7 +118,7 @@ static HRESULT WINAPI DailyTrigger_GetIDsOfNames(IDailyTrigger *iface, REFIID ri
                                             UINT count, LCID lcid, DISPID *dispid)
 {
     DailyTrigger *This = impl_from_IDailyTrigger(iface);
-    FIXME("(%p)->(%s %p %u %u %p)\n", This, debugstr_guid(riid), names, count, lcid, dispid);
+    FIXME("(%p)->(%s %p %u %lu %p)\n", This, debugstr_guid(riid), names, count, lcid, dispid);
     return E_NOTIMPL;
 }
 
@@ -124,7 +126,7 @@ static HRESULT WINAPI DailyTrigger_Invoke(IDailyTrigger *iface, DISPID dispid, R
                                      DISPPARAMS *params, VARIANT *result, EXCEPINFO *excepinfo, UINT *argerr)
 {
     DailyTrigger *This = impl_from_IDailyTrigger(iface);
-    FIXME("(%p)->(%d %s %x %x %p %p %p %p)\n", This, dispid, debugstr_guid(riid), lcid, flags,
+    FIXME("(%p)->(%ld %s %lx %x %p %p %p %p)\n", This, dispid, debugstr_guid(riid), lcid, flags,
           params, result, excepinfo, argerr);
     return E_NOTIMPL;
 }
@@ -199,8 +201,8 @@ static HRESULT WINAPI DailyTrigger_put_StartBoundary(IDailyTrigger *iface, BSTR 
 
     TRACE("(%p)->(%s)\n", This, debugstr_w(start));
 
-    if (start && !(str = heap_strdupW(start))) return E_OUTOFMEMORY;
-    heap_free(This->start_boundary);
+    if (start && !(str = wcsdup(start))) return E_OUTOFMEMORY;
+    free(This->start_boundary);
     This->start_boundary = str;
 
     return S_OK;
@@ -209,15 +211,29 @@ static HRESULT WINAPI DailyTrigger_put_StartBoundary(IDailyTrigger *iface, BSTR 
 static HRESULT WINAPI DailyTrigger_get_EndBoundary(IDailyTrigger *iface, BSTR *end)
 {
     DailyTrigger *This = impl_from_IDailyTrigger(iface);
-    FIXME("(%p)->(%p)\n", This, end);
-    return E_NOTIMPL;
+
+    TRACE("(%p)->(%p)\n", This, end);
+
+    if (!end) return E_POINTER;
+
+    if (!This->end_boundary) *end = NULL;
+    else if (!(*end = SysAllocString(This->end_boundary))) return E_OUTOFMEMORY;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI DailyTrigger_put_EndBoundary(IDailyTrigger *iface, BSTR end)
 {
     DailyTrigger *This = impl_from_IDailyTrigger(iface);
-    FIXME("(%p)->(%s)\n", This, debugstr_w(end));
-    return E_NOTIMPL;
+    WCHAR *str = NULL;
+
+    TRACE("(%p)->(%s)\n", This, debugstr_w(end));
+
+    if (end && !(str = wcsdup(end))) return E_OUTOFMEMORY;
+    free(This->end_boundary);
+    This->end_boundary = str;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI DailyTrigger_get_Enabled(IDailyTrigger *iface, VARIANT_BOOL *enabled)
@@ -310,7 +326,7 @@ static HRESULT DailyTrigger_create(ITrigger **trigger)
 {
     DailyTrigger *daily_trigger;
 
-    daily_trigger = heap_alloc(sizeof(*daily_trigger));
+    daily_trigger = malloc(sizeof(*daily_trigger));
     if (!daily_trigger)
         return E_OUTOFMEMORY;
 
@@ -318,9 +334,256 @@ static HRESULT DailyTrigger_create(ITrigger **trigger)
     daily_trigger->ref = 1;
     daily_trigger->interval = 1;
     daily_trigger->start_boundary = NULL;
+    daily_trigger->end_boundary = NULL;
     daily_trigger->enabled = TRUE;
 
     *trigger = (ITrigger*)&daily_trigger->IDailyTrigger_iface;
+    return S_OK;
+}
+
+typedef struct {
+    IRegistrationTrigger IRegistrationTrigger_iface;
+    BOOL enabled;
+    LONG ref;
+} RegistrationTrigger;
+
+static inline RegistrationTrigger *impl_from_IRegistrationTrigger(IRegistrationTrigger *iface)
+{
+    return CONTAINING_RECORD(iface, RegistrationTrigger, IRegistrationTrigger_iface);
+}
+
+static HRESULT WINAPI RegistrationTrigger_QueryInterface(IRegistrationTrigger *iface, REFIID riid, void **ppv)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+
+    TRACE("(%p)->(%s %p)\n", This, debugstr_guid(riid), ppv);
+
+    if(IsEqualGUID(&IID_IUnknown, riid) ||
+       IsEqualGUID(&IID_IDispatch, riid) ||
+       IsEqualGUID(&IID_ITrigger, riid) ||
+       IsEqualGUID(&IID_IRegistrationTrigger, riid))
+    {
+        *ppv = &This->IRegistrationTrigger_iface;
+    }
+    else
+    {
+        FIXME("unsupported riid %s\n", debugstr_guid(riid));
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+
+    IUnknown_AddRef((IUnknown*)*ppv);
+    return S_OK;
+}
+
+static ULONG WINAPI RegistrationTrigger_AddRef(IRegistrationTrigger *iface)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    LONG ref = InterlockedIncrement(&This->ref);
+
+    TRACE("(%p) ref=%ld\n", This, ref);
+
+    return ref;
+}
+
+static ULONG WINAPI RegistrationTrigger_Release(IRegistrationTrigger *iface)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    LONG ref = InterlockedDecrement(&This->ref);
+
+    TRACE("(%p) ref=%ld\n", This, ref);
+
+    if(!ref)
+    {
+        TRACE("destroying %p\n", iface);
+        free(This);
+    }
+
+    return ref;
+}
+
+static HRESULT WINAPI RegistrationTrigger_GetTypeInfoCount(IRegistrationTrigger *iface, UINT *count)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%p)\n", This, count);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_GetTypeInfo(IRegistrationTrigger *iface, UINT index, LCID lcid, ITypeInfo **info)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%u %lu %p)\n", This, index, lcid, info);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_GetIDsOfNames(IRegistrationTrigger *iface, REFIID riid, LPOLESTR *names,
+                                            UINT count, LCID lcid, DISPID *dispid)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%s %p %u %lu %p)\n", This, debugstr_guid(riid), names, count, lcid, dispid);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_Invoke(IRegistrationTrigger *iface, DISPID dispid, REFIID riid, LCID lcid, WORD flags,
+                                     DISPPARAMS *params, VARIANT *result, EXCEPINFO *excepinfo, UINT *argerr)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%ld %s %lx %x %p %p %p %p)\n", This, dispid, debugstr_guid(riid), lcid, flags,
+          params, result, excepinfo, argerr);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_get_Type(IRegistrationTrigger *iface, TASK_TRIGGER_TYPE2 *type)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%p)\n", This, type);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_get_Id(IRegistrationTrigger *iface, BSTR *id)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%p)\n", This, id);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_put_Id(IRegistrationTrigger *iface, BSTR id)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%s)\n", This, debugstr_w(id));
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_get_Repetition(IRegistrationTrigger *iface, IRepetitionPattern **repeat)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%p)\n", This, repeat);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_put_Repetition(IRegistrationTrigger *iface, IRepetitionPattern *repeat)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%p)\n", This, repeat);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_get_ExecutionTimeLimit(IRegistrationTrigger *iface, BSTR *limit)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%p)\n", This, limit);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_put_ExecutionTimeLimit(IRegistrationTrigger *iface, BSTR limit)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%s)\n", This, debugstr_w(limit));
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_get_StartBoundary(IRegistrationTrigger *iface, BSTR *start)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%p)\n", This, start);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_put_StartBoundary(IRegistrationTrigger *iface, BSTR start)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%s)\n", This, debugstr_w(start));
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_get_EndBoundary(IRegistrationTrigger *iface, BSTR *end)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%p)\n", This, end);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_put_EndBoundary(IRegistrationTrigger *iface, BSTR end)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%s)\n", This, debugstr_w(end));
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_get_Enabled(IRegistrationTrigger *iface, VARIANT_BOOL *enabled)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+
+    TRACE("(%p)->(%p)\n", This, enabled);
+
+    if (!enabled) return E_POINTER;
+
+    *enabled = This->enabled ? VARIANT_TRUE : VARIANT_FALSE;
+    return S_OK;
+}
+
+static HRESULT WINAPI RegistrationTrigger_put_Enabled(IRegistrationTrigger *iface, VARIANT_BOOL enabled)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+
+    TRACE("(%p)->(%x)\n", This, enabled);
+
+    This->enabled = !!enabled;
+    return S_OK;
+}
+
+static HRESULT WINAPI RegistrationTrigger_get_Delay(IRegistrationTrigger *iface, BSTR *pDelay)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%p)\n", This, pDelay);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI RegistrationTrigger_put_Delay(IRegistrationTrigger *iface, BSTR delay)
+{
+    RegistrationTrigger *This = impl_from_IRegistrationTrigger(iface);
+    FIXME("(%p)->(%s)\n", This, debugstr_w(delay));
+    return E_NOTIMPL;
+}
+
+static const IRegistrationTriggerVtbl RegistrationTrigger_vtbl = {
+    RegistrationTrigger_QueryInterface,
+    RegistrationTrigger_AddRef,
+    RegistrationTrigger_Release,
+    RegistrationTrigger_GetTypeInfoCount,
+    RegistrationTrigger_GetTypeInfo,
+    RegistrationTrigger_GetIDsOfNames,
+    RegistrationTrigger_Invoke,
+    RegistrationTrigger_get_Type,
+    RegistrationTrigger_get_Id,
+    RegistrationTrigger_put_Id,
+    RegistrationTrigger_get_Repetition,
+    RegistrationTrigger_put_Repetition,
+    RegistrationTrigger_get_ExecutionTimeLimit,
+    RegistrationTrigger_put_ExecutionTimeLimit,
+    RegistrationTrigger_get_StartBoundary,
+    RegistrationTrigger_put_StartBoundary,
+    RegistrationTrigger_get_EndBoundary,
+    RegistrationTrigger_put_EndBoundary,
+    RegistrationTrigger_get_Enabled,
+    RegistrationTrigger_put_Enabled,
+    RegistrationTrigger_get_Delay,
+    RegistrationTrigger_put_Delay
+};
+
+static HRESULT RegistrationTrigger_create(ITrigger **trigger)
+{
+    RegistrationTrigger *registration_trigger;
+
+    registration_trigger = malloc(sizeof(*registration_trigger));
+    if (!registration_trigger)
+        return E_OUTOFMEMORY;
+
+    registration_trigger->IRegistrationTrigger_iface.lpVtbl = &RegistrationTrigger_vtbl;
+    registration_trigger->ref = 1;
+    registration_trigger->enabled = TRUE;
+
+    *trigger = (ITrigger*)&registration_trigger->IRegistrationTrigger_iface;
     return S_OK;
 }
 
@@ -360,7 +623,7 @@ static ULONG WINAPI TriggerCollection_AddRef(ITriggerCollection *iface)
     trigger_collection *This = impl_from_ITriggerCollection(iface);
     LONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     return ref;
 }
@@ -370,10 +633,10 @@ static ULONG WINAPI TriggerCollection_Release(ITriggerCollection *iface)
     trigger_collection *This = impl_from_ITriggerCollection(iface);
     LONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     if(!ref)
-        heap_free(This);
+        free(This);
 
     return ref;
 }
@@ -388,7 +651,7 @@ static HRESULT WINAPI TriggerCollection_GetTypeInfoCount(ITriggerCollection *ifa
 static HRESULT WINAPI TriggerCollection_GetTypeInfo(ITriggerCollection *iface, UINT index, LCID lcid, ITypeInfo **info)
 {
     trigger_collection *This = impl_from_ITriggerCollection(iface);
-    FIXME("(%p)->(%u %u %p)\n", This, index, lcid, info);
+    FIXME("(%p)->(%u %lu %p)\n", This, index, lcid, info);
     return E_NOTIMPL;
 }
 
@@ -396,7 +659,7 @@ static HRESULT WINAPI TriggerCollection_GetIDsOfNames(ITriggerCollection *iface,
                                                    UINT count, LCID lcid, DISPID *dispid)
 {
     trigger_collection *This = impl_from_ITriggerCollection(iface);
-    FIXME("(%p)->(%s %p %u %u %p)\n", This, debugstr_guid(riid), names, count, lcid, dispid);
+    FIXME("(%p)->(%s %p %u %lu %p)\n", This, debugstr_guid(riid), names, count, lcid, dispid);
     return E_NOTIMPL;
 }
 
@@ -404,7 +667,7 @@ static HRESULT WINAPI TriggerCollection_Invoke(ITriggerCollection *iface, DISPID
                                                DISPPARAMS *params, VARIANT *result, EXCEPINFO *excepinfo, UINT *argerr)
 {
     trigger_collection *This = impl_from_ITriggerCollection(iface);
-    FIXME("(%p)->(%d %s %x %x %p %p %p %p)\n", This, dispid, debugstr_guid(riid), lcid, flags,
+    FIXME("(%p)->(%ld %s %lx %x %p %p %p %p)\n", This, dispid, debugstr_guid(riid), lcid, flags,
           params, result, excepinfo, argerr);
     return E_NOTIMPL;
 }
@@ -419,7 +682,7 @@ static HRESULT WINAPI TriggerCollection_get_Count(ITriggerCollection *iface, LON
 static HRESULT WINAPI TriggerCollection_get_Item(ITriggerCollection *iface, LONG index, ITrigger **trigger)
 {
     trigger_collection *This = impl_from_ITriggerCollection(iface);
-    FIXME("(%p)->(%d %p)\n", This, index, trigger);
+    FIXME("(%p)->(%ld %p)\n", This, index, trigger);
     return E_NOTIMPL;
 }
 
@@ -439,6 +702,8 @@ static HRESULT WINAPI TriggerCollection_Create(ITriggerCollection *iface, TASK_T
     switch(type) {
     case TASK_TRIGGER_DAILY:
         return DailyTrigger_create(trigger);
+    case TASK_TRIGGER_REGISTRATION:
+        return RegistrationTrigger_create(trigger);
     default:
         FIXME("Unimplemented type %d\n", type);
         return E_NOTIMPL;
@@ -503,14 +768,14 @@ static ULONG WINAPI RegistrationInfo_Release(IRegistrationInfo *iface)
     if (!ref)
     {
         TRACE("destroying %p\n", iface);
-        heap_free(reginfo->description);
-        heap_free(reginfo->author);
-        heap_free(reginfo->version);
-        heap_free(reginfo->date);
-        heap_free(reginfo->documentation);
-        heap_free(reginfo->uri);
-        heap_free(reginfo->source);
-        heap_free(reginfo);
+        free(reginfo->description);
+        free(reginfo->author);
+        free(reginfo->version);
+        free(reginfo->date);
+        free(reginfo->documentation);
+        free(reginfo->uri);
+        free(reginfo->source);
+        free(reginfo);
     }
 
     return ref;
@@ -544,21 +809,21 @@ static HRESULT WINAPI RegistrationInfo_GetTypeInfoCount(IRegistrationInfo *iface
 
 static HRESULT WINAPI RegistrationInfo_GetTypeInfo(IRegistrationInfo *iface, UINT index, LCID lcid, ITypeInfo **info)
 {
-    FIXME("%p,%u,%u,%p: stub\n", iface, index, lcid, info);
+    FIXME("%p,%u,%lu,%p: stub\n", iface, index, lcid, info);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI RegistrationInfo_GetIDsOfNames(IRegistrationInfo *iface, REFIID riid, LPOLESTR *names,
                                                    UINT count, LCID lcid, DISPID *dispid)
 {
-    FIXME("%p,%s,%p,%u,%u,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
+    FIXME("%p,%s,%p,%u,%lu,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI RegistrationInfo_Invoke(IRegistrationInfo *iface, DISPID dispid, REFIID riid, LCID lcid, WORD flags,
                                             DISPPARAMS *params, VARIANT *result, EXCEPINFO *excepinfo, UINT *argerr)
 {
-    FIXME("%p,%d,%s,%04x,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
+    FIXME("%p,%ld,%s,%04lx,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
           params, result, excepinfo, argerr);
     return E_NOTIMPL;
 }
@@ -584,8 +849,8 @@ static HRESULT WINAPI RegistrationInfo_put_Description(IRegistrationInfo *iface,
 
     TRACE("%p,%s\n", iface, debugstr_w(description));
 
-    if (description && !(str = heap_strdupW(description))) return E_OUTOFMEMORY;
-    heap_free(reginfo->description);
+    if (description && !(str = wcsdup(description))) return E_OUTOFMEMORY;
+    free(reginfo->description);
     reginfo->description = str;
     return S_OK;
 }
@@ -611,8 +876,8 @@ static HRESULT WINAPI RegistrationInfo_put_Author(IRegistrationInfo *iface, BSTR
 
     TRACE("%p,%s\n", iface, debugstr_w(author));
 
-    if (author && !(str = heap_strdupW(author))) return E_OUTOFMEMORY;
-    heap_free(reginfo->author);
+    if (author && !(str = wcsdup(author))) return E_OUTOFMEMORY;
+    free(reginfo->author);
     reginfo->author = str;
     return S_OK;
 }
@@ -638,8 +903,8 @@ static HRESULT WINAPI RegistrationInfo_put_Version(IRegistrationInfo *iface, BST
 
     TRACE("%p,%s\n", iface, debugstr_w(version));
 
-    if (version && !(str = heap_strdupW(version))) return E_OUTOFMEMORY;
-    heap_free(reginfo->version);
+    if (version && !(str = wcsdup(version))) return E_OUTOFMEMORY;
+    free(reginfo->version);
     reginfo->version = str;
     return S_OK;
 }
@@ -665,8 +930,8 @@ static HRESULT WINAPI RegistrationInfo_put_Date(IRegistrationInfo *iface, BSTR d
 
     TRACE("%p,%s\n", iface, debugstr_w(date));
 
-    if (date && !(str = heap_strdupW(date))) return E_OUTOFMEMORY;
-    heap_free(reginfo->date);
+    if (date && !(str = wcsdup(date))) return E_OUTOFMEMORY;
+    free(reginfo->date);
     reginfo->date = str;
     return S_OK;
 }
@@ -692,8 +957,8 @@ static HRESULT WINAPI RegistrationInfo_put_Documentation(IRegistrationInfo *ifac
 
     TRACE("%p,%s\n", iface, debugstr_w(doc));
 
-    if (doc && !(str = heap_strdupW(doc))) return E_OUTOFMEMORY;
-    heap_free(reginfo->documentation);
+    if (doc && !(str = wcsdup(doc))) return E_OUTOFMEMORY;
+    free(reginfo->documentation);
     reginfo->documentation = str;
     return S_OK;
 }
@@ -731,8 +996,8 @@ static HRESULT WINAPI RegistrationInfo_put_URI(IRegistrationInfo *iface, BSTR ur
 
     TRACE("%p,%s\n", iface, debugstr_w(uri));
 
-    if (uri && !(str = heap_strdupW(uri))) return E_OUTOFMEMORY;
-    heap_free(reginfo->uri);
+    if (uri && !(str = wcsdup(uri))) return E_OUTOFMEMORY;
+    free(reginfo->uri);
     reginfo->uri = str;
     return S_OK;
 }
@@ -770,8 +1035,8 @@ static HRESULT WINAPI RegistrationInfo_put_Source(IRegistrationInfo *iface, BSTR
 
     TRACE("%p,%s\n", iface, debugstr_w(source));
 
-    if (source && !(str = heap_strdupW(source))) return E_OUTOFMEMORY;
-    heap_free(reginfo->source);
+    if (source && !(str = wcsdup(source))) return E_OUTOFMEMORY;
+    free(reginfo->source);
     reginfo->source = str;
     return S_OK;
 }
@@ -809,7 +1074,7 @@ static HRESULT RegistrationInfo_create(IRegistrationInfo **obj)
 {
     registration_info *reginfo;
 
-    reginfo = heap_alloc_zero(sizeof(*reginfo));
+    reginfo = calloc(1, sizeof(*reginfo));
     if (!reginfo) return E_OUTOFMEMORY;
 
     reginfo->IRegistrationInfo_iface.lpVtbl = &RegistrationInfo_vtbl;
@@ -863,10 +1128,10 @@ static ULONG WINAPI TaskSettings_Release(ITaskSettings *iface)
     if (!ref)
     {
         TRACE("destroying %p\n", iface);
-        heap_free(taskset->restart_interval);
-        heap_free(taskset->execution_time_limit);
-        heap_free(taskset->delete_expired_task_after);
-        heap_free(taskset);
+        free(taskset->restart_interval);
+        free(taskset->execution_time_limit);
+        free(taskset->delete_expired_task_after);
+        free(taskset);
     }
 
     return ref;
@@ -900,21 +1165,21 @@ static HRESULT WINAPI TaskSettings_GetTypeInfoCount(ITaskSettings *iface, UINT *
 
 static HRESULT WINAPI TaskSettings_GetTypeInfo(ITaskSettings *iface, UINT index, LCID lcid, ITypeInfo **info)
 {
-    FIXME("%p,%u,%u,%p: stub\n", iface, index, lcid, info);
+    FIXME("%p,%u,%lu,%p: stub\n", iface, index, lcid, info);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI TaskSettings_GetIDsOfNames(ITaskSettings *iface, REFIID riid, LPOLESTR *names,
                                                  UINT count, LCID lcid, DISPID *dispid)
 {
-    FIXME("%p,%s,%p,%u,%u,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
+    FIXME("%p,%s,%p,%u,%lu,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI TaskSettings_Invoke(ITaskSettings *iface, DISPID dispid, REFIID riid, LCID lcid, WORD flags,
                                           DISPPARAMS *params, VARIANT *result, EXCEPINFO *excepinfo, UINT *argerr)
 {
-    FIXME("%p,%d,%s,%04x,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
+    FIXME("%p,%ld,%s,%04lx,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
           params, result, excepinfo, argerr);
     return E_NOTIMPL;
 }
@@ -970,8 +1235,8 @@ static HRESULT WINAPI TaskSettings_put_RestartInterval(ITaskSettings *iface, BST
 
     TRACE("%p,%s\n", iface, debugstr_w(interval));
 
-    if (interval && !(str = heap_strdupW(interval))) return E_OUTOFMEMORY;
-    heap_free(taskset->restart_interval);
+    if (interval && !(str = wcsdup(interval))) return E_OUTOFMEMORY;
+    free(taskset->restart_interval);
     taskset->restart_interval = str;
 
     return S_OK;
@@ -1184,8 +1449,8 @@ static HRESULT WINAPI TaskSettings_put_ExecutionTimeLimit(ITaskSettings *iface, 
 
     TRACE("%p,%s\n", iface, debugstr_w(limit));
 
-    if (limit && !(str = heap_strdupW(limit))) return E_OUTOFMEMORY;
-    heap_free(taskset->execution_time_limit);
+    if (limit && !(str = wcsdup(limit))) return E_OUTOFMEMORY;
+    free(taskset->execution_time_limit);
     taskset->execution_time_limit = str;
 
     return S_OK;
@@ -1236,8 +1501,8 @@ static HRESULT WINAPI TaskSettings_put_DeleteExpiredTaskAfter(ITaskSettings *ifa
 
     TRACE("%p,%s\n", iface, debugstr_w(delay));
 
-    if (delay && !(str = heap_strdupW(delay))) return E_OUTOFMEMORY;
-    heap_free(taskset->delete_expired_task_after);
+    if (delay && !(str = wcsdup(delay))) return E_OUTOFMEMORY;
+    free(taskset->delete_expired_task_after);
     taskset->delete_expired_task_after = str;
 
     return S_OK;
@@ -1442,14 +1707,14 @@ static HRESULT TaskSettings_create(ITaskSettings **obj)
 {
     TaskSettings *taskset;
 
-    taskset = heap_alloc(sizeof(*taskset));
+    taskset = malloc(sizeof(*taskset));
     if (!taskset) return E_OUTOFMEMORY;
 
     taskset->ITaskSettings_iface.lpVtbl = &TaskSettings_vtbl;
     taskset->ref = 1;
     /* set the defaults */
     taskset->restart_interval = NULL;
-    taskset->execution_time_limit = heap_strdupW(L"PT72H");
+    taskset->execution_time_limit = wcsdup(L"PT72H");
     taskset->delete_expired_task_after = NULL;
     taskset->restart_count = 0;
     taskset->priority = 7;
@@ -1498,7 +1763,7 @@ static ULONG WINAPI Principal_Release(IPrincipal *iface)
     if (!ref)
     {
         TRACE("destroying %p\n", iface);
-        heap_free(principal);
+        free(principal);
     }
 
     return ref;
@@ -1532,21 +1797,21 @@ static HRESULT WINAPI Principal_GetTypeInfoCount(IPrincipal *iface, UINT *count)
 
 static HRESULT WINAPI Principal_GetTypeInfo(IPrincipal *iface, UINT index, LCID lcid, ITypeInfo **info)
 {
-    FIXME("%p,%u,%u,%p: stub\n", iface, index, lcid, info);
+    FIXME("%p,%u,%lu,%p: stub\n", iface, index, lcid, info);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI Principal_GetIDsOfNames(IPrincipal *iface, REFIID riid, LPOLESTR *names,
                                               UINT count, LCID lcid, DISPID *dispid)
 {
-    FIXME("%p,%s,%p,%u,%u,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
+    FIXME("%p,%s,%p,%u,%lu,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI Principal_Invoke(IPrincipal *iface, DISPID dispid, REFIID riid, LCID lcid, WORD flags,
                                        DISPPARAMS *params, VARIANT *result, EXCEPINFO *excepinfo, UINT *argerr)
 {
-    FIXME("%p,%d,%s,%04x,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
+    FIXME("%p,%ld,%s,%04lx,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
           params, result, excepinfo, argerr);
     return E_NOTIMPL;
 }
@@ -1620,7 +1885,7 @@ static HRESULT WINAPI Principal_get_RunLevel(IPrincipal *iface, TASK_RUNLEVEL_TY
 static HRESULT WINAPI Principal_put_RunLevel(IPrincipal *iface, TASK_RUNLEVEL_TYPE run_level)
 {
     FIXME("%p,%u: stub\n", iface, run_level);
-    return E_NOTIMPL;
+    return S_OK;
 }
 
 static const IPrincipalVtbl Principal_vtbl =
@@ -1650,7 +1915,7 @@ static HRESULT Principal_create(IPrincipal **obj)
 {
     Principal *principal;
 
-    principal = heap_alloc(sizeof(*principal));
+    principal = malloc(sizeof(*principal));
     if (!principal) return E_OUTOFMEMORY;
 
     principal->IPrincipal_iface.lpVtbl = &Principal_vtbl;
@@ -1692,11 +1957,11 @@ static ULONG WINAPI ExecAction_Release(IExecAction *iface)
     if (!ref)
     {
         TRACE("destroying %p\n", iface);
-        heap_free(action->path);
-        heap_free(action->directory);
-        heap_free(action->args);
-        heap_free(action->id);
-        heap_free(action);
+        free(action->path);
+        free(action->directory);
+        free(action->args);
+        free(action->id);
+        free(action);
     }
 
     return ref;
@@ -1731,21 +1996,21 @@ static HRESULT WINAPI ExecAction_GetTypeInfoCount(IExecAction *iface, UINT *coun
 
 static HRESULT WINAPI ExecAction_GetTypeInfo(IExecAction *iface, UINT index, LCID lcid, ITypeInfo **info)
 {
-    FIXME("%p,%u,%u,%p: stub\n", iface, index, lcid, info);
+    FIXME("%p,%u,%lu,%p: stub\n", iface, index, lcid, info);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI ExecAction_GetIDsOfNames(IExecAction *iface, REFIID riid, LPOLESTR *names,
                                                UINT count, LCID lcid, DISPID *dispid)
 {
-    FIXME("%p,%s,%p,%u,%u,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
+    FIXME("%p,%s,%p,%u,%lu,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI ExecAction_Invoke(IExecAction *iface, DISPID dispid, REFIID riid, LCID lcid, WORD flags,
                                         DISPPARAMS *params, VARIANT *result, EXCEPINFO *excepinfo, UINT *argerr)
 {
-    FIXME("%p,%d,%s,%04x,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
+    FIXME("%p,%ld,%s,%04lx,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
           params, result, excepinfo, argerr);
     return E_NOTIMPL;
 }
@@ -1771,8 +2036,8 @@ static HRESULT WINAPI ExecAction_put_Id(IExecAction *iface, BSTR id)
 
     TRACE("%p,%s\n", iface, debugstr_w(id));
 
-    if (id && !(str = heap_strdupW((id)))) return E_OUTOFMEMORY;
-    heap_free(action->id);
+    if (id && !(str = wcsdup((id)))) return E_OUTOFMEMORY;
+    free(action->id);
     action->id = str;
 
     return S_OK;
@@ -1810,8 +2075,8 @@ static HRESULT WINAPI ExecAction_put_Path(IExecAction *iface, BSTR path)
 
     TRACE("%p,%s\n", iface, debugstr_w(path));
 
-    if (path && !(str = heap_strdupW((path)))) return E_OUTOFMEMORY;
-    heap_free(action->path);
+    if (path && !(str = wcsdup((path)))) return E_OUTOFMEMORY;
+    free(action->path);
     action->path = str;
 
     return S_OK;
@@ -1838,8 +2103,8 @@ static HRESULT WINAPI ExecAction_put_Arguments(IExecAction *iface, BSTR argument
 
     TRACE("%p,%s\n", iface, debugstr_w(arguments));
 
-    if (arguments && !(str = heap_strdupW((arguments)))) return E_OUTOFMEMORY;
-    heap_free(action->args);
+    if (arguments && !(str = wcsdup((arguments)))) return E_OUTOFMEMORY;
+    free(action->args);
     action->args = str;
 
     return S_OK;
@@ -1866,8 +2131,8 @@ static HRESULT WINAPI ExecAction_put_WorkingDirectory(IExecAction *iface, BSTR d
 
     TRACE("%p,%s\n", iface, debugstr_w(directory));
 
-    if (directory && !(str = heap_strdupW((directory)))) return E_OUTOFMEMORY;
-    heap_free(action->directory);
+    if (directory && !(str = wcsdup((directory)))) return E_OUTOFMEMORY;
+    free(action->directory);
     action->directory = str;
 
     return S_OK;
@@ -1897,7 +2162,7 @@ static HRESULT ExecAction_create(IExecAction **obj)
 {
     ExecAction *action;
 
-    action = heap_alloc(sizeof(*action));
+    action = malloc(sizeof(*action));
     if (!action) return E_OUTOFMEMORY;
 
     action->IExecAction_iface.lpVtbl = &Action_vtbl;
@@ -1939,7 +2204,7 @@ static ULONG WINAPI Actions_Release(IActionCollection *iface)
     if (!ref)
     {
         TRACE("destroying %p\n", iface);
-        heap_free(actions);
+        free(actions);
     }
 
     return ref;
@@ -1973,21 +2238,21 @@ static HRESULT WINAPI Actions_GetTypeInfoCount(IActionCollection *iface, UINT *c
 
 static HRESULT WINAPI Actions_GetTypeInfo(IActionCollection *iface, UINT index, LCID lcid, ITypeInfo **info)
 {
-    FIXME("%p,%u,%u,%p: stub\n", iface, index, lcid, info);
+    FIXME("%p,%u,%lu,%p: stub\n", iface, index, lcid, info);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI Actions_GetIDsOfNames(IActionCollection *iface, REFIID riid, LPOLESTR *names,
                                             UINT count, LCID lcid, DISPID *dispid)
 {
-    FIXME("%p,%s,%p,%u,%u,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
+    FIXME("%p,%s,%p,%u,%lu,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI Actions_Invoke(IActionCollection *iface, DISPID dispid, REFIID riid, LCID lcid, WORD flags,
                                      DISPPARAMS *params, VARIANT *result, EXCEPINFO *excepinfo, UINT *argerr)
 {
-    FIXME("%p,%d,%s,%04x,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
+    FIXME("%p,%ld,%s,%04lx,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
           params, result, excepinfo, argerr);
     return E_NOTIMPL;
 }
@@ -2000,7 +2265,7 @@ static HRESULT WINAPI Actions_get_Count(IActionCollection *iface, LONG *count)
 
 static HRESULT WINAPI Actions_get_Item(IActionCollection *iface, LONG index, IAction **action)
 {
-    FIXME("%p,%d,%p: stub\n", iface, index, action);
+    FIXME("%p,%ld,%p: stub\n", iface, index, action);
     return E_NOTIMPL;
 }
 
@@ -2086,7 +2351,7 @@ static HRESULT Actions_create(IActionCollection **obj)
 {
     Actions *actions;
 
-    actions = heap_alloc(sizeof(*actions));
+    actions = malloc(sizeof(*actions));
     if (!actions) return E_OUTOFMEMORY;
 
     actions->IActionCollection_iface.lpVtbl = &Actions_vtbl;
@@ -2141,7 +2406,7 @@ static ULONG WINAPI TaskDefinition_Release(ITaskDefinition *iface)
         if (taskdef->actions)
             IActionCollection_Release(taskdef->actions);
 
-        heap_free(taskdef);
+        free(taskdef);
     }
 
     return ref;
@@ -2175,21 +2440,21 @@ static HRESULT WINAPI TaskDefinition_GetTypeInfoCount(ITaskDefinition *iface, UI
 
 static HRESULT WINAPI TaskDefinition_GetTypeInfo(ITaskDefinition *iface, UINT index, LCID lcid, ITypeInfo **info)
 {
-    FIXME("%p,%u,%u,%p: stub\n", iface, index, lcid, info);
+    FIXME("%p,%u,%lu,%p: stub\n", iface, index, lcid, info);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI TaskDefinition_GetIDsOfNames(ITaskDefinition *iface, REFIID riid, LPOLESTR *names,
                                                    UINT count, LCID lcid, DISPID *dispid)
 {
-    FIXME("%p,%s,%p,%u,%u,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
+    FIXME("%p,%s,%p,%u,%lu,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI TaskDefinition_Invoke(ITaskDefinition *iface, DISPID dispid, REFIID riid, LCID lcid, WORD flags,
                                             DISPPARAMS *params, VARIANT *result, EXCEPINFO *excepinfo, UINT *argerr)
 {
-    FIXME("%p,%d,%s,%04x,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
+    FIXME("%p,%ld,%s,%04lx,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
           params, result, excepinfo, argerr);
     return E_NOTIMPL;
 }
@@ -2242,7 +2507,7 @@ static HRESULT WINAPI TaskDefinition_get_Triggers(ITaskDefinition *iface, ITrigg
     {
         trigger_collection *collection;
 
-        collection = heap_alloc(sizeof(*collection));
+        collection = malloc(sizeof(*collection));
         if (!collection) return E_OUTOFMEMORY;
 
         collection->ITriggerCollection_iface.lpVtbl = &TriggerCollection_vtbl;
@@ -2455,6 +2720,19 @@ static inline HRESULT write_text_value(IStream *stream, const WCHAR *name, const
     write_stringW(stream, L"</");
     write_stringW(stream, name);
     return write_stringW(stream, L">\n");
+}
+
+static HRESULT write_bool_value(IStream *stream, const WCHAR *name, VARIANT_BOOL value)
+{
+    return write_text_value(stream, name, value ? L"true" : L"false");
+}
+
+static HRESULT write_int_value(IStream *stream, const WCHAR *name, int val)
+{
+    WCHAR s[32];
+
+    swprintf(s, ARRAY_SIZE(s), L"%d", val);
+    return write_text_value(stream, name, s);
 }
 
 static HRESULT write_task_attributes(IStream *stream, ITaskDefinition *taskdef)
@@ -2684,12 +2962,104 @@ static HRESULT write_principal(IStream *stream, IPrincipal *principal)
     return write_element_end(stream, L"Principals");
 }
 
+const WCHAR *string_from_instances_policy(TASK_INSTANCES_POLICY policy)
+{
+    switch (policy)
+    {
+        case TASK_INSTANCES_PARALLEL:       return L"Parallel";
+        case TASK_INSTANCES_QUEUE:          return L"Queue";
+        case TASK_INSTANCES_IGNORE_NEW:     return L"IgnoreNew";
+        case TASK_INSTANCES_STOP_EXISTING : return L"StopExisting";
+    }
+    return L"<error>";
+}
+
 static HRESULT write_settings(IStream *stream, ITaskSettings *settings)
 {
+    INetworkSettings *network_settings;
+    TASK_INSTANCES_POLICY policy;
+    IIdleSettings *idle_settings;
+    VARIANT_BOOL bval;
+    HRESULT hr;
+    INT ival;
+    BSTR s;
+
     if (!settings)
         return write_empty_element(stream, L"Settings");
 
-    FIXME("stub\n");
+    if (FAILED(hr = write_element(stream, L"Settings")))
+        return hr;
+
+    push_indent();
+
+#define WRITE_BOOL_OPTION(name) \
+    { \
+        if (FAILED(hr = ITaskSettings_get_##name(settings, &bval))) \
+            return hr; \
+        if (FAILED(hr = write_bool_value(stream, L ## #name, bval))) \
+            return hr; \
+    }
+
+
+    if (FAILED(hr = ITaskSettings_get_AllowDemandStart(settings, &bval)))
+        return hr;
+    if (FAILED(hr = write_bool_value(stream, L"AllowStartOnDemand", bval)))
+        return hr;
+
+    if (SUCCEEDED(hr = TaskSettings_get_RestartInterval(settings, &s)) && s)
+    {
+        FIXME("RestartInterval not handled.\n");
+        SysFreeString(s);
+    }
+    if (FAILED(hr = ITaskSettings_get_MultipleInstances(settings, &policy)))
+        return hr;
+    if (FAILED(hr = write_text_value(stream, L"MultipleInstancesPolicy", string_from_instances_policy(policy))))
+        return hr;
+
+    WRITE_BOOL_OPTION(DisallowStartIfOnBatteries);
+    WRITE_BOOL_OPTION(StopIfGoingOnBatteries);
+    WRITE_BOOL_OPTION(AllowHardTerminate);
+    WRITE_BOOL_OPTION(StartWhenAvailable);
+    WRITE_BOOL_OPTION(RunOnlyIfNetworkAvailable);
+    WRITE_BOOL_OPTION(WakeToRun);
+    WRITE_BOOL_OPTION(Enabled);
+    WRITE_BOOL_OPTION(Hidden);
+
+    if (SUCCEEDED(hr = TaskSettings_get_DeleteExpiredTaskAfter(settings, &s)) && s)
+    {
+        hr = write_text_value(stream, L"DeleteExpiredTaskAfter", s);
+        SysFreeString(s);
+        if (FAILED(hr))
+            return hr;
+    }
+    if (SUCCEEDED(hr = TaskSettings_get_IdleSettings(settings, &idle_settings)))
+    {
+        FIXME("IdleSettings not handled.\n");
+        IIdleSettings_Release(idle_settings);
+    }
+    if (SUCCEEDED(hr = TaskSettings_get_NetworkSettings(settings, &network_settings)))
+    {
+        FIXME("NetworkSettings not handled.\n");
+        INetworkSettings_Release(network_settings);
+    }
+    if (SUCCEEDED(hr = TaskSettings_get_ExecutionTimeLimit(settings, &s)) && s)
+    {
+        hr = write_text_value(stream, L"ExecutionTimeLimit", s);
+        SysFreeString(s);
+        if (FAILED(hr))
+            return hr;
+    }
+    if (FAILED(hr = ITaskSettings_get_Priority(settings, &ival)))
+        return hr;
+    if (FAILED(hr = write_int_value(stream, L"Priority", ival)))
+        return hr;
+
+    WRITE_BOOL_OPTION(RunOnlyIfIdle);
+#undef WRITE_BOOL_OPTION
+
+    pop_indent();
+    write_element_end(stream, L"Settings");
+
     return S_OK;
 }
 
@@ -3563,7 +3933,7 @@ HRESULT TaskDefinition_create(ITaskDefinition **obj)
 {
     TaskDefinition *taskdef;
 
-    taskdef = heap_alloc_zero(sizeof(*taskdef));
+    taskdef = calloc(1, sizeof(*taskdef));
     if (!taskdef) return E_OUTOFMEMORY;
 
     taskdef->ITaskDefinition_iface.lpVtbl = &TaskDefinition_vtbl;
@@ -3582,6 +3952,8 @@ typedef struct
     BOOL connected;
     DWORD version;
     WCHAR comp_name[MAX_COMPUTERNAME_LENGTH + 1];
+    WCHAR user_name[256];
+    WCHAR domain_name[256];
 } TaskService;
 
 static inline TaskService *impl_from_ITaskService(ITaskService *iface)
@@ -3603,7 +3975,7 @@ static ULONG WINAPI TaskService_Release(ITaskService *iface)
     if (!ref)
     {
         TRACE("destroying %p\n", iface);
-        heap_free(task_svc);
+        free(task_svc);
     }
 
     return ref;
@@ -3637,21 +4009,21 @@ static HRESULT WINAPI TaskService_GetTypeInfoCount(ITaskService *iface, UINT *co
 
 static HRESULT WINAPI TaskService_GetTypeInfo(ITaskService *iface, UINT index, LCID lcid, ITypeInfo **info)
 {
-    FIXME("%p,%u,%u,%p: stub\n", iface, index, lcid, info);
+    FIXME("%p,%u,%lu,%p: stub\n", iface, index, lcid, info);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI TaskService_GetIDsOfNames(ITaskService *iface, REFIID riid, LPOLESTR *names,
                                                 UINT count, LCID lcid, DISPID *dispid)
 {
-    FIXME("%p,%s,%p,%u,%u,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
+    FIXME("%p,%s,%p,%u,%lu,%p: stub\n", iface, debugstr_guid(riid), names, count, lcid, dispid);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI TaskService_Invoke(ITaskService *iface, DISPID dispid, REFIID riid, LCID lcid, WORD flags,
                                          DISPPARAMS *params, VARIANT *result, EXCEPINFO *excepinfo, UINT *argerr)
 {
-    FIXME("%p,%d,%s,%04x,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
+    FIXME("%p,%ld,%s,%04lx,%04x,%p,%p,%p,%p: stub\n", iface, dispid, debugstr_guid(riid), lcid, flags,
           params, result, excepinfo, argerr);
     return E_NOTIMPL;
 }
@@ -3672,18 +4044,18 @@ static HRESULT WINAPI TaskService_GetFolder(ITaskService *iface, BSTR path, ITas
 
 static HRESULT WINAPI TaskService_GetRunningTasks(ITaskService *iface, LONG flags, IRunningTaskCollection **tasks)
 {
-    FIXME("%p,%x,%p: stub\n", iface, flags, tasks);
+    FIXME("%p,%lx,%p: stub\n", iface, flags, tasks);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI TaskService_NewTask(ITaskService *iface, DWORD flags, ITaskDefinition **definition)
 {
-    TRACE("%p,%x,%p\n", iface, flags, definition);
+    TRACE("%p,%lx,%p\n", iface, flags, definition);
 
     if (!definition) return E_POINTER;
 
     if (flags)
-        FIXME("unsupported flags %x\n", flags);
+        FIXME("unsupported flags %lx\n", flags);
 
     return TaskDefinition_create(definition);
 }
@@ -3718,7 +4090,7 @@ static HRESULT start_schedsvc(void)
 
                 if (!QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO, (BYTE *)&status, sizeof(status), &dummy))
                 {
-                    WARN("failed to query scheduler status (%u)\n", GetLastError());
+                    WARN("failed to query scheduler status (%lu)\n", GetLastError());
                     break;
                 }
 
@@ -3734,15 +4106,15 @@ static HRESULT start_schedsvc(void)
             } while (status.dwCurrentState == SERVICE_START_PENDING);
 
             if (status.dwCurrentState != SERVICE_RUNNING)
-                WARN("scheduler failed to start %u\n", status.dwCurrentState);
+                WARN("scheduler failed to start %lu\n", status.dwCurrentState);
         }
         else
-            WARN("failed to start scheduler service (%u)\n", GetLastError());
+            WARN("failed to start scheduler service (%lu)\n", GetLastError());
 
         CloseServiceHandle(service);
     }
     else
-        WARN("failed to open scheduler service (%u)\n", GetLastError());
+        WARN("failed to open scheduler service (%lu)\n", GetLastError());
 
     CloseServiceHandle(scm);
     return hr;
@@ -3753,6 +4125,8 @@ static HRESULT WINAPI TaskService_Connect(ITaskService *iface, VARIANT server, V
     static WCHAR ncalrpc[] = L"ncalrpc";
     TaskService *task_svc = impl_from_ITaskService(iface);
     WCHAR comp_name[MAX_COMPUTERNAME_LENGTH + 1];
+    WCHAR user_name[256];
+    WCHAR domain_name[256];
     DWORD len;
     HRESULT hr;
     RPC_WSTR binding_str;
@@ -3767,6 +4141,18 @@ static HRESULT WINAPI TaskService_Connect(ITaskService *iface, VARIANT server, V
     len = ARRAY_SIZE(comp_name);
     if (!GetComputerNameW(comp_name, &len))
         return HRESULT_FROM_WIN32(GetLastError());
+
+    len = ARRAY_SIZE(user_name);
+    if (!GetUserNameW(user_name, &len))
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    len = ARRAY_SIZE(domain_name);
+    if(!GetEnvironmentVariableW(L"USERDOMAIN", domain_name, len))
+    {
+        if (!GetComputerNameExW(ComputerNameDnsHostname, domain_name, &len))
+            return HRESULT_FROM_WIN32(GetLastError());
+        wcsupr(domain_name);
+    }
 
     if (!is_variant_null(&server))
     {
@@ -3803,9 +4189,11 @@ static HRESULT WINAPI TaskService_Connect(ITaskService *iface, VARIANT server, V
     hr = SchRpcHighestVersion(&task_svc->version);
     if (hr != S_OK) return hr;
 
-    TRACE("server version %#x\n", task_svc->version);
+    TRACE("server version %#lx\n", task_svc->version);
 
     lstrcpyW(task_svc->comp_name, comp_name);
+    lstrcpyW(task_svc->user_name, user_name);
+    lstrcpyW(task_svc->domain_name, domain_name);
     task_svc->connected = TRUE;
 
     return S_OK;
@@ -3843,14 +4231,36 @@ static HRESULT WINAPI TaskService_get_TargetServer(ITaskService *iface, BSTR *se
 
 static HRESULT WINAPI TaskService_get_ConnectedUser(ITaskService *iface, BSTR *user)
 {
-    FIXME("%p,%p: stub\n", iface, user);
-    return E_NOTIMPL;
+    TaskService *task_svc = impl_from_ITaskService(iface);
+
+    TRACE("%p,%p\n", iface, user);
+
+    if (!user) return E_POINTER;
+
+    if (!task_svc->connected)
+        return HRESULT_FROM_WIN32(ERROR_ONLY_IF_CONNECTED);
+
+    *user = SysAllocString(task_svc->user_name);
+    if (!*user) return E_OUTOFMEMORY;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI TaskService_get_ConnectedDomain(ITaskService *iface, BSTR *domain)
 {
-    FIXME("%p,%p: stub\n", iface, domain);
-    return E_NOTIMPL;
+    TaskService *task_svc = impl_from_ITaskService(iface);
+
+    TRACE("%p,%p\n", iface, domain);
+
+    if (!domain) return E_POINTER;
+
+    if (!task_svc->connected)
+        return HRESULT_FROM_WIN32(ERROR_ONLY_IF_CONNECTED);
+
+    *domain = SysAllocString(task_svc->domain_name);
+    if (!*domain) return E_OUTOFMEMORY;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI TaskService_get_HighestVersion(ITaskService *iface, DWORD *version)
@@ -3893,7 +4303,7 @@ HRESULT TaskService_create(void **obj)
 {
     TaskService *task_svc;
 
-    task_svc = heap_alloc(sizeof(*task_svc));
+    task_svc = malloc(sizeof(*task_svc));
     if (!task_svc) return E_OUTOFMEMORY;
 
     task_svc->ITaskService_iface.lpVtbl = &TaskService_vtbl;
@@ -3908,10 +4318,10 @@ HRESULT TaskService_create(void **obj)
 
 void __RPC_FAR *__RPC_USER MIDL_user_allocate(SIZE_T n)
 {
-    return HeapAlloc(GetProcessHeap(), 0, n);
+    return malloc(n);
 }
 
 void __RPC_USER MIDL_user_free(void __RPC_FAR *p)
 {
-    HeapFree(GetProcessHeap(), 0, p);
+    free(p);
 }

@@ -334,7 +334,7 @@
 334 stdcall GdipGetPathWorldBoundsI(ptr ptr ptr ptr)
 335 stdcall GdipGetPenBrushFill(ptr ptr)
 336 stdcall GdipGetPenColor(ptr ptr)
-337 stub GdipGetPenCompoundArray
+337 stdcall GdipGetPenCompoundArray(ptr ptr long)
 338 stdcall GdipGetPenCompoundCount(ptr ptr)
 339 stdcall GdipGetPenCustomEndCap(ptr ptr)
 340 stdcall GdipGetPenCustomStartCap(ptr ptr)
@@ -612,7 +612,7 @@
 612 stdcall GdipGetImageItemData(ptr ptr)
 613 stdcall GdipCreateEffect(int128 ptr)
 614 stdcall GdipDeleteEffect(ptr)
-615 stub GdipGetEffectParameterSize
+615 stdcall GdipGetEffectParameterSize(ptr ptr)
 616 stub GdipGetEffectParameters
 617 stdcall GdipSetEffectParameters(ptr ptr long)
 618 stdcall GdipInitializePalette(ptr long long long ptr)
@@ -623,7 +623,7 @@
 623 stdcall GdipBitmapConvertFormat(ptr long long long ptr float)
 624 stdcall GdipImageSetAbort(ptr ptr)
 625 stdcall GdipGraphicsSetAbort(ptr ptr)
-626 stub GdipDrawImageFX
+626 stdcall GdipDrawImageFX(ptr ptr ptr ptr ptr ptr long)
 627 stdcall GdipConvertToEmfPlus(ptr ptr ptr long wstr ptr)
 628 stdcall GdipConvertToEmfPlusToFile(ptr ptr ptr wstr long wstr ptr)
 629 stub GdipConvertToEmfPlusToStream

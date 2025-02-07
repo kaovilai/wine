@@ -316,6 +316,9 @@ extern "C" {
 #define LOCALE_SSHORTTIME           0x0079
 #define LOCALE_SOPENTYPELANGUAGETAG 0X007A
 #define LOCALE_SSORTLOCALE          0x007B
+#define LOCALE_SRELATIVELONGDATE    0x007C
+#define LOCALE_SSHORTESTAM          0x007E
+#define LOCALE_SSHORTESTPM          0x007F
 
 #define LOCALE_IDEFAULTEBCDICCODEPAGE 0x1012
 #define LOCALE_IPAPERSIZE             0x100A
@@ -333,9 +336,9 @@ static const WCHAR LOCALE_NAME_INVARIANT[] = { 0 };
 #endif
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
-# define LOCALE_NAME_SYSTEM_DEFAULT      L"!sys-default-locale"
+# define LOCALE_NAME_SYSTEM_DEFAULT      L"!x-sys-default-locale"
 #else
-static const WCHAR LOCALE_NAME_SYSTEM_DEFAULT[] = {'!','s','y','s','-','d','e','f','a','u','l','t','-','l','o','c','a','l','e',0};
+static const WCHAR LOCALE_NAME_SYSTEM_DEFAULT[] = {'!','x','-','s','y','s','-','d','e','f','a','u','l','t','-','l','o','c','a','l','e',0};
 #endif
 
 #define LOCALE_NAME_USER_DEFAULT    NULL
@@ -538,6 +541,9 @@ static const WCHAR LOCALE_NAME_SYSTEM_DEFAULT[] = {'!','s','y','s','-','d','e','
 #define CAL_SSHORTESTDAYNAME7  0x37
 #define CAL_SMONTHDAY          0x38
 #define CAL_SABBREVERASTRING   0x39
+#define CAL_SRELATIVELONGDATE  0x3a
+#define CAL_SENGLISHERANAME    0x3b
+#define CAL_SENGLISHABBREVERANAME 0x3c
 
 /* Calendar types */
 #define CAL_GREGORIAN              1
@@ -902,6 +908,7 @@ WINBASEAPI BOOL        WINAPI GetCPInfoExA(UINT,DWORD,LPCPINFOEXA);
 WINBASEAPI BOOL        WINAPI GetCPInfoExW(UINT,DWORD,LPCPINFOEXW);
 #define                       GetCPInfoEx WINELIB_NAME_AW(GetCPInfoEx)
 WINBASEAPI INT         WINAPI GetCalendarInfoA(LCID,DWORD,DWORD,LPSTR,INT,LPDWORD);
+WINBASEAPI INT         WINAPI GetCalendarInfoEx(const WCHAR*,CALID,const WCHAR*,CALTYPE,WCHAR*,INT,DWORD*);
 WINBASEAPI INT         WINAPI GetCalendarInfoW(LCID,DWORD,DWORD,LPWSTR,INT,LPDWORD);
 #define                       GetCalendarInfo WINELIB_NAME_AW(GetCalendarInfo)
 WINBASEAPI INT         WINAPI GetCurrencyFormatA(LCID,DWORD,LPCSTR,const CURRENCYFMTA*,LPSTR,INT);
@@ -917,6 +924,7 @@ WINBASEAPI BOOL        WINAPI GetFileMUIPath(DWORD,PCWSTR,PWSTR,PULONG,PWSTR,PUL
 WINBASEAPI INT         WINAPI GetGeoInfoA(GEOID,GEOTYPE,LPSTR,INT,LANGID);
 WINBASEAPI INT         WINAPI GetGeoInfoW(GEOID,GEOTYPE,LPWSTR,INT,LANGID);
 #define                       GetGeoInfo WINELIB_NAME_AW(GetGeoInfo)
+WINBASEAPI INT         WINAPI GetGeoInfoEx(PWSTR,GEOTYPE,PWSTR,INT);
 WINBASEAPI INT         WINAPI GetLocaleInfoA(LCID,LCTYPE,LPSTR,INT);
 WINBASEAPI INT         WINAPI GetLocaleInfoW(LCID,LCTYPE,LPWSTR,INT);
 #define                       GetLocaleInfo WINELIB_NAME_AW(GetLocaleInfo)
@@ -957,6 +965,7 @@ WINNORMALIZEAPI INT    WINAPI IdnToNameprepUnicode(DWORD,LPCWSTR,INT,LPWSTR,INT)
 WINNORMALIZEAPI INT    WINAPI IdnToUnicode(DWORD,LPCWSTR,INT,LPWSTR,INT);
 WINBASEAPI BOOL        WINAPI IsDBCSLeadByte(BYTE);
 WINBASEAPI BOOL        WINAPI IsDBCSLeadByteEx(UINT,BYTE);
+WINBASEAPI BOOL        WINAPI IsNLSDefinedString(NLS_FUNCTION,DWORD,NLSVERSIONINFO*,LPCWSTR,INT);
 WINNORMALIZEAPI BOOL   WINAPI IsNormalizedString(NORM_FORM,LPCWSTR,INT);
 WINBASEAPI BOOL        WINAPI IsValidCodePage(UINT);
 WINBASEAPI BOOL        WINAPI IsValidLanguageGroup(LGRPID,DWORD);

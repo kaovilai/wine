@@ -422,7 +422,7 @@ static struct reader *alloc_reader(void)
     ret->nb_prefixes = ret->nb_prefixes_allocated = 1;
 
     ret->magic       = READER_MAGIC;
-    InitializeCriticalSection( &ret->cs );
+    InitializeCriticalSectionEx( &ret->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
     ret->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": reader.cs");
 
     prop_init( reader_props, count, ret->prop, &ret[1] );
@@ -561,7 +561,7 @@ HRESULT WINAPI WsCreateReader( const WS_XML_READER_PROPERTY *properties, ULONG c
     BOOL read_decl = TRUE;
     HRESULT hr;
 
-    TRACE( "%p %u %p %p\n", properties, count, handle, error );
+    TRACE( "%p %lu %p %p\n", properties, count, handle, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
     if (!handle) return E_INVALIDARG;
@@ -651,7 +651,7 @@ HRESULT WINAPI WsFillReader( WS_XML_READER *handle, ULONG min_size, const WS_ASY
     struct reader *reader = (struct reader *)handle;
     HRESULT hr;
 
-    TRACE( "%p %u %p %p\n", handle, min_size, ctx, error );
+    TRACE( "%p %lu %p %p\n", handle, min_size, ctx, error );
     if (error) FIXME( "ignoring error parameter\n" );
     if (ctx) FIXME( "ignoring ctx parameter\n" );
 
@@ -677,7 +677,7 @@ HRESULT WINAPI WsFillReader( WS_XML_READER *handle, ULONG min_size, const WS_ASY
     }
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -754,7 +754,7 @@ HRESULT WINAPI WsGetNamespaceFromPrefix( WS_XML_READER *handle, const WS_XML_STR
         }
     }
 
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -783,7 +783,7 @@ HRESULT WINAPI WsGetReaderNode( WS_XML_READER *handle, const WS_XML_NODE **node,
     *node = &reader->current->hdr.node;
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return S_OK;
 }
 
@@ -804,7 +804,7 @@ HRESULT WINAPI WsGetReaderProperty( WS_XML_READER *handle, WS_XML_READER_PROPERT
     struct reader *reader = (struct reader *)handle;
     HRESULT hr;
 
-    TRACE( "%p %u %p %u %p\n", handle, id, buf, size, error );
+    TRACE( "%p %u %p %lu %p\n", handle, id, buf, size, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
     if (!reader) return E_INVALIDARG;
@@ -822,7 +822,7 @@ HRESULT WINAPI WsGetReaderProperty( WS_XML_READER *handle, WS_XML_READER_PROPERT
     else hr = prop_get( reader->prop, reader->prop_count, id, buf, size );
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -914,7 +914,7 @@ WS_XML_UINT64_TEXT *alloc_uint64_text( UINT64 value )
     return ret;
 }
 
-WS_XML_FLOAT_TEXT *alloc_float_text( float value )
+static WS_XML_FLOAT_TEXT *alloc_float_text( float value )
 {
     WS_XML_FLOAT_TEXT *ret;
 
@@ -1486,8 +1486,9 @@ static HRESULT read_attribute_value_bin( struct reader *reader, WS_XML_ATTRIBUTE
     GUID guid;
     HRESULT hr;
 
-    if ((hr = read_byte( reader, &type )) != S_OK) return hr;
+    if ((hr = read_peek( reader, &type, 1 )) != S_OK) return hr;
     if (!is_text_type( type )) return WS_E_INVALID_FORMAT;
+    read_skip( reader, 1 );
 
     switch (type)
     {
@@ -1771,9 +1772,10 @@ static HRESULT read_attribute_bin( struct reader *reader, WS_XML_ATTRIBUTE **ret
     unsigned char type = 0;
     HRESULT hr;
 
-    if ((hr = read_byte( reader, &type )) != S_OK) return hr;
+    if ((hr = read_peek( reader, &type, 1 )) != S_OK) return hr;
     if (!is_attribute_type( type )) return WS_E_INVALID_FORMAT;
     if (!(attr = calloc( 1, sizeof(*attr) ))) return E_OUTOFMEMORY;
+    read_skip( reader, 1 );
 
     if (type >= RECORD_PREFIX_ATTRIBUTE_A && type <= RECORD_PREFIX_ATTRIBUTE_Z)
     {
@@ -2068,8 +2070,9 @@ static HRESULT read_element_bin( struct reader *reader )
     unsigned char type;
     HRESULT hr;
 
-    if ((hr = read_byte( reader, &type )) != S_OK) return hr;
+    if ((hr = read_peek( reader, &type, 1 )) != S_OK) return hr;
     if (!is_element_type( type )) return WS_E_INVALID_FORMAT;
+    read_skip( reader, 1 );
 
     if (!(elem = alloc_element_pair())) return E_OUTOFMEMORY;
     node = (struct node *)elem;
@@ -2480,8 +2483,9 @@ static HRESULT read_text_bin( struct reader *reader )
     GUID uuid;
     HRESULT hr;
 
-    if ((hr = read_byte( reader, &type )) != S_OK) return hr;
+    if ((hr = read_peek( reader, &type, 1 )) != S_OK) return hr;
     if (!is_text_type( type ) || !(parent = find_parent( reader ))) return WS_E_INVALID_FORMAT;
+    read_skip( reader, 1 );
 
     switch (type)
     {
@@ -2835,8 +2839,9 @@ static HRESULT read_endelement_bin( struct reader *reader )
 
     if (!(reader->current->flags & NODE_FLAG_TEXT_WITH_IMPLICIT_END_ELEMENT))
     {
-        if ((hr = read_byte( reader, &type )) != S_OK) return hr;
+        if ((hr = read_peek( reader, &type, 1 )) != S_OK) return hr;
         if (type != RECORD_ENDELEMENT) return WS_E_INVALID_FORMAT;
+        read_skip( reader, 1 );
     }
     if (!(parent = find_parent( reader ))) return WS_E_INVALID_FORMAT;
 
@@ -2917,8 +2922,9 @@ static HRESULT read_comment_bin( struct reader *reader )
     ULONG len;
     HRESULT hr;
 
-    if ((hr = read_byte( reader, &type )) != S_OK) return hr;
+    if ((hr = read_peek( reader, &type, 1 )) != S_OK) return hr;
     if (type != RECORD_COMMENT) return WS_E_INVALID_FORMAT;
+    read_skip( reader, 1 );
     if ((hr = read_int31( reader, &len )) != S_OK) return hr;
 
     if (!(parent = find_parent( reader ))) return WS_E_INVALID_FORMAT;
@@ -3161,7 +3167,7 @@ HRESULT WINAPI WsReadEndElement( WS_XML_READER *handle, WS_ERROR *error )
     hr = read_endelement( reader );
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -3189,7 +3195,7 @@ HRESULT WINAPI WsReadNode( WS_XML_READER *handle, WS_ERROR *error )
     hr = read_node( reader );
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -3236,7 +3242,7 @@ HRESULT WINAPI WsSkipNode( WS_XML_READER *handle, WS_ERROR *error )
     hr = skip_node( reader );
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -3264,7 +3270,7 @@ HRESULT WINAPI WsReadStartElement( WS_XML_READER *handle, WS_ERROR *error )
     hr = read_startelement( reader );
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -3294,7 +3300,7 @@ HRESULT WINAPI WsReadToStartElement( WS_XML_READER *handle, const WS_XML_STRING 
     hr = read_to_startelement( reader, found );
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -3595,7 +3601,7 @@ HRESULT WINAPI WsMoveReader( WS_XML_READER *handle, WS_MOVE_TO move, BOOL *found
     else hr = read_move_to( reader, move, found );
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -3608,7 +3614,7 @@ HRESULT WINAPI WsReadStartAttribute( WS_XML_READER *handle, ULONG index, WS_ERRO
     const WS_XML_ELEMENT_NODE *elem;
     HRESULT hr = S_OK;
 
-    TRACE( "%p %u %p\n", handle, index, error );
+    TRACE( "%p %lu %p\n", handle, index, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
     if (!reader) return E_INVALIDARG;
@@ -3630,7 +3636,7 @@ HRESULT WINAPI WsReadStartAttribute( WS_XML_READER *handle, ULONG index, WS_ERRO
     }
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return S_OK;
 }
 
@@ -3659,7 +3665,7 @@ HRESULT WINAPI WsReadEndAttribute( WS_XML_READER *handle, WS_ERROR *error )
     else reader->state = READER_STATE_STARTELEMENT;
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -4053,7 +4059,7 @@ HRESULT WINAPI WsReadQualifiedName( WS_XML_READER *handle, WS_HEAP *heap, WS_XML
     else hr = read_qualified_name( reader, heap, prefix, localname, ns );
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -4283,7 +4289,7 @@ HRESULT WINAPI WsFindAttribute( WS_XML_READER *handle, const WS_XML_STRING *loca
     }
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -4306,7 +4312,7 @@ static BOOL match_element( const struct node *node, const WS_XML_STRING *localna
     const WS_XML_ELEMENT_NODE *elem = (const WS_XML_ELEMENT_NODE *)node;
     if (node_type( node ) != WS_XML_NODE_TYPE_ELEMENT) return FALSE;
     return WsXmlStringEquals( localname, elem->localName, NULL ) == S_OK &&
-           WsXmlStringEquals( ns, elem->ns, NULL ) == S_OK;
+          (!ns || WsXmlStringEquals( ns, elem->ns, NULL ) == S_OK);
 }
 
 static HRESULT read_next_node( struct reader *reader )
@@ -6178,6 +6184,7 @@ static WS_READ_OPTION get_field_read_option( WS_TYPE type, ULONG options )
     case WS_BYTES_TYPE:
     case WS_XML_STRING_TYPE:
     case WS_XML_QNAME_TYPE:
+    case WS_XML_BUFFER_TYPE:
     case WS_STRUCT_TYPE:
     case WS_ENUM_TYPE:
     case WS_UNION_TYPE:
@@ -6296,7 +6303,7 @@ static HRESULT read_type_array( struct reader *reader, const WS_FIELD_DESCRIPTIO
 
     if (desc->itemRange && (nb_items < desc->itemRange->minItemCount || nb_items > desc->itemRange->maxItemCount))
     {
-        TRACE( "number of items %u out of range (%u-%u)\n", nb_items, desc->itemRange->minItemCount,
+        TRACE( "number of items %lu out of range (%lu-%lu)\n", nb_items, desc->itemRange->minItemCount,
                desc->itemRange->maxItemCount );
         ws_free( heap, buf, nb_allocated * item_size );
         return WS_E_INVALID_FORMAT;
@@ -6341,7 +6348,7 @@ static HRESULT read_type_field( struct reader *reader, const WS_STRUCT_DESCRIPTI
     if (!desc) return E_INVALIDARG;
     if (desc->options & ~(WS_FIELD_POINTER|WS_FIELD_OPTIONAL|WS_FIELD_NILLABLE|WS_FIELD_NILLABLE_ITEM))
     {
-        FIXME( "options %08x not supported\n", desc->options );
+        FIXME( "options %#lx not supported\n", desc->options );
         return E_NOTIMPL;
     }
     if (!(option = get_field_read_option( desc->type, desc->options ))) return E_INVALIDARG;
@@ -6430,7 +6437,7 @@ static HRESULT read_type_struct( struct reader *reader, WS_TYPE_MAPPING mapping,
     if (!desc) return E_INVALIDARG;
     if (desc->structOptions & ~WS_STRUCT_IGNORE_TRAILING_ELEMENT_CONTENT)
     {
-        FIXME( "struct options %08x not supported\n",
+        FIXME( "struct options %#lx not supported\n",
                desc->structOptions & ~WS_STRUCT_IGNORE_TRAILING_ELEMENT_CONTENT );
     }
 
@@ -6499,6 +6506,164 @@ static HRESULT read_type_struct( struct reader *reader, WS_TYPE_MAPPING mapping,
 
     *found = TRUE;
     return S_OK;
+}
+
+static HRESULT read_type_fault( struct reader *reader, WS_TYPE_MAPPING mapping, const WS_XML_STRING *localname,
+                                const WS_XML_STRING *ns, const WS_FAULT_DESCRIPTION *desc, WS_READ_OPTION option,
+                                WS_HEAP *heap, void *ret, ULONG size, BOOL *found )
+{
+    static const WS_XML_STRING faultcode = {9, (BYTE *)"faultcode"}, faultstring = {11, (BYTE *)"faultstring"};
+    static const WS_XML_STRING faultactor = {10, (BYTE *)"faultactor"}, detail = {6, (BYTE *)"detail"};
+
+    const struct node *root = reader->current;
+    WS_FAULT *fault;
+    HRESULT hr = S_OK;
+
+    if (mapping != WS_ELEMENT_TYPE_MAPPING || !desc || !ret)
+        return E_INVALIDARG;
+    if (desc->envelopeVersion < WS_ENVELOPE_VERSION_SOAP_1_1 || desc->envelopeVersion >= WS_ENVELOPE_VERSION_NONE)
+        return E_INVALIDARG;
+    else if (desc->envelopeVersion != WS_ENVELOPE_VERSION_SOAP_1_1)
+    {
+        FIXME( "unhandled envelopeVersion %u\n", desc->envelopeVersion );
+        return E_NOTIMPL;
+    }
+
+    switch (option)
+    {
+    case WS_READ_REQUIRED_VALUE:
+        if (size != sizeof(*fault))
+            return E_INVALIDARG;
+        fault = ret;
+        memset( fault, 0, sizeof(*fault) );
+        break;
+
+    case WS_READ_REQUIRED_POINTER:
+    case WS_READ_OPTIONAL_POINTER:
+    case WS_READ_NILLABLE_POINTER:
+        if (size != sizeof(void *))
+            return E_INVALIDARG;
+        if (!(fault = ws_alloc_zero( heap, sizeof(*fault) )))
+            return WS_E_QUOTA_EXCEEDED;
+        break;
+
+    case WS_READ_NILLABLE_VALUE:
+        return E_INVALIDARG;
+
+    default:
+        FIXME( "unhandled read option %u\n", option );
+        return E_NOTIMPL;
+    }
+
+    if ((hr = read_type_next_node( reader )) != S_OK) goto done;
+    for (;;)
+    {
+        if (node_type( reader->current ) == WS_XML_NODE_TYPE_END_ELEMENT && reader->current->parent == root)
+            break;
+
+        if (match_element( reader->current, &faultcode, ns ))
+        {
+            if (fault->code)
+            {
+                hr = WS_E_INVALID_FORMAT;
+                break;
+            }
+            if (!(fault->code = ws_alloc_zero( heap, sizeof(*fault->code) )))
+            {
+                hr = WS_E_QUOTA_EXCEEDED;
+                break;
+            }
+            if ((hr = read_type( reader, WS_ELEMENT_TYPE_MAPPING, WS_XML_QNAME_TYPE, NULL, NULL,
+                                 NULL, WS_READ_REQUIRED_VALUE, heap, &fault->code->value,
+                                 sizeof(fault->code->value), found )) != S_OK)
+                break;
+
+        }
+        else if (match_element( reader->current, &faultstring, ns ))
+        {
+            if (fault->reasons)
+            {
+                hr = WS_E_INVALID_FORMAT;
+                break;
+            }
+            if (!(fault->reasons = ws_alloc_zero( heap, sizeof(*fault->reasons) )))
+            {
+                hr = WS_E_QUOTA_EXCEEDED;
+                break;
+            }
+            fault->reasonCount = 1;
+            /* FIXME: parse optional xml:lang attribute */
+            if ((hr = read_next_node( reader )) != S_OK ||
+                (hr = read_type( reader, WS_ELEMENT_TYPE_MAPPING, WS_STRING_TYPE, NULL, NULL,
+                                 NULL, WS_READ_REQUIRED_VALUE, heap, &fault->reasons->text,
+                                 sizeof(fault->reasons->text), found )) != S_OK)
+                break;
+        }
+        else if (match_element( reader->current, &faultactor, ns ))
+        {
+            if (fault->actor.length > 0)
+            {
+                hr = WS_E_INVALID_FORMAT;
+                break;
+            }
+            if ((hr = read_next_node( reader )) != S_OK ||
+                (hr = read_type( reader, WS_ELEMENT_TYPE_MAPPING, WS_STRING_TYPE, NULL, NULL,
+                                 NULL, WS_READ_REQUIRED_VALUE, heap, &fault->actor,
+                                 sizeof(fault->actor), found )) != S_OK)
+                break;
+        }
+        else if (match_element( reader->current, &detail, ns ))
+        {
+            if (fault->detail)
+            {
+                hr = WS_E_INVALID_FORMAT;
+                break;
+            }
+            if ((hr = WsReadXmlBuffer( (WS_XML_READER *)reader, heap, &fault->detail, NULL )) != S_OK)
+                break;
+        }
+        else if ((hr = read_type_next_node( reader )) != S_OK)
+            break;
+    }
+
+done:
+    if ((!fault->code || !fault->reasons) && hr == S_OK)
+        hr = WS_E_INVALID_FORMAT;
+
+    if (hr != S_OK)
+    {
+        free_fault_fields( heap, fault );
+
+        switch (option)
+        {
+        case WS_READ_REQUIRED_VALUE:
+        case WS_READ_REQUIRED_POINTER:
+            memset( fault, 0, sizeof(*fault) );
+            break;
+
+        case WS_READ_OPTIONAL_POINTER:
+        case WS_READ_NILLABLE_POINTER:
+            if (hr == WS_E_INVALID_FORMAT && is_nil_value( (const char *)fault, sizeof(*fault) ))
+            {
+                ws_free( heap, fault, sizeof(*fault) );
+                fault = NULL;
+                hr = S_OK;
+            }
+            else
+                memset( fault, 0, sizeof(*fault) );
+            break;
+
+        default:
+            ERR( "unhandled option %u\n", option );
+            return E_NOTIMPL;
+        }
+    }
+
+    if (option != WS_READ_REQUIRED_VALUE)
+        *(WS_FAULT **)ret = fault;
+
+    *found = TRUE;
+    return hr;
 }
 
 static HRESULT start_mapping( struct reader *reader, WS_TYPE_MAPPING mapping, const WS_XML_STRING *localname,
@@ -6692,6 +6857,10 @@ static HRESULT read_type( struct reader *reader, WS_TYPE_MAPPING mapping, WS_TYP
         hr = read_type_struct( reader, mapping, localname, ns, desc, option, heap, value, size, found );
         break;
 
+    case WS_FAULT_TYPE:
+        hr = read_type_fault( reader, mapping, localname, ns, desc, option, heap, value, size, found );
+        break;
+
     case WS_ENUM_TYPE:
         hr = read_type_enum( reader, mapping, localname, ns, desc, option, heap, value, size, found );
         break;
@@ -6716,7 +6885,7 @@ HRESULT WINAPI WsReadType( WS_XML_READER *handle, WS_TYPE_MAPPING mapping, WS_TY
     BOOL found;
     HRESULT hr;
 
-    TRACE( "%p %u %u %p %u %p %p %u %p\n", handle, mapping, type, desc, option, heap, value,
+    TRACE( "%p %u %u %p %#x %p %p %lu %p\n", handle, mapping, type, desc, option, heap, value,
            size, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
@@ -6745,7 +6914,7 @@ HRESULT WINAPI WsReadType( WS_XML_READER *handle, WS_TYPE_MAPPING mapping, WS_TY
     }
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -6783,7 +6952,7 @@ HRESULT WINAPI WsReadElement( WS_XML_READER *handle, const WS_ELEMENT_DESCRIPTIO
     BOOL found;
     HRESULT hr;
 
-    TRACE( "%p %p %u %p %p %u %p\n", handle, desc, option, heap, value, size, error );
+    TRACE( "%p %p %#x %p %p %lu %p\n", handle, desc, option, heap, value, size, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
     if (!reader || !desc || !value) return E_INVALIDARG;
@@ -6800,7 +6969,7 @@ HRESULT WINAPI WsReadElement( WS_XML_READER *handle, const WS_ELEMENT_DESCRIPTIO
                     desc->elementNs, desc->typeDescription, option, heap, value, size, &found );
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -6815,7 +6984,7 @@ HRESULT WINAPI WsReadValue( WS_XML_READER *handle, WS_VALUE_TYPE value_type, voi
     BOOL found;
     HRESULT hr;
 
-    TRACE( "%p %u %p %u %p\n", handle, type, value, size, error );
+    TRACE( "%p %u %p %lu %p\n", handle, type, value, size, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
     if (!reader || !value || type == ~0u) return E_INVALIDARG;
@@ -6832,7 +7001,7 @@ HRESULT WINAPI WsReadValue( WS_XML_READER *handle, WS_VALUE_TYPE value_type, voi
                     NULL, value, size, &found );
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -6847,7 +7016,7 @@ HRESULT WINAPI WsReadAttribute( WS_XML_READER *handle, const WS_ATTRIBUTE_DESCRI
     BOOL found;
     HRESULT hr;
 
-    TRACE( "%p %p %u %p %p %u %p\n", handle, desc, option, heap, value, size, error );
+    TRACE( "%p %p %#x %p %p %lu %p\n", handle, desc, option, heap, value, size, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
     if (!reader || !desc || !value) return E_INVALIDARG;
@@ -6865,7 +7034,7 @@ HRESULT WINAPI WsReadAttribute( WS_XML_READER *handle, const WS_ATTRIBUTE_DESCRI
                          desc->attributeNs, desc->typeDescription, option, heap, value, size, &found );
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -6968,7 +7137,7 @@ HRESULT WINAPI WsSetInput( WS_XML_READER *handle, const WS_XML_READER_ENCODING *
     ULONG i, offset = 0;
     HRESULT hr;
 
-    TRACE( "%p %p %p %p %u %p\n", handle, encoding, input, properties, count, error );
+    TRACE( "%p %p %p %p %lu %p\n", handle, encoding, input, properties, count, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
     if (!reader) return E_INVALIDARG;
@@ -7051,7 +7220,7 @@ HRESULT WINAPI WsSetInput( WS_XML_READER *handle, const WS_XML_READER_ENCODING *
 
 done:
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -7099,7 +7268,7 @@ HRESULT WINAPI WsSetInputToBuffer( WS_XML_READER *handle, WS_XML_BUFFER *buffer,
     HRESULT hr;
     ULONG i;
 
-    TRACE( "%p %p %p %u %p\n", handle, buffer, properties, count, error );
+    TRACE( "%p %p %p %lu %p\n", handle, buffer, properties, count, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
     if (!reader || !xmlbuf) return E_INVALIDARG;
@@ -7127,7 +7296,7 @@ HRESULT WINAPI WsSetInputToBuffer( WS_XML_READER *handle, WS_XML_BUFFER *buffer,
 
 done:
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -7160,7 +7329,7 @@ HRESULT WINAPI WsGetReaderPosition( WS_XML_READER *handle, WS_XML_NODE_POSITION 
     }
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -7189,7 +7358,7 @@ HRESULT WINAPI WsSetReaderPosition( WS_XML_READER *handle, const WS_XML_NODE_POS
     else reader->current = pos->node;
 
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -7209,7 +7378,7 @@ HRESULT WINAPI WsReadBytes( WS_XML_READER *handle, void *bytes, ULONG max_count,
     struct reader *reader = (struct reader *)handle;
     HRESULT hr = S_OK;
 
-    TRACE( "%p %p %u %p %p\n", handle, bytes, max_count, count, error );
+    TRACE( "%p %p %lu %p %p\n", handle, bytes, max_count, count, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
     if (!reader) return E_INVALIDARG;
@@ -7254,7 +7423,7 @@ HRESULT WINAPI WsReadBytes( WS_XML_READER *handle, void *bytes, ULONG max_count,
 
 done:
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -7275,7 +7444,7 @@ HRESULT WINAPI WsReadChars( WS_XML_READER *handle, WCHAR *chars, ULONG max_count
     struct reader *reader = (struct reader *)handle;
     HRESULT hr = S_OK;
 
-    TRACE( "%p %p %u %p %p\n", handle, chars, max_count, count, error );
+    TRACE( "%p %p %lu %p %p\n", handle, chars, max_count, count, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
     if (!reader) return E_INVALIDARG;
@@ -7321,7 +7490,7 @@ HRESULT WINAPI WsReadChars( WS_XML_READER *handle, WCHAR *chars, ULONG max_count
 
 done:
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -7333,7 +7502,7 @@ HRESULT WINAPI WsReadCharsUtf8( WS_XML_READER *handle, BYTE *bytes, ULONG max_co
     struct reader *reader = (struct reader *)handle;
     HRESULT hr = S_OK;
 
-    TRACE( "%p %p %u %p %p\n", handle, bytes, max_count, count, error );
+    TRACE( "%p %p %lu %p %p\n", handle, bytes, max_count, count, error );
     if (error) FIXME( "ignoring error parameter\n" );
 
     if (!reader) return E_INVALIDARG;
@@ -7375,7 +7544,7 @@ HRESULT WINAPI WsReadCharsUtf8( WS_XML_READER *handle, BYTE *bytes, ULONG max_co
 
 done:
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 
@@ -7443,7 +7612,7 @@ done:
     if (hr != S_OK) free_xmlbuf( (struct xmlbuf *)buffer );
     WsFreeWriter( writer );
     LeaveCriticalSection( &reader->cs );
-    TRACE( "returning %08x\n", hr );
+    TRACE( "returning %#lx\n", hr );
     return hr;
 }
 

@@ -49,13 +49,15 @@ HRESULT strmbase_seeking_init(SourceSeeking *pSeeking, const IMediaSeekingVtbl *
     pSeeking->llDuration = pSeeking->llStop;
     pSeeking->dRate = 1.0;
     pSeeking->timeformat = TIME_FORMAT_MEDIA_TIME;
-    InitializeCriticalSection(&pSeeking->cs);
+    if (!InitializeCriticalSectionEx(&pSeeking->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO))
+        InitializeCriticalSection(&pSeeking->cs);
     pSeeking->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": SourceSeeking.cs");
     return S_OK;
 }
 
 void strmbase_seeking_cleanup(SourceSeeking *seeking)
 {
+    seeking->cs.DebugInfo->Spare[0] = 0;
     DeleteCriticalSection(&seeking->cs);
 }
 
@@ -220,7 +222,10 @@ HRESULT WINAPI SourceSeekingImpl_SetPositions(IMediaSeeking * iface, LONGLONG * 
     BOOL bChangeCurrent = FALSE, bChangeStop = FALSE;
     LONGLONG llNewCurrent, llNewStop;
 
-    TRACE("(%p, %x, %p, %x)\n", pCurrent, dwCurrentFlags, pStop, dwStopFlags);
+    TRACE("iface %p, current %s, current_flags %#lx, stop %s, stop_flags %#lx.\n", iface,
+            pCurrent ? debugstr_time(*pCurrent) : "<null>", dwCurrentFlags,
+            pStop ? debugstr_time(*pStop): "<null>", dwStopFlags);
+
     EnterCriticalSection(&This->cs);
 
     llNewCurrent = Adjust(This->llCurrent, pCurrent, dwCurrentFlags);
@@ -231,7 +236,7 @@ HRESULT WINAPI SourceSeekingImpl_SetPositions(IMediaSeeking * iface, LONGLONG * 
     if (llNewStop != This->llStop)
         bChangeStop = TRUE;
 
-    TRACE("Old: %u, New: %u\n", (DWORD)(This->llCurrent/10000000), (DWORD)(llNewCurrent/10000000));
+    TRACE("Seeking from %s to %s.\n", debugstr_time(This->llCurrent), debugstr_time(llNewCurrent));
 
     This->llCurrent = llNewCurrent;
     This->llStop = llNewStop;

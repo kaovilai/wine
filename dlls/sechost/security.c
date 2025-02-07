@@ -20,13 +20,14 @@
 
 #include <assert.h>
 #include <stdarg.h>
+
+#define WINADVAPI
 #include "windef.h"
 #include "winbase.h"
 #include "sddl.h"
 #include "iads.h"
 
 #include "wine/debug.h"
-#include "wine/heap.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(security);
 
@@ -536,7 +537,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH ConvertSecurityDescriptorToStringSecurityDescripto
 
     if (revision != SDDL_REVISION_1)
     {
-        ERR("Unhandled SDDL revision %d\n", revision);
+        ERR("Unhandled SDDL revision %ld\n", revision);
         SetLastError( ERROR_UNKNOWN_REVISION );
         return FALSE;
     }
@@ -573,7 +574,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH ConvertSecurityDescriptorToStringSecurityDescripto
     }
     *wptr = 0;
 
-    TRACE("ret: %s, %d\n", wine_dbgstr_w(wstr), len);
+    TRACE("ret: %s, %ld\n", wine_dbgstr_w(wstr), len);
     *string = wstr;
     if (ret_len) *ret_len = wcslen(*string) + 1;
     return TRUE;
@@ -900,8 +901,8 @@ static DWORD parse_ace_right( const WCHAR **string_ptr )
     const WCHAR *string = *string_ptr;
     unsigned int i;
 
-    if (string[0] == '0' && string[1] == 'x')
-        return wcstoul( string, (WCHAR **)string_ptr, 16 );
+    if (iswdigit( string[0] ))
+        return wcstoul( string, (WCHAR **)string_ptr, 0 );
 
     for (i = 0; i < ARRAY_SIZE(ace_rights); ++i)
     {
@@ -1078,7 +1079,7 @@ static BOOL parse_sd( const WCHAR *string, SECURITY_DESCRIPTOR_RELATIVE *sd, DWO
 
     *size = sizeof(SECURITY_DESCRIPTOR_RELATIVE);
 
-    tok = heap_alloc( (wcslen(string) + 1) * sizeof(WCHAR) );
+    tok = malloc( (wcslen(string) + 1) * sizeof(WCHAR) );
     if (!tok)
     {
         SetLastError( ERROR_NOT_ENOUGH_MEMORY );
@@ -1206,7 +1207,7 @@ static BOOL parse_sd( const WCHAR *string, SECURITY_DESCRIPTOR_RELATIVE *sd, DWO
     ret = TRUE;
 
 out:
-    heap_free(tok);
+    free(tok);
     return ret;
 }
 
@@ -1219,7 +1220,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH ConvertStringSecurityDescriptorToSecurityDescripto
     DWORD size;
     SECURITY_DESCRIPTOR *psd;
 
-    TRACE("%s, %u, %p, %p\n", debugstr_w(string), revision, sd, ret_size);
+    TRACE("%s, %lu, %p, %p\n", debugstr_w(string), revision, sd, ret_size);
 
     if (GetVersion() & 0x80000000)
     {

@@ -162,7 +162,7 @@ BOOL WINAPI PathFileExistsDefExtW(LPWSTR lpszPath,DWORD dwWhich)
                                        { '.', 'c', 'm', 'd', 0},
                                        { 0, 0, 0, 0, 0} };
 
-  TRACE("(%s,%d)\n", debugstr_w(lpszPath), dwWhich);
+  TRACE("(%s,%ld)\n", debugstr_w(lpszPath), dwWhich);
 
   if (!lpszPath || PathIsUNCServerW(lpszPath) || PathIsUNCServerShareW(lpszPath))
     return FALSE;
@@ -218,7 +218,7 @@ BOOL WINAPI PathFileExistsDefExtA(LPSTR lpszPath,DWORD dwWhich)
 {
   BOOL bRet = FALSE;
 
-  TRACE("(%s,%d)\n", debugstr_a(lpszPath), dwWhich);
+  TRACE("(%s,%ld)\n", debugstr_a(lpszPath), dwWhich);
 
   if (lpszPath)
   {
@@ -238,14 +238,12 @@ BOOL WINAPI PathFileExistsDefExtA(LPSTR lpszPath,DWORD dwWhich)
  */
 static BOOL SHLWAPI_PathFindInOtherDirs(LPWSTR lpszFile, DWORD dwWhich)
 {
-  static const WCHAR szSystem[] = { 'S','y','s','t','e','m','\0'};
-  static const WCHAR szPath[] = { 'P','A','T','H','\0'};
   DWORD dwLenPATH;
   LPCWSTR lpszCurr;
   WCHAR *lpszPATH;
   WCHAR buff[MAX_PATH];
 
-  TRACE("(%s,%08x)\n", debugstr_w(lpszFile), dwWhich);
+  TRACE("(%s,%08lx)\n", debugstr_w(lpszFile), dwWhich);
 
   /* Try system directories */
   GetSystemDirectoryW(buff, MAX_PATH);
@@ -257,7 +255,7 @@ static BOOL SHLWAPI_PathFindInOtherDirs(LPWSTR lpszFile, DWORD dwWhich)
     return TRUE;
   }
   GetWindowsDirectoryW(buff, MAX_PATH);
-  if (!PathAppendW(buff, szSystem ) || !PathAppendW(buff, lpszFile))
+  if (!PathAppendW(buff, L"System" ) || !PathAppendW(buff, lpszFile))
     return FALSE;
   if (PathFileExistsDefExtW(buff, dwWhich))
   {
@@ -273,12 +271,12 @@ static BOOL SHLWAPI_PathFindInOtherDirs(LPWSTR lpszFile, DWORD dwWhich)
     return TRUE;
   }
   /* Try dirs listed in %PATH% */
-  dwLenPATH = GetEnvironmentVariableW(szPath, buff, MAX_PATH);
+  dwLenPATH = GetEnvironmentVariableW(L"PATH", buff, MAX_PATH);
 
-  if (!dwLenPATH || !(lpszPATH = HeapAlloc(GetProcessHeap(), 0, (dwLenPATH + 1) * sizeof (WCHAR))))
+  if (!dwLenPATH || !(lpszPATH = malloc((dwLenPATH + 1) * sizeof (WCHAR))))
     return FALSE;
 
-  GetEnvironmentVariableW(szPath, lpszPATH, dwLenPATH + 1);
+  GetEnvironmentVariableW(L"PATH", lpszPATH, dwLenPATH + 1);
   lpszCurr = lpszPATH;
   while (lpszCurr)
   {
@@ -298,17 +296,17 @@ static BOOL SHLWAPI_PathFindInOtherDirs(LPWSTR lpszFile, DWORD dwWhich)
 
     if (!PathAppendW(buff, lpszFile))
     {
-      HeapFree(GetProcessHeap(), 0, lpszPATH);
+      free(lpszPATH);
       return FALSE;
     }
     if (PathFileExistsDefExtW(buff, dwWhich))
     {
       lstrcpyW(lpszFile, buff);
-      HeapFree(GetProcessHeap(), 0, lpszPATH);
+      free(lpszPATH);
       return TRUE;
     }
   }
-  HeapFree(GetProcessHeap(), 0, lpszPATH);
+  free(lpszPATH);
   return FALSE;
 }
 
@@ -331,7 +329,7 @@ BOOL WINAPI PathFindOnPathExA(LPSTR lpszFile,LPCSTR *lppszOtherDirs,DWORD dwWhic
   WCHAR szFile[MAX_PATH];
   WCHAR buff[MAX_PATH];
 
-  TRACE("(%s,%p,%08x)\n", debugstr_a(lpszFile), lppszOtherDirs, dwWhich);
+  TRACE("(%s,%p,%08lx)\n", debugstr_a(lpszFile), lppszOtherDirs, dwWhich);
 
   if (!lpszFile || !PathIsFileSpecA(lpszFile))
     return FALSE;
@@ -374,7 +372,7 @@ BOOL WINAPI PathFindOnPathExW(LPWSTR lpszFile,LPCWSTR *lppszOtherDirs,DWORD dwWh
 {
   WCHAR buff[MAX_PATH];
 
-  TRACE("(%s,%p,%08x)\n", debugstr_w(lpszFile), lppszOtherDirs, dwWhich);
+  TRACE("(%s,%p,%08lx)\n", debugstr_w(lpszFile), lppszOtherDirs, dwWhich);
 
   if (!lpszFile || !PathIsFileSpecW(lpszFile))
     return FALSE;
@@ -459,7 +457,7 @@ BOOL WINAPI PathCompactPathExA(LPSTR lpszDest, LPCSTR lpszPath,
 {
   BOOL bRet = FALSE;
 
-  TRACE("(%p,%s,%d,0x%08x)\n", lpszDest, debugstr_a(lpszPath), cchMax, dwFlags);
+  TRACE("(%p,%s,%d,0x%08lx)\n", lpszDest, debugstr_a(lpszPath), cchMax, dwFlags);
 
   if (lpszPath && lpszDest)
   {
@@ -486,7 +484,7 @@ BOOL WINAPI PathCompactPathExW(LPWSTR lpszDest, LPCWSTR lpszPath,
   LPCWSTR lpszFile;
   DWORD dwLen, dwFileLen = 0;
 
-  TRACE("(%p,%s,%d,0x%08x)\n", lpszDest, debugstr_w(lpszPath), cchMax, dwFlags);
+  TRACE("(%p,%s,%d,0x%08lx)\n", lpszDest, debugstr_w(lpszPath), cchMax, dwFlags);
 
   if (!lpszPath)
     return FALSE;
@@ -732,7 +730,6 @@ BOOL WINAPI PathIsContentTypeA(LPCSTR path, LPCSTR content_type)
  */
 BOOL WINAPI PathIsContentTypeW(LPCWSTR lpszPath, LPCWSTR lpszContentType)
 {
-  static const WCHAR szContentType[] = { 'C','o','n','t','e','n','t',' ','T','y','p','e','\0' };
   LPCWSTR szExt;
   DWORD dwDummy;
   WCHAR szBuff[MAX_PATH];
@@ -740,7 +737,7 @@ BOOL WINAPI PathIsContentTypeW(LPCWSTR lpszPath, LPCWSTR lpszContentType)
   TRACE("(%s,%s)\n", debugstr_w(lpszPath), debugstr_w(lpszContentType));
 
   if (lpszPath && (szExt = PathFindExtensionW(lpszPath)) && *szExt &&
-      !SHGetValueW(HKEY_CLASSES_ROOT, szExt, szContentType,
+      !SHGetValueW(HKEY_CLASSES_ROOT, szExt, L"Content Type",
                    REG_NONE, szBuff, &dwDummy) &&
       !wcsicmp(lpszContentType, szBuff))
   {
@@ -764,7 +761,7 @@ BOOL WINAPI PathIsContentTypeW(LPCWSTR lpszPath, LPCWSTR lpszContentType)
  */
 BOOL WINAPI PathIsSystemFolderA(LPCSTR lpszPath, DWORD dwAttrib)
 {
-  TRACE("(%s,0x%08x)\n", debugstr_a(lpszPath), dwAttrib);
+  TRACE("(%s,0x%08lx)\n", debugstr_a(lpszPath), dwAttrib);
 
   if (lpszPath && *lpszPath)
     dwAttrib = GetFileAttributesA(lpszPath);
@@ -782,7 +779,7 @@ BOOL WINAPI PathIsSystemFolderA(LPCSTR lpszPath, DWORD dwAttrib)
  */
 BOOL WINAPI PathIsSystemFolderW(LPCWSTR lpszPath, DWORD dwAttrib)
 {
-  TRACE("(%s,0x%08x)\n", debugstr_w(lpszPath), dwAttrib);
+  TRACE("(%s,0x%08lx)\n", debugstr_w(lpszPath), dwAttrib);
 
   if (lpszPath && *lpszPath)
     dwAttrib = GetFileAttributesW(lpszPath);
@@ -1502,7 +1499,7 @@ HRESULT WINAPI SHGetWebFolderFilePathA(LPCSTR lpszFile, LPSTR lpszPath, DWORD dw
   WCHAR szFile[MAX_PATH], szPath[MAX_PATH];
   HRESULT hRet;
 
-  TRACE("(%s,%p,%d)\n", lpszFile, lpszPath, dwPathLen);
+  TRACE("(%s,%p,%ld)\n", lpszFile, lpszPath, dwPathLen);
 
   MultiByteToWideChar(CP_ACP, 0, lpszFile, -1, szFile, MAX_PATH);
   szPath[0] = '\0';
@@ -1518,12 +1515,12 @@ HRESULT WINAPI SHGetWebFolderFilePathA(LPCSTR lpszFile, LPSTR lpszPath, DWORD dw
  */
 HRESULT WINAPI SHGetWebFolderFilePathW(LPCWSTR lpszFile, LPWSTR lpszPath, DWORD dwPathLen)
 {
-  static const WCHAR szWeb[] = {'\\','W','e','b','\\','\0'};
-  static const WCHAR szWebMui[] = {'m','u','i','\\','%','0','4','x','\\','\0'};
+  static const WCHAR szWeb[] = L"\\Web\\";
+  static const WCHAR szWebMui[] = L"mui\\%04x\\";
   DWORD dwLen, dwFileLen;
   LANGID lidSystem, lidUser;
 
-  TRACE("(%s,%p,%d)\n", debugstr_w(lpszFile), lpszPath, dwPathLen);
+  TRACE("(%s,%p,%ld)\n", debugstr_w(lpszFile), lpszPath, dwPathLen);
 
   /* Get base directory for web content */
   dwLen = GetSystemWindowsDirectoryW(lpszPath, dwPathLen);

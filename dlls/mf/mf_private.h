@@ -56,7 +56,7 @@ struct activate_funcs
     void (*free_private)(void *context);
 };
 
-HRESULT create_activation_object(void *context, const struct activate_funcs *funcs, IMFActivate **ret) DECLSPEC_HIDDEN;
+HRESULT create_activation_object(void *context, const struct activate_funcs *funcs, IMFActivate **ret);
 
 static inline const char *debugstr_time(LONGLONG time)
 {
@@ -79,6 +79,51 @@ static inline const char *debugstr_time(LONGLONG time)
     return wine_dbg_sprintf("%s", rev);
 }
 
-extern BOOL mf_is_sample_copier_transform(IMFTransform *transform) DECLSPEC_HIDDEN;
-extern BOOL mf_is_sar_sink(IMFMediaSink *sink) DECLSPEC_HIDDEN;
-extern HRESULT topology_node_get_object(IMFTopologyNode *node, REFIID riid, void **obj) DECLSPEC_HIDDEN;
+static inline const char *debugstr_propvar(const PROPVARIANT *v)
+{
+    if (!v)
+        return "(null)";
+
+    switch (v->vt)
+    {
+        case VT_EMPTY:
+            return wine_dbg_sprintf("%p {VT_EMPTY}", v);
+        case VT_NULL:
+            return wine_dbg_sprintf("%p {VT_NULL}", v);
+        case VT_UI4:
+            return wine_dbg_sprintf("%p {VT_UI4: %ld}", v, v->ulVal);
+        case VT_UI8:
+            return wine_dbg_sprintf("%p {VT_UI8: %s}", v, wine_dbgstr_longlong(v->uhVal.QuadPart));
+        case VT_I8:
+            return wine_dbg_sprintf("%p {VT_I8: %s}", v, wine_dbgstr_longlong(v->hVal.QuadPart));
+        case VT_R4:
+            return wine_dbg_sprintf("%p {VT_R4: %.8e}", v, v->fltVal);
+        case VT_R8:
+            return wine_dbg_sprintf("%p {VT_R8: %lf}", v, v->dblVal);
+        case VT_CLSID:
+            return wine_dbg_sprintf("%p {VT_CLSID: %s}", v, wine_dbgstr_guid(v->puuid));
+        case VT_LPWSTR:
+            return wine_dbg_sprintf("%p {VT_LPWSTR: %s}", v, wine_dbgstr_w(v->pwszVal));
+        case VT_VECTOR | VT_UI1:
+            return wine_dbg_sprintf("%p {VT_VECTOR|VT_UI1: %p}", v, v->caub.pElems);
+        case VT_UNKNOWN:
+            return wine_dbg_sprintf("%p {VT_UNKNOWN: %p}", v, v->punkVal);
+        default:
+            return wine_dbg_sprintf("%p {vt %#x}", v, v->vt);
+    }
+}
+
+extern HRESULT file_scheme_handler_construct(REFIID riid, void **obj);
+extern HRESULT urlmon_scheme_handler_construct(REFIID riid, void **obj);
+
+extern BOOL mf_is_sample_copier_transform(IMFTransform *transform);
+extern BOOL mf_is_sar_sink(IMFMediaSink *sink);
+extern HRESULT create_topology(TOPOID id, IMFTopology **topology);
+extern HRESULT topology_node_get_object(IMFTopologyNode *node, REFIID riid, void **obj);
+extern HRESULT topology_node_get_type_handler(IMFTopologyNode *node, DWORD stream, BOOL output, IMFMediaTypeHandler **handler);
+extern HRESULT topology_node_init_media_type(IMFTopologyNode *node, DWORD stream, BOOL output, IMFMediaType **type);
+extern BOOL topology_node_is_d3d_aware(IMFTopologyNode *node);
+extern HRESULT topology_node_set_device_manager(IMFTopologyNode *node, IUnknown *device_manager);
+extern HRESULT stream_sink_get_device_manager(IMFStreamSink *stream_sink, IUnknown **device_manager);
+
+extern HRESULT enum_audio_capture_sources(IMFAttributes *attributes, IMFActivate ***sources, UINT32 *ret_count);

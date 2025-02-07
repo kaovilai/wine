@@ -86,7 +86,7 @@ static ULONG WINAPI URLMoniker_AddRef(IMoniker *iface)
     URLMoniker *This = impl_from_IMoniker(iface);
     ULONG refCount = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) ref=%u\n",This, refCount);
+    TRACE("(%p) ref=%lu\n",This, refCount);
 
     return refCount;
 }
@@ -96,13 +96,13 @@ static ULONG WINAPI URLMoniker_Release(IMoniker *iface)
     URLMoniker *This = impl_from_IMoniker(iface);
     ULONG refCount = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) ref=%u\n",This, refCount);
+    TRACE("(%p) ref=%lu\n",This, refCount);
 
     if (!refCount) {
         if(This->uri)
             IUri_Release(This->uri);
         SysFreeString(This->URLName);
-        heap_free(This);
+        free(This);
 
         URLMON_UnlockModule();
     }
@@ -162,7 +162,7 @@ static HRESULT WINAPI URLMoniker_Load(IMoniker* iface,IStream* pStm)
     if(got != sizeof(ULONG))
         return E_FAIL;
 
-    new_uri_str = heap_alloc(size+sizeof(WCHAR));
+    new_uri_str = malloc(size + sizeof(WCHAR));
     if(!new_uri_str)
         return E_OUTOFMEMORY;
 
@@ -170,7 +170,7 @@ static HRESULT WINAPI URLMoniker_Load(IMoniker* iface,IStream* pStm)
     new_uri_str[size/sizeof(WCHAR)] = 0;
     if(SUCCEEDED(hres))
         hres = CreateUri(new_uri_str, 0, 0, &new_uri);
-    heap_free(new_uri_str);
+    free(new_uri_str);
     if(FAILED(hres))
         return hres;
 
@@ -285,7 +285,7 @@ static HRESULT WINAPI URLMoniker_Reduce(IMoniker *iface, IBindCtx *pbc,
 {
     URLMoniker *This = impl_from_IMoniker(iface);
 
-    TRACE("(%p,%p,%d,%p,%p)\n", This, pbc, dwReduceHowFar, ppmkToLeft, ppmkReduced);
+    TRACE("(%p,%p,%ld,%p,%p)\n", This, pbc, dwReduceHowFar, ppmkToLeft, ppmkReduced);
 
     if(!ppmkReduced)
         return E_INVALIDARG;
@@ -557,7 +557,7 @@ static HRESULT create_moniker(IUri *uri, URLMoniker **ret)
     URLMoniker *mon;
     HRESULT hres;
 
-    mon = heap_alloc(sizeof(*mon));
+    mon = malloc(sizeof(*mon));
     if(!mon)
         return E_OUTOFMEMORY;
 
@@ -569,7 +569,7 @@ static HRESULT create_moniker(IUri *uri, URLMoniker **ret)
         /* FIXME: try to avoid it */
         hres = IUri_GetDisplayUri(uri, &mon->URLName);
         if(FAILED(hres)) {
-            heap_free(mon);
+            free(mon);
             return hres;
         }
 
@@ -634,7 +634,7 @@ HRESULT WINAPI CreateURLMonikerEx(IMoniker *pmkContext, LPCWSTR szURL, IMoniker 
     URLMoniker *obj;
     HRESULT hres;
 
-    TRACE("(%p, %s, %p, %08x)\n", pmkContext, debugstr_w(szURL), ppmk, dwFlags);
+    TRACE("(%p, %s, %p, %08lx)\n", pmkContext, debugstr_w(szURL), ppmk, dwFlags);
 
     if (ppmk)
         *ppmk = NULL;
@@ -643,7 +643,7 @@ HRESULT WINAPI CreateURLMonikerEx(IMoniker *pmkContext, LPCWSTR szURL, IMoniker 
         return E_INVALIDARG;
 
     if(dwFlags >= ARRAY_SIZE(create_flags_map)) {
-        FIXME("Unsupported flags %x\n", dwFlags);
+        FIXME("Unsupported flags %lx\n", dwFlags);
         return E_INVALIDARG;
     }
 
@@ -687,7 +687,7 @@ HRESULT WINAPI CreateURLMonikerEx2(IMoniker *pmkContext, IUri *pUri, IMoniker **
     URLMoniker *ret;
     HRESULT hres;
 
-    TRACE("(%p %p %p %x)\n", pmkContext, pUri, ppmk, dwFlags);
+    TRACE("(%p %p %p %lx)\n", pmkContext, pUri, ppmk, dwFlags);
 
     if (ppmk)
         *ppmk = NULL;
@@ -696,7 +696,7 @@ HRESULT WINAPI CreateURLMonikerEx2(IMoniker *pmkContext, IUri *pUri, IMoniker **
         return E_INVALIDARG;
 
     if(dwFlags >= ARRAY_SIZE(create_flags_map)) {
-        FIXME("Unsupported flags %x\n", dwFlags);
+        FIXME("Unsupported flags %lx\n", dwFlags);
         return E_INVALIDARG;
     }
 
@@ -788,7 +788,7 @@ HRESULT WINAPI BindAsyncMoniker(IMoniker *pmk, DWORD grfOpt, IBindStatusCallback
     LPBC pbc = NULL;
     HRESULT hr = E_INVALIDARG;
 
-    TRACE("(%p %08x %p %s %p)\n", pmk, grfOpt, pbsc, debugstr_guid(iidResult), ppvResult);
+    TRACE("(%p %08lx %p %s %p)\n", pmk, grfOpt, pbsc, debugstr_guid(iidResult), ppvResult);
 
     if (pmk && ppvResult)
     {
@@ -838,17 +838,17 @@ HRESULT WINAPI URLDownloadToCacheFileA(LPUNKNOWN lpUnkCaller, LPCSTR szURL, LPST
     int len;
     HRESULT hres;
 
-    TRACE("(%p %s %p %d %d %p)\n", lpUnkCaller, debugstr_a(szURL), szFileName,
+    TRACE("(%p %s %p %ld %ld %p)\n", lpUnkCaller, debugstr_a(szURL), szFileName,
             dwBufLength, dwReserved, pBSC);
 
     if(szURL) {
         len = MultiByteToWideChar(CP_ACP, 0, szURL, -1, NULL, 0);
-        url = heap_alloc(len*sizeof(WCHAR));
+        url = malloc(len * sizeof(WCHAR));
         MultiByteToWideChar(CP_ACP, 0, szURL, -1, url, len);
     }
 
     if(szFileName)
-        file_name = heap_alloc(dwBufLength*sizeof(WCHAR));
+        file_name = malloc(dwBufLength * sizeof(WCHAR));
 
     hres = URLDownloadToCacheFileW(lpUnkCaller, url, file_name, dwBufLength*sizeof(WCHAR),
             dwReserved, pBSC);
@@ -856,8 +856,8 @@ HRESULT WINAPI URLDownloadToCacheFileA(LPUNKNOWN lpUnkCaller, LPCSTR szURL, LPST
     if(SUCCEEDED(hres) && file_name)
         WideCharToMultiByte(CP_ACP, 0, file_name, -1, szFileName, dwBufLength, NULL, NULL);
 
-    heap_free(url);
-    heap_free(file_name);
+    free(url);
+    free(file_name);
 
     return hres;
 }
@@ -875,7 +875,7 @@ HRESULT WINAPI URLDownloadToCacheFileW(LPUNKNOWN lpUnkCaller, LPCWSTR szURL, LPW
 
     static WCHAR header[] = L"HTTP/1.0 200 OK\\r\\n\\r\\n";
 
-    TRACE("(%p, %s, %p, %d, %d, %p)\n", lpUnkCaller, debugstr_w(szURL),
+    TRACE("(%p, %s, %p, %ld, %ld, %p)\n", lpUnkCaller, debugstr_w(szURL),
           szFileName, dwBufLength, dwReserved, pBSC);
 
     if (!szURL || !szFileName)
@@ -935,7 +935,7 @@ HRESULT WINAPI HlinkSimpleNavigateToString( LPCWSTR szTarget,
     LPCWSTR szLocation, LPCWSTR szTargetFrameName, IUnknown *pUnk,
     IBindCtx *pbc, IBindStatusCallback *pbsc, DWORD grfHLNF, DWORD dwReserved)
 {
-    FIXME("%s %s %s %p %p %p %u %u partial stub\n", debugstr_w( szTarget ), debugstr_w( szLocation ),
+    FIXME("%s %s %s %p %p %p %lu %lu partial stub\n", debugstr_w( szTarget ), debugstr_w( szLocation ),
           debugstr_w( szTargetFrameName ), pUnk, pbc, pbsc, grfHLNF, dwReserved);
 
     /* undocumented: 0 means HLNF_OPENINNEWWINDOW*/

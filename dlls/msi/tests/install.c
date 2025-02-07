@@ -29,28 +29,12 @@
 #include <msi.h>
 #include <fci.h>
 #include <objidl.h>
-#include <srrestoreptapi.h>
 #include <shlobj.h>
 #include <winsvc.h>
 #include <shellapi.h>
 
 #include "wine/test.h"
 #include "utils.h"
-
-static UINT (WINAPI *pMsiQueryComponentStateA)
-    (LPCSTR, LPCSTR, MSIINSTALLCONTEXT, LPCSTR, INSTALLSTATE*);
-static UINT (WINAPI *pMsiSourceListEnumSourcesA)
-    (LPCSTR, LPCSTR, MSIINSTALLCONTEXT, DWORD, DWORD, LPSTR, LPDWORD);
-static INSTALLSTATE (WINAPI *pMsiGetComponentPathExA)
-    (LPCSTR, LPCSTR, LPCSTR, MSIINSTALLCONTEXT, LPSTR, LPDWORD);
-
-static LONG (WINAPI *pRegDeleteKeyExA)(HKEY, LPCSTR, REGSAM, DWORD);
-static BOOL (WINAPI *pIsWow64Process)(HANDLE, PBOOL);
-static BOOL (WINAPI *pWow64DisableWow64FsRedirection)(void **);
-static BOOL (WINAPI *pWow64RevertWow64FsRedirection)(void *);
-
-static BOOL (WINAPI *pSRRemoveRestorePoint)(DWORD);
-static BOOL (WINAPI *pSRSetRestorePointA)(RESTOREPOINTINFOA*, STATEMGRSTATUS*);
 
 static BOOL is_wow64;
 static const BOOL is_64bit = sizeof(void *) > sizeof(int);
@@ -2224,67 +2208,17 @@ static int CDECL fci_delete(char *pszFile, int *err, void *pv)
     return 0;
 }
 
-static void init_functionpointers(void)
+BOOL is_process_elevated(void)
 {
-    HMODULE hmsi = GetModuleHandleA("msi.dll");
-    HMODULE hadvapi32 = GetModuleHandleA("advapi32.dll");
-    HMODULE hkernel32 = GetModuleHandleA("kernel32.dll");
-    HMODULE hsrclient = LoadLibraryA("srclient.dll");
-
-#define GET_PROC(mod, func) \
-    p ## func = (void*)GetProcAddress(mod, #func); \
-    if(!p ## func) \
-      trace("GetProcAddress(%s) failed\n", #func);
-
-    GET_PROC(hmsi, MsiQueryComponentStateA);
-    GET_PROC(hmsi, MsiSourceListEnumSourcesA);
-    GET_PROC(hmsi, MsiGetComponentPathExA);
-
-    GET_PROC(hadvapi32, RegDeleteKeyExA)
-    GET_PROC(hkernel32, IsWow64Process)
-    GET_PROC(hkernel32, Wow64DisableWow64FsRedirection);
-    GET_PROC(hkernel32, Wow64RevertWow64FsRedirection);
-
-    GET_PROC(hsrclient, SRRemoveRestorePoint);
-    GET_PROC(hsrclient, SRSetRestorePointA);
-
-#undef GET_PROC
-}
-
-BOOL is_process_limited(void)
-{
-    SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
-    PSID Group = NULL;
-    BOOL IsInGroup;
     HANDLE token;
+    TOKEN_ELEVATION_TYPE type = TokenElevationTypeDefault;
+    DWORD size;
+    BOOL ret;
 
-    if (!AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID,
-                                  DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &Group) ||
-        !CheckTokenMembership(NULL, Group, &IsInGroup))
-    {
-        trace("Could not check if the current user is an administrator\n");
-        FreeSid(Group);
-        return FALSE;
-    }
-    FreeSid(Group);
-
-    if (!IsInGroup)
-    {
-        /* Only administrators have enough privileges for these tests */
-        return TRUE;
-    }
-
-    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
-    {
-        BOOL ret;
-        TOKEN_ELEVATION_TYPE type = TokenElevationTypeDefault;
-        DWORD size;
-
-        ret = GetTokenInformation(token, TokenElevationType, &type, sizeof(type), &size);
-        CloseHandle(token);
-        return (ret && type == TokenElevationTypeLimited);
-    }
-    return FALSE;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return FALSE;
+    ret = GetTokenInformation(token, TokenElevationType, &type, sizeof(type), &size);
+    CloseHandle(token);
+    return (ret && type == TokenElevationTypeFull);
 }
 
 static BOOL check_record(MSIHANDLE rec, UINT field, LPCSTR val)
@@ -2640,7 +2574,7 @@ static char *load_resource(const char *name)
     GetTempFileNameA(".", name, 0, path);
 
     file = CreateFileA(path, GENERIC_READ|GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, 0);
-    ok(file != INVALID_HANDLE_VALUE, "file creation failed, at %s, error %d\n", path, GetLastError());
+    ok(file != INVALID_HANDLE_VALUE, "file creation failed, at %s, error %lu\n", path, GetLastError());
 
     res = FindResourceA(NULL, name, "TESTDLL");
     ok( res != 0, "couldn't find resource\n" );
@@ -2734,34 +2668,6 @@ void create_database_wordcount(const CHAR *name, const msi_table *tables, int nu
     free( nameW );
 }
 
-static BOOL notify_system_change(DWORD event_type, STATEMGRSTATUS *status)
-{
-    RESTOREPOINTINFOA spec;
-
-    spec.dwEventType = event_type;
-    spec.dwRestorePtType = APPLICATION_INSTALL;
-    spec.llSequenceNumber = status->llSequenceNumber;
-    lstrcpyA(spec.szDescription, "msitest restore point");
-
-    return pSRSetRestorePointA(&spec, status);
-}
-
-static void remove_restore_point(DWORD seq_number)
-{
-    DWORD res;
-
-    res = pSRRemoveRestorePoint(seq_number);
-    if (res != ERROR_SUCCESS)
-        trace("Failed to remove the restore point : %08x\n", res);
-}
-
-static LONG delete_key( HKEY key, LPCSTR subkey, REGSAM access )
-{
-    if (pRegDeleteKeyExA)
-        return pRegDeleteKeyExA( key, subkey, access, 0 );
-    return RegDeleteKeyA( key, subkey );
-}
-
 static void test_MsiInstallProduct(void)
 {
     UINT r;
@@ -2771,7 +2677,7 @@ static void test_MsiInstallProduct(void)
     DWORD num, size, type;
     REGSAM access = KEY_ALL_ACCESS;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -2811,32 +2717,32 @@ static void test_MsiInstallProduct(void)
     delete_pf_files();
 
     res = RegOpenKeyExA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", 0, access, &hkey);
-    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %d\n", res);
+    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %ld\n", res);
 
     size = MAX_PATH;
     type = REG_SZ;
     res = RegQueryValueExA(hkey, "Name", NULL, &type, (LPBYTE)path, &size);
-    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %d\n", res);
+    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %ld\n", res);
     ok(!lstrcmpA(path, "imaname"), "Expected imaname, got %s\n", path);
 
     size = MAX_PATH;
     type = REG_SZ;
     res = RegQueryValueExA(hkey, "blah", NULL, &type, (LPBYTE)path, &size);
-    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %d\n", res);
+    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %ld\n", res);
 
     size = sizeof(num);
     type = REG_DWORD;
     res = RegQueryValueExA(hkey, "number", NULL, &type, (LPBYTE)&num, &size);
-    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %d\n", res);
-    ok(num == 314, "Expected 314, got %d\n", num);
+    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %ld\n", res);
+    ok(num == 314, "Expected 314, got %lu\n", num);
 
     size = MAX_PATH;
     type = REG_SZ;
     res = RegQueryValueExA(hkey, "OrderTestName", NULL, &type, (LPBYTE)path, &size);
-    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %d\n", res);
+    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %ld\n", res);
     ok(!lstrcmpA(path, "OrderTestValue"), "Expected OrderTestValue, got %s\n", path);
 
-    delete_key(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", access);
+    RegDeleteKeyExA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", access, 0);
 
     /* not published, reinstall */
     r = MsiInstallProductA(msifile, NULL);
@@ -2845,7 +2751,7 @@ static void test_MsiInstallProduct(void)
     delete_pf_files();
 
     res = RegOpenKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", &hkey);
-    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %d\n", res);
+    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %ld\n", res);
     RegDeleteKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest");
 
     create_database(msifile, up_tables, ARRAY_SIZE(up_tables));
@@ -2857,7 +2763,7 @@ static void test_MsiInstallProduct(void)
     delete_pf_files();
 
     res = RegOpenKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", &hkey);
-    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %d\n", res);
+    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %ld\n", res);
     RegDeleteKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest");
 
     create_database(msifile, up2_tables, ARRAY_SIZE(up2_tables));
@@ -2869,7 +2775,7 @@ static void test_MsiInstallProduct(void)
     delete_pf_files();
 
     res = RegOpenKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", &hkey);
-    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %d\n", res);
+    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %ld\n", res);
     RegDeleteKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest");
 
     create_database(msifile, up3_tables, ARRAY_SIZE(up3_tables));
@@ -2881,7 +2787,7 @@ static void test_MsiInstallProduct(void)
     delete_pf_files();
 
     res = RegOpenKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", &hkey);
-    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %d\n", res);
+    ok(res == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %ld\n", res);
     RegDeleteKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest");
 
     create_database(msifile, up4_tables, ARRAY_SIZE(up4_tables));
@@ -2893,7 +2799,7 @@ static void test_MsiInstallProduct(void)
     delete_pf_files();
 
     res = RegOpenKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", &hkey);
-    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %d\n", res);
+    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %ld\n", res);
 
     create_database(msifile, up4_tables, ARRAY_SIZE(up4_tables));
 
@@ -2904,7 +2810,7 @@ static void test_MsiInstallProduct(void)
     delete_pf_files();
 
     res = RegOpenKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", &hkey);
-    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %d\n", res);
+    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %ld\n", res);
 
     create_database(msifile, up5_tables, ARRAY_SIZE(up5_tables));
 
@@ -2915,7 +2821,7 @@ static void test_MsiInstallProduct(void)
     delete_pf_files();
 
     res = RegOpenKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", &hkey);
-    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %d\n", res);
+    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %ld\n", res);
 
     create_database(msifile, up6_tables, ARRAY_SIZE(up6_tables));
 
@@ -2926,7 +2832,7 @@ static void test_MsiInstallProduct(void)
     delete_pf_files();
 
     res = RegOpenKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", &hkey);
-    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %d\n", res);
+    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %ld\n", res);
 
     create_database(msifile, up7_tables, ARRAY_SIZE(up7_tables));
 
@@ -2937,7 +2843,7 @@ static void test_MsiInstallProduct(void)
     delete_pf_files();
 
     res = RegOpenKeyA(HKEY_CURRENT_USER, "SOFTWARE\\Wine\\msitest", &hkey);
-    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %d\n", res);
+    ok(res == ERROR_FILE_NOT_FOUND, "Expected ERROR_FILE_NOT_FOUND, got %ld\n", res);
 
     r = MsiInstallProductA(msifile, "REMOVE=ALL FULL=1");
     ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
@@ -3116,7 +3022,7 @@ static void test_continuouscabs(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -3309,7 +3215,7 @@ static void test_mixedmedia(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -3429,7 +3335,7 @@ static void test_readonlyfile(void)
     HANDLE file;
     CHAR path[MAX_PATH];
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -3478,7 +3384,7 @@ static void test_readonlyfile_cab(void)
     CHAR path[MAX_PATH];
     CHAR buf[16];
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -3535,7 +3441,7 @@ static void test_setdirproperty(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -3568,7 +3474,7 @@ static void test_cabisextracted(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -3789,7 +3695,7 @@ static void generate_transform_manual(void)
                             STGM_WRITE | STGM_SHARE_EXCLUSIVE, 0, 0, &stm);
         if (FAILED(r))
         {
-            ok(0, "failed to create stream %08x\n", r);
+            ok(0, "failed to create stream %#lx\n", r);
             continue;
         }
 
@@ -3809,7 +3715,7 @@ static void test_transformprop(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -3857,7 +3763,7 @@ static void test_currentworkingdir(void)
     CHAR drive[MAX_PATH], path[MAX_PATH + 12];
     LPSTR ptr;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -3968,15 +3874,11 @@ static void test_admin(void)
     ok(!RemoveDirectoryA("c:\\msitest"), "File installed\n");
 
     r = MsiInstallProductA(msifile, "ACTION=ADMIN");
-    todo_wine
     ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
     ok(!delete_pf("msitest\\augustus", TRUE), "File installed\n");
     ok(!delete_pf("msitest", FALSE), "Directory created\n");
-    todo_wine
-    {
-        ok(DeleteFileA("c:\\msitest\\augustus"), "File not installed\n");
-        ok(RemoveDirectoryA("c:\\msitest"), "File not installed\n");
-    }
+    ok(DeleteFileA("c:\\msitest\\augustus"), "File not installed\n");
+    ok(RemoveDirectoryA("c:\\msitest"), "File not installed\n");
 
 error:
     DeleteFileA(msifile);
@@ -3996,16 +3898,16 @@ static void set_admin_property_stream(LPCSTR file)
     MultiByteToWideChar(CP_ACP, 0, file, -1, fileW, MAX_PATH);
 
     hr = StgOpenStorage(fileW, NULL, mode, NULL, 0, &stg);
-    ok(hr == S_OK, "Expected S_OK, got %d\n", hr);
+    ok(hr == S_OK, "Expected S_OK, got %#lx\n", hr);
     if (!stg)
         return;
 
     hr = IStorage_CreateStream(stg, L"\x41ca\x4330\x3e71\x44b5\x4233\x45f5\x422c\x4836",
                                STGM_WRITE | STGM_SHARE_EXCLUSIVE, 0, 0, &stm);
-    ok(hr == S_OK, "Expected S_OK, got %d\n", hr);
+    ok(hr == S_OK, "Expected S_OK, got %#lx\n", hr);
 
     hr = IStream_Write(stm, L"MYPROP=2718 MyProp=42", sizeof(L"MYPROP=2718 MyProp=42"), &count);
-    ok(hr == S_OK, "Expected S_OK, got %d\n", hr);
+    ok(hr == S_OK, "Expected S_OK, got %#lx\n", hr);
 
     IStream_Release(stm);
     IStorage_Release(stg);
@@ -4015,7 +3917,7 @@ static void test_adminprops(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -4066,7 +3968,7 @@ static void test_missingcab(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -4136,7 +4038,7 @@ static void test_sourcefolder(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -4239,7 +4141,7 @@ static void test_customaction51(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -4272,7 +4174,7 @@ static void test_installstate(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -4725,7 +4627,7 @@ static void test_sourcepath(void)
         r = MsiInstallProductA(msifile, NULL);
         ok(r == spmap[i].err, "%d: Expected %d, got %d\n", i, spmap[i].err, r);
         ok(get_pf_file_size("msitest\\augustus") == spmap[i].size,
-           "%d: Expected %d, got %d\n", i, spmap[i].size,
+           "%u: Expected %lu, got %lu\n", i, spmap[i].size,
            get_pf_file_size("msitest\\augustus"));
 
         if (r == ERROR_SUCCESS)
@@ -4758,7 +4660,7 @@ static void test_missingcomponent(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -4814,7 +4716,7 @@ static void test_sourcedirprop(void)
     UINT r;
     CHAR props[MAX_PATH + 18];
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -4865,7 +4767,7 @@ static void test_adminimage(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -4936,7 +4838,7 @@ static void test_propcase(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5042,7 +4944,7 @@ static void test_shortcut(void)
     UINT r;
     HRESULT hr;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5062,7 +4964,7 @@ static void test_shortcut(void)
     ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
 
     hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
-    ok(SUCCEEDED(hr), "CoInitialize failed 0x%08x\n", hr);
+    ok(SUCCEEDED(hr), "CoInitialize failed %#lx\n", hr);
 
     r = MsiInstallProductA(msifile, NULL);
     ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
@@ -5070,7 +4972,7 @@ static void test_shortcut(void)
     CoUninitialize();
 
     hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-    ok(SUCCEEDED(hr), "CoInitialize failed 0x%08x\n", hr);
+    ok(SUCCEEDED(hr), "CoInitialize failed %#lx\n", hr);
 
     r = MsiInstallProductA(msifile, NULL);
     ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
@@ -5089,7 +4991,7 @@ static void test_preselected(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5145,7 +5047,7 @@ static void test_installed_prop(void)
     static const char prodcode[] = "{7df88a48-996f-4ec8-a022-bf956f9b2cbb}";
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5184,7 +5086,7 @@ static void test_allusers_prop(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5262,14 +5164,14 @@ static void process_pending_renames(HKEY hkey)
     BOOL found = FALSE;
 
     ret = RegQueryValueExA(hkey, rename_ops, NULL, NULL, NULL, &size);
-    ok(!ret, "RegQueryValueExA failed %d\n", ret);
+    ok(!ret, "RegQueryValueExA failed %ld\n", ret);
 
     buf = malloc(size + 1);
     buf2ptr = buf2 = calloc(1, size + 1);
 
     ret = RegQueryValueExA(hkey, rename_ops, NULL, NULL, (LPBYTE)buf, &size);
     buf[size] = 0;
-    ok(!ret, "RegQueryValueExA failed %d\n", ret);
+    ok(!ret, "RegQueryValueExA failed %ld\n", ret);
     if (ret) return;
 
     for (src = buf; *src; src = dst + strlen(dst) + 1)
@@ -5300,12 +5202,12 @@ static void process_pending_renames(HKEY hkey)
         {
             if (dst[0] == '\\' && dst[1] == '?' && dst[2] == '?' && dst[3] == '\\') dst += 4;
             fileret = MoveFileExA(src, dst, flags);
-            ok(fileret, "Failed to move file %s -> %s (%u)\n", src, dst, GetLastError());
+            ok(fileret, "Failed to move file %s -> %s (%lu)\n", src, dst, GetLastError());
         }
         else
         {
             fileret = DeleteFileA(src);
-            ok(fileret || broken(!fileret) /* win2k3 */, "Failed to delete file %s (%u)\n", src, GetLastError());
+            ok(fileret, "Failed to delete file %s (%lu)\n", src, GetLastError());
         }
     }
 
@@ -5327,7 +5229,7 @@ static BOOL file_matches_data(LPCSTR file, LPCSTR data)
     char buf[128];
 
     handle = CreateFileA(file, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    ok(handle != INVALID_HANDLE_VALUE, "failed to open %s (%u)\n", file, GetLastError());
+    ok(handle != INVALID_HANDLE_VALUE, "failed to open %s (%lu)\n", file, GetLastError());
 
     if (ReadFile(handle, buf, sizeof(buf), &len, NULL) && len >= data_len)
     {
@@ -5345,7 +5247,7 @@ static void test_file_in_use(void)
     HKEY hkey;
     char path[MAX_PATH];
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5404,7 +5306,7 @@ static void test_file_in_use_cab(void)
     HKEY hkey;
     char path[MAX_PATH];
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5465,7 +5367,7 @@ static void test_feature_override(void)
     UINT r;
     REGSAM access = KEY_ALL_ACCESS;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5527,7 +5429,7 @@ static void test_feature_override(void)
     ok(!delete_pf("msitest\\preselected.txt", TRUE), "file not removed\n");
     ok(!delete_pf("msitest", FALSE), "directory not removed\n");
 
-    delete_key(HKEY_LOCAL_MACHINE, "Software\\Wine\\msitest", access);
+    RegDeleteKeyExA(HKEY_LOCAL_MACHINE, "Software\\Wine\\msitest", access, 0);
 
 error:
     DeleteFileA("msitest\\override.txt");
@@ -5545,7 +5447,7 @@ static void test_icon_table(void)
     CHAR path[MAX_PATH];
     static const char prodcode[] = "{7DF88A49-996F-4EC8-A022-BF956F9B2CBB}";
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5623,7 +5525,7 @@ static void test_package_validation(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5644,6 +5546,66 @@ static void test_package_validation(void)
     ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
     ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
     ok(delete_pf("msitest", FALSE), "directory does not exist\n");
+
+    DeleteFileA(msifile);
+    create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 100, "");
+
+    r = MsiInstallProductA(msifile, NULL);
+    ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
+    ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
+    ok(delete_pf("msitest", FALSE), "directory does not exist\n");
+
+    DeleteFileA(msifile);
+    create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 100, ";");
+
+    r = MsiInstallProductA(msifile, NULL);
+    ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
+    ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
+    ok(delete_pf("msitest", FALSE), "directory does not exist\n");
+
+    DeleteFileA(msifile);
+    create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 100, "Intel");
+
+    r = MsiInstallProductA(msifile, NULL);
+    ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
+    ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
+    ok(delete_pf("msitest", FALSE), "directory does not exist\n");
+
+    DeleteFileA(msifile);
+    create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 100, "Intel;");
+
+    r = MsiInstallProductA(msifile, NULL);
+    ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
+    ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
+    ok(delete_pf("msitest", FALSE), "directory does not exist\n");
+
+    DeleteFileA(msifile);
+    create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 100, "Alpha,,Intel;");
+
+    r = MsiInstallProductA(msifile, NULL);
+    ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
+    ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
+    ok(delete_pf("msitest", FALSE), "directory does not exist\n");
+
+    DeleteFileA(msifile);
+    create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 200, ",;");
+
+    r = MsiInstallProductA(msifile, NULL);
+    todo_wine
+    ok(r == ERROR_INSTALL_PLATFORM_UNSUPPORTED, "Expected ERROR_INSTALL_PLATFORM_UNSUPPORTED, got %u\n", r);
+
+    DeleteFileA(msifile);
+    create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 200, "Alpha,,Beta;");
+
+    r = MsiInstallProductA(msifile, NULL);
+    todo_wine
+    ok(r == ERROR_INSTALL_PLATFORM_UNSUPPORTED, "Expected ERROR_INSTALL_PLATFORM_UNSUPPORTED, got %u\n", r);
+
+    DeleteFileA(msifile);
+    create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 200, "0");
+
+    r = MsiInstallProductA(msifile, NULL);
+    ok(r == ERROR_INSTALL_PLATFORM_UNSUPPORTED, "Expected ERROR_INSTALL_PLATFORM_UNSUPPORTED, got %u\n", r);
 
     DeleteFileA(msifile);
     create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 200, "Intel,9999;9999");
@@ -5741,6 +5703,22 @@ static void test_package_validation(void)
         ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
         ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
         ok(delete_pf("msitest", FALSE), "directory does not exist\n");
+
+        DeleteFileA(msifile);
+        create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 200, "x64;");
+
+        r = MsiInstallProductA(msifile, NULL);
+        ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
+        ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
+        ok(delete_pf("msitest", FALSE), "directory does not exist\n");
+
+        DeleteFileA(msifile);
+        create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 200, "x64");
+
+        r = MsiInstallProductA(msifile, NULL);
+        ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
+        ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
+        ok(delete_pf("msitest", FALSE), "directory does not exist\n");
     }
     else if (is_wow64)
     {
@@ -5767,6 +5745,22 @@ static void test_package_validation(void)
         ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
         ok(delete_pf("msitest\\maximus", TRUE), "file exists\n");
         ok(delete_pf("msitest", FALSE), "directory exists\n");
+
+        DeleteFileA(msifile);
+        create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 200, "x64;");
+
+        r = MsiInstallProductA(msifile, NULL);
+        ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
+        ok(delete_pf("msitest\\maximus", TRUE), "file exists\n");
+        ok(delete_pf("msitest", FALSE), "directory exists\n");
+
+        DeleteFileA(msifile);
+        create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 200, "x64");
+
+        r = MsiInstallProductA(msifile, NULL);
+        ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
+        ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
+        ok(delete_pf("msitest", FALSE), "directory does not exist\n");
     }
     else
     {
@@ -5778,8 +5772,25 @@ static void test_package_validation(void)
         ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
         ok(delete_pf("msitest", FALSE), "directory does not exist\n");
 
+
         DeleteFileA(msifile);
         create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 100, "Alpha,Beta,Intel;0");
+
+        r = MsiInstallProductA(msifile, NULL);
+        ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
+        ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
+        ok(delete_pf("msitest", FALSE), "directory does not exist\n");
+
+        DeleteFileA(msifile);
+        create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 100, "Alpha,Beta,Intel;");
+
+        r = MsiInstallProductA(msifile, NULL);
+        ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
+        ok(delete_pf("msitest\\maximus", TRUE), "file does not exist\n");
+        ok(delete_pf("msitest", FALSE), "directory does not exist\n");
+
+        DeleteFileA(msifile);
+        create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 100, "Alpha,Beta,Intel");
 
         r = MsiInstallProductA(msifile, NULL);
         ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
@@ -5801,6 +5812,22 @@ static void test_package_validation(void)
         ok(r == ERROR_INSTALL_PLATFORM_UNSUPPORTED, "Expected ERROR_INSTALL_PLATFORM_UNSUPPORTED, got %u\n", r);
         ok(!delete_pf("msitest\\maximus", TRUE), "file exists\n");
         ok(!delete_pf("msitest", FALSE), "directory exists\n");
+
+        DeleteFileA(msifile);
+        create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 200, "x64;");
+
+        r = MsiInstallProductA(msifile, NULL);
+        ok(r == ERROR_INSTALL_PLATFORM_UNSUPPORTED, "Expected ERROR_INSTALL_PLATFORM_UNSUPPORTED, got %u\n", r);
+        ok(!delete_pf("msitest\\maximus", TRUE), "file exists\n");
+        ok(!delete_pf("msitest", FALSE), "directory exists\n");
+
+        DeleteFileA(msifile);
+        create_database_template(msifile, pv_tables, ARRAY_SIZE(pv_tables), 200, "x64");
+
+        r = MsiInstallProductA(msifile, NULL);
+        ok(r == ERROR_INSTALL_PLATFORM_UNSUPPORTED, "Expected ERROR_INSTALL_PLATFORM_UNSUPPORTED, got %u\n", r);
+        ok(!delete_pf("msitest\\maximus", TRUE), "file exists\n");
+        ok(!delete_pf("msitest", FALSE), "directory exists\n");
     }
 
 error:
@@ -5814,7 +5841,7 @@ static void test_upgrade_code(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5850,7 +5877,7 @@ static void test_mixed_package(void)
     char value[MAX_PATH];
     DWORD size;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -5872,25 +5899,25 @@ static void test_mixed_package(void)
     ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
 
     res = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Software\\Wine\\msitest", 0, KEY_ALL_ACCESS|KEY_WOW64_32KEY, &hkey);
-    ok(!res, "can't open 32-bit component key, got %d\n", res);
+    ok(!res, "can't open 32-bit component key, got %ld\n", res);
     res = RegQueryValueExA(hkey, "test1", NULL, NULL, NULL, NULL);
-    ok(!res, "expected RegQueryValueEx to succeed, got %d\n", res);
+    ok(!res, "expected RegQueryValueEx to succeed, got %ld\n", res);
     res = RegQueryValueExA(hkey, "test2", NULL, NULL, NULL, NULL);
-    ok(res, "expected RegQueryValueEx to fail, got %d\n", res);
+    ok(res, "expected RegQueryValueEx to fail, got %ld\n", res);
     RegCloseKey(hkey);
 
     res = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Software\\Wine\\msitest", 0, KEY_ALL_ACCESS|KEY_WOW64_64KEY, &hkey);
-    ok(!res, "can't open 64-bit component key, got %d\n", res);
+    ok(!res, "can't open 64-bit component key, got %ld\n", res);
     res = RegQueryValueExA(hkey, "test1", NULL, NULL, NULL, NULL);
-    ok(res, "expected RegQueryValueEx to fail, got %d\n", res);
+    ok(res, "expected RegQueryValueEx to fail, got %ld\n", res);
     res = RegQueryValueExA(hkey, "test2", NULL, NULL, NULL, NULL);
-    ok(!res, "expected RegQueryValueEx to succeed, got %d\n", res);
+    ok(!res, "expected RegQueryValueEx to succeed, got %ld\n", res);
     RegCloseKey(hkey);
 
     res = RegOpenKeyExA(HKEY_CLASSES_ROOT,
                         "CLSID\\{8dfef911-6885-41eb-b280-8f0304728e8b}\\InProcServer32",
                         0, KEY_ALL_ACCESS|KEY_WOW64_32KEY, &hkey);
-    ok(res == ERROR_SUCCESS, "can't open 32-bit CLSID key, got %d\n", res);
+    ok(res == ERROR_SUCCESS, "can't open 32-bit CLSID key, got %ld\n", res);
     if (res == ERROR_SUCCESS) {
         size = sizeof(value);
         res = RegQueryValueExA(hkey, "", NULL, NULL, (LPBYTE)value, &size);
@@ -5901,7 +5928,7 @@ static void test_mixed_package(void)
     res = RegOpenKeyExA(HKEY_CLASSES_ROOT,
                         "CLSID\\{8dfef911-6885-41eb-b280-8f0304728e8b}\\InProcServer32",
                         0, KEY_ALL_ACCESS|KEY_WOW64_64KEY, &hkey);
-    ok(res == ERROR_SUCCESS, "can't open 64-bit CLSID key, got %d\n", res);
+    ok(res == ERROR_SUCCESS, "can't open 64-bit CLSID key, got %ld\n", res);
     if (res == ERROR_SUCCESS) {
         size = sizeof(value);
         res = RegQueryValueExA(hkey, "", NULL, NULL, (LPBYTE)value, &size);
@@ -5913,7 +5940,7 @@ static void test_mixed_package(void)
     ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
 
     res = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Software\\Wine\\msitest", 0, KEY_ALL_ACCESS|KEY_WOW64_32KEY, &hkey);
-    ok(res == ERROR_FILE_NOT_FOUND || broken(!res), "32-bit component key not removed\n");
+    ok(res == ERROR_FILE_NOT_FOUND, "32-bit component key not removed\n");
 
     res = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Software\\Wine\\msitest", 0, KEY_ALL_ACCESS|KEY_WOW64_64KEY, &hkey);
     ok(res == ERROR_FILE_NOT_FOUND, "64-bit component key not removed\n");
@@ -5935,25 +5962,25 @@ static void test_mixed_package(void)
     ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
 
     res = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Software\\Wine\\msitest", 0, KEY_ALL_ACCESS|KEY_WOW64_32KEY, &hkey);
-    ok(!res, "can't open 32-bit component key, got %d\n", res);
+    ok(!res, "can't open 32-bit component key, got %ld\n", res);
     res = RegQueryValueExA(hkey, "test1", NULL, NULL, NULL, NULL);
-    ok(!res, "expected RegQueryValueEx to succeed, got %d\n", res);
+    ok(!res, "expected RegQueryValueEx to succeed, got %ld\n", res);
     res = RegQueryValueExA(hkey, "test2", NULL, NULL, NULL, NULL);
-    ok(res, "expected RegQueryValueEx to fail, got %d\n", res);
+    ok(res, "expected RegQueryValueEx to fail, got %ld\n", res);
     RegCloseKey(hkey);
 
     res = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Software\\Wine\\msitest", 0, KEY_ALL_ACCESS|KEY_WOW64_64KEY, &hkey);
-    ok(!res, "can't open 64-bit component key, got %d\n", res);
+    ok(!res, "can't open 64-bit component key, got %ld\n", res);
     res = RegQueryValueExA(hkey, "test1", NULL, NULL, NULL, NULL);
-    ok(res, "expected RegQueryValueEx to fail, got %d\n", res);
+    ok(res, "expected RegQueryValueEx to fail, got %ld\n", res);
     res = RegQueryValueExA(hkey, "test2", NULL, NULL, NULL, NULL);
-    ok(!res, "expected RegQueryValueEx to succeed, got %d\n", res);
+    ok(!res, "expected RegQueryValueEx to succeed, got %ld\n", res);
     RegCloseKey(hkey);
 
     res = RegOpenKeyExA(HKEY_CLASSES_ROOT,
                         "CLSID\\{8dfef911-6885-41eb-b280-8f0304728e8b}\\InProcServer32",
                         0, KEY_ALL_ACCESS|KEY_WOW64_32KEY, &hkey);
-    ok(res == ERROR_SUCCESS, "can't open 32-bit CLSID key, got %d\n", res);
+    ok(res == ERROR_SUCCESS, "can't open 32-bit CLSID key, got %ld\n", res);
     if (res == ERROR_SUCCESS) {
         size = sizeof(value);
         res = RegQueryValueExA(hkey, "", NULL, NULL, (LPBYTE)value, &size);
@@ -5964,7 +5991,7 @@ static void test_mixed_package(void)
     res = RegOpenKeyExA(HKEY_CLASSES_ROOT,
                         "CLSID\\{8dfef911-6885-41eb-b280-8f0304728e8b}\\InProcServer32",
                         0, KEY_ALL_ACCESS|KEY_WOW64_64KEY, &hkey);
-    ok(res == ERROR_SUCCESS, "can't open 64-bit CLSID key, got %d\n", res);
+    ok(res == ERROR_SUCCESS, "can't open 64-bit CLSID key, got %ld\n", res);
     if (res == ERROR_SUCCESS) {
         size = sizeof(value);
         res = RegQueryValueExA(hkey, "", NULL, NULL, (LPBYTE)value, &size);
@@ -5976,7 +6003,7 @@ static void test_mixed_package(void)
     ok(r == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %u\n", r);
 
     res = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Software\\Wine\\msitest", 0, KEY_ALL_ACCESS|KEY_WOW64_32KEY, &hkey);
-    ok(res == ERROR_FILE_NOT_FOUND || broken(!res), "32-bit component key not removed\n");
+    ok(res == ERROR_FILE_NOT_FOUND, "32-bit component key not removed\n");
 
     res = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Software\\Wine\\msitest", 0, KEY_ALL_ACCESS|KEY_WOW64_64KEY, &hkey);
     ok(res == ERROR_FILE_NOT_FOUND, "64-bit component key not removed\n");
@@ -5999,7 +6026,7 @@ static void test_volume_props(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -6025,7 +6052,7 @@ static void test_shared_component(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -6074,7 +6101,7 @@ static void test_remove_upgrade_code(void)
     DWORD type, size;
     char buf[1];
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip( "process is limited\n" );
         return;
@@ -6092,15 +6119,15 @@ static void test_remove_upgrade_code(void)
     res = RegOpenKeyExA( HKEY_LOCAL_MACHINE,
         "Software\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\51AAE0C44620A5E4788506E91F249BD2",
         0, access, &hkey );
-    ok( res == ERROR_SUCCESS, "got %d\n", res );
+    ok( res == ERROR_SUCCESS, "got %ld\n", res );
 
     type = 0xdeadbeef;
     buf[0] = 0x55;
     size = sizeof(buf);
     res = RegQueryValueExA( hkey, "94A88FD7F6998CE40A22FB59F6B9C2BB", NULL, &type, (BYTE *)buf, &size );
-    ok( res == ERROR_SUCCESS, "got %d\n", res );
-    ok( type == REG_SZ, "got %u\n", type );
-    ok( size == 1, "got %u\n", size );
+    ok( res == ERROR_SUCCESS, "got %ld\n", res );
+    ok( type == REG_SZ, "got %lu\n", type );
+    ok( size == 1, "got %lu\n", size );
     ok( !buf[0], "wrong data\n" );
     RegCloseKey( hkey );
 
@@ -6110,7 +6137,7 @@ static void test_remove_upgrade_code(void)
     res = RegOpenKeyExA( HKEY_LOCAL_MACHINE,
         "Software\\Microsoft\\Windows\\CurrentVersion\\Installer\\UpgradeCodes\\51AAE0C44620A5E4788506E91F249BD2",
         0, access, &hkey );
-    ok( res == ERROR_FILE_NOT_FOUND, "got %d\n", res );
+    ok( res == ERROR_FILE_NOT_FOUND, "got %ld\n", res );
 
     RemoveDirectoryA( "msitest" );
     DeleteFileA( msifile );
@@ -6120,7 +6147,7 @@ static void test_feature_tree(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip( "process is limited\n" );
         return;
@@ -6153,7 +6180,7 @@ static void check_file_matches(const char *filename, const char *text)
 
     file = CreateFileA(filename, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
     ReadFile(file, buffer, sizeof(buffer), &size, NULL);
-    ok(size == strlen(text) && !memcmp(buffer, text, size), "got %.*s\n", size, buffer);
+    ok(size == strlen(text) && !memcmp(buffer, text, size), "got %.*s\n", (int)size, buffer);
     CloseHandle(file);
 }
 
@@ -6197,7 +6224,7 @@ static void test_wow64(void)
         return;
     }
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip("process is limited\n");
         return;
@@ -6212,7 +6239,7 @@ static void test_wow64(void)
         goto error;
     }
 
-    pWow64DisableWow64FsRedirection(&cookie);
+    Wow64DisableWow64FsRedirection(&cookie);
 
     ok(!delete_pf("msitest\\cabout\\new\\five.txt", TRUE), "File installed\n");
     ok(!delete_pf("msitest\\cabout\\new", FALSE), "Directory created\n");
@@ -6238,7 +6265,7 @@ static void test_wow64(void)
     ok(delete_pf_native("msitest\\filename", TRUE), "File not installed\n");
     ok(delete_pf_native("msitest", FALSE), "Directory not created\n");
 
-    pWow64RevertWow64FsRedirection(cookie);
+    Wow64RevertWow64FsRedirection(cookie);
 
 error:
     delete_test_files();
@@ -6250,7 +6277,7 @@ static void test_source_resolution(void)
 {
     UINT r;
 
-    if (is_process_limited())
+    if (!is_process_elevated())
     {
         skip( "process is limited\n" );
         return;
@@ -6279,14 +6306,12 @@ START_TEST(install)
 {
     DWORD len;
     char temp_path[MAX_PATH], prev_path[MAX_PATH], log_file[MAX_PATH];
-    STATEMGRSTATUS status;
-    BOOL ret = FALSE;
 
-    init_functionpointers();
+    if (!is_process_elevated()) restart_as_admin_elevated();
+
     subtest("custom");
 
-    if (pIsWow64Process)
-        pIsWow64Process(GetCurrentProcess(), &is_wow64);
+    IsWow64Process(GetCurrentProcess(), &is_wow64);
 
     GetCurrentDirectoryA(MAX_PATH, prev_path);
     GetTempPathA(MAX_PATH, temp_path);
@@ -6301,18 +6326,6 @@ START_TEST(install)
     ok(get_system_dirs(), "failed to retrieve system dirs\n");
     ok(get_user_dirs(), "failed to retrieve user dirs\n");
 
-    /* Create a restore point ourselves so we circumvent the multitude of restore points
-     * that would have been created by all the installation and removal tests.
-     *
-     * This is not needed on version 5.0 where setting MSIFASTINSTALL prevents the
-     * creation of restore points.
-     */
-    if (pSRSetRestorePointA && !pMsiGetComponentPathExA)
-    {
-        memset(&status, 0, sizeof(status));
-        ret = notify_system_change(BEGIN_NESTED_SYSTEM_CHANGE, &status);
-    }
-
     /* Create only one log file and don't append. We have to pass something
      * for the log mode for this to work. The logfile needs to have an absolute
      * path otherwise we still end up with some extra logfiles as some tests
@@ -6322,8 +6335,7 @@ START_TEST(install)
     lstrcatA(log_file, "\\msitest.log");
     MsiEnableLogA(INSTALLLOGMODE_FATALEXIT, log_file, 0);
 
-    if (pSRSetRestorePointA) /* test has side-effects on win2k3 that cause failures in following tests */
-        test_MsiInstallProduct();
+    test_MsiInstallProduct();
     test_MsiSetComponentState();
     test_packagecoltypes();
     test_continuouscabs();
@@ -6370,15 +6382,6 @@ START_TEST(install)
     test_source_resolution();
 
     DeleteFileA(customdll);
-
     DeleteFileA(log_file);
-
-    if (pSRSetRestorePointA && !pMsiGetComponentPathExA && ret)
-    {
-        ret = notify_system_change(END_NESTED_SYSTEM_CHANGE, &status);
-        if (ret)
-            remove_restore_point(status.llSequenceNumber);
-    }
-
     SetCurrentDirectoryA(prev_path);
 }

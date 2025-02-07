@@ -16,14 +16,21 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef _WINE_WININET_H_
-#define _WINE_WININET_H_
+#ifndef _WININET_
+#define _WININET_
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define INTERNETAPI
+#ifndef INTERNETAPI
+#ifdef _WININET_INTERNAL_
+# define INTERNETAPI
+#else
+# define INTERNETAPI DECLSPEC_IMPORT
+#endif
+#endif
+
 #define BOOLAPI INTERNETAPI BOOL WINAPI
 
 typedef LPVOID HINTERNET;
@@ -1735,8 +1742,8 @@ INTERNETAPI BOOL WINAPI InternetSetDialStateW(LPCWSTR ,DWORD ,DWORD);
 #define InternetSetDialState WINELIB_NAME_AW(InternetSetDialState)
 #define INTERNET_DIALSTATE_DISCONNECTED     1
 
-BOOL WINAPI InternetGetConnectedStateExA(LPDWORD, LPSTR, DWORD, DWORD);
-BOOL WINAPI InternetGetConnectedStateExW(LPDWORD, LPWSTR, DWORD, DWORD);
+INTERNETAPI BOOL WINAPI InternetGetConnectedStateExA(LPDWORD, LPSTR, DWORD, DWORD);
+INTERNETAPI BOOL WINAPI InternetGetConnectedStateExW(LPDWORD, LPWSTR, DWORD, DWORD);
 #define InternetGetConnectedStateEx WINELIB_NAME_AW(InternetGetConnectedStateEx)
 
 typedef struct AutoProxyHelperVtbl
@@ -1769,8 +1776,11 @@ typedef BOOL (CALLBACK *pfnInternetGetProxyInfo)(LPCSTR, DWORD, LPSTR, DWORD, LP
 typedef BOOL (CALLBACK *pfnInternetInitializeAutoProxyDll)(DWORD, LPSTR, LPSTR, AutoProxyHelperFunctions *,
     LPAUTO_PROXY_SCRIPT_BUFFER);
 
-BOOL WINAPI InternetInitializeAutoProxyDll(DWORD);
-BOOL WINAPI DetectAutoProxyUrl(LPSTR, DWORD, DWORD);
+#define PROXY_AUTO_DETECT_TYPE_DHCP  1
+#define PROXY_AUTO_DETECT_TYPE_DNS_A 2
+
+INTERNETAPI BOOL WINAPI InternetInitializeAutoProxyDll(DWORD);
+INTERNETAPI BOOL WINAPI DetectAutoProxyUrl(LPSTR, DWORD, DWORD);
 
 #ifdef __cplusplus
 }

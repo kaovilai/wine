@@ -42,6 +42,7 @@ context_t *Context_CreateDataContext(size_t contextSize, const context_vtbl_t *v
 
     context->vtbl = vtbl;
     context->ref = 1;
+    context->deleted_from_store = FALSE;
     context->linked = NULL;
 
     store->vtbl->addref(store);
@@ -64,6 +65,7 @@ context_t *Context_CreateLinkContext(unsigned int contextSize, context_t *linked
     memcpy(context_ptr(context), context_ptr(linked), contextSize);
     context->vtbl = linked->vtbl;
     context->ref = 1;
+    context->deleted_from_store = FALSE;
     context->linked = linked;
     context->properties = linked->properties;
     Context_AddRef(linked);
@@ -79,7 +81,7 @@ void Context_AddRef(context_t *context)
 {
     LONG ref = InterlockedIncrement(&context->ref);
 
-    TRACE("(%p) ref=%d\n", context, context->ref);
+    TRACE("(%p) ref=%ld\n", context, context->ref);
 
     if(ref == 1) {
         /* This is the first external (non-store) reference. Increase store ref cnt. */
@@ -107,8 +109,13 @@ void Context_Release(context_t *context)
 {
     LONG ref = InterlockedDecrement(&context->ref);
 
-    TRACE("(%p) ref=%d\n", context, ref);
-    assert(ref >= 0);
+    TRACE("(%p) ref=%ld\n", context, ref);
+
+    if (ref < 0)
+    {
+        ERR( "ref %ld.\n", ref );
+        return;
+    }
 
     if (!ref) {
         WINECRYPT_CERTSTORE *store = context->store;

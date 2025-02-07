@@ -54,15 +54,20 @@ HRESULT create_view( enum view_type type, enum wbm_namespace ns, const WCHAR *pa
 
     case VIEW_TYPE_SELECT:
     {
-        struct table *table = grab_table( ns, class );
+        struct table *table = find_table( ns, class );
         HRESULT hr;
 
         if (table && (hr = append_table( view, table )) != S_OK)
         {
+            release_table( table );
             free( view );
             return hr;
         }
-        else if (!table && ns == WBEMPROX_NAMESPACE_LAST) return WBEM_E_INVALID_CLASS;
+        else if (!table && ns == WBEMPROX_NAMESPACE_LAST)
+        {
+            free( view );
+            return WBEM_E_INVALID_CLASS;
+        }
         view->proplist = proplist;
         view->cond     = cond;
         break;
@@ -89,23 +94,30 @@ void destroy_view( struct view *view )
     free( view );
 }
 
-static BOOL eval_like( const WCHAR *lstr, const WCHAR *rstr )
+static BOOL eval_like( const WCHAR *text, const WCHAR *pattern )
 {
-    const WCHAR *p = lstr, *q = rstr;
+    if (wcsstr( pattern, L"[" )) FIXME( "character ranges (i.e. [abc], [^a-z]) are not supported\n" );
 
-    while (*p && *q)
+    while (*text)
     {
-        if (q[0] == '\\' && q[1] == '\\') q++;
-        if (*q == '%')
+        if (pattern[0] == '\\' && pattern[1] == '\\') pattern++;
+
+        if (*pattern == '%')
         {
-            while (*q == '%') q++;
-            if (!*q) return TRUE;
-            while (*p && *q && towupper( *p ) == towupper( *q )) { p++; q++; };
-            if (!*p && !*q) return TRUE;
+            while (*pattern == '%') pattern++;
+            if (!*pattern) return TRUE;
+            while (!eval_like( text, pattern ) && *text) text++;
+
+            return !!*text;
         }
-        if (*q != '%' && towupper( *p++ ) != towupper( *q++ )) return FALSE;
+
+        if (*pattern != '_' && towupper( *text ) != towupper( *pattern )) return FALSE;
+        text++; pattern++;
     }
-    return TRUE;
+
+    while (*pattern == '%') pattern++;
+
+    return *pattern == '\0';
 }
 
 static HRESULT eval_strcmp( UINT op, const WCHAR *lstr, const WCHAR *rstr, LONGLONG *val )
@@ -118,22 +130,22 @@ static HRESULT eval_strcmp( UINT op, const WCHAR *lstr, const WCHAR *rstr, LONGL
     switch (op)
     {
     case OP_EQ:
-        *val = !wcscmp( lstr, rstr );
+        *val = !wcsicmp( lstr, rstr );
         break;
     case OP_GT:
-        *val = wcscmp( lstr, rstr ) > 0;
+        *val = wcsicmp( lstr, rstr ) > 0;
         break;
     case OP_LT:
-        *val = wcscmp( lstr, rstr ) < 0;
+        *val = wcsicmp( lstr, rstr ) < 0;
         break;
     case OP_LE:
-        *val = wcscmp( lstr, rstr ) <= 0;
+        *val = wcsicmp( lstr, rstr ) <= 0;
         break;
     case OP_GE:
-        *val = wcscmp( lstr, rstr ) >= 0;
+        *val = wcsicmp( lstr, rstr ) >= 0;
         break;
     case OP_NE:
-        *val = wcscmp( lstr, rstr );
+        *val = wcsicmp( lstr, rstr );
         break;
     case OP_LIKE:
         *val = eval_like( lstr, rstr );
@@ -300,7 +312,7 @@ static const WCHAR *format_int( WCHAR *buf, UINT len, CIMTYPE type, LONGLONG val
         return buf;
 
     default:
-        ERR( "unhandled type %u\n", type );
+        ERR( "unhandled type %lu\n", type );
         return NULL;
     }
 }
@@ -620,7 +632,7 @@ static HRESULT get_antecedent_table( enum wbm_namespace ns, const WCHAR *assoccl
     }
 
     if ((hr = do_query( ns, str, &query )) != S_OK) goto done;
-    if (query->view->table_count) *table = addref_table( query->view->table[0] );
+    if (query->view->table_count) *table = grab_table( query->view->table[0] );
     else *table = NULL;
 
 done:
@@ -1047,7 +1059,7 @@ VARTYPE to_vartype( CIMTYPE type )
     case CIM_REAL32:    return VT_R4;
 
     default:
-        ERR("unhandled type %u\n", type);
+        ERR( "unhandled type %lu\n", type );
         break;
     }
     return 0;
@@ -1298,7 +1310,7 @@ static struct array *to_array( VARIANT *var, CIMTYPE *type )
                 destroy_array( ret, basetype );
                 return NULL;
             }
-            *(WCHAR **)ptr = heap_strdupW( str );
+            *(WCHAR **)ptr = wcsdup( str );
             SysFreeString( str );
             if (!*(WCHAR **)ptr)
             {
@@ -1336,7 +1348,7 @@ HRESULT to_longlong( VARIANT *var, LONGLONG *val, CIMTYPE *type )
         *type = CIM_BOOLEAN;
         break;
     case VT_BSTR:
-        *val = (INT_PTR)heap_strdupW( V_BSTR( var ) );
+        *val = (INT_PTR)wcsdup( V_BSTR( var ) );
         if (!*val) return E_OUTOFMEMORY;
         *type = CIM_STRING;
         break;

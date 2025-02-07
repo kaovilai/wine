@@ -32,9 +32,10 @@
 #include "taskmgr.h"
 #include "perfdata.h"
 
-#define BRIGHT_GREEN	RGB(0, 255, 0)
-#define DARK_GREEN	RGB(0, 130, 0)
-#define RED		RGB(255, 0, 0)
+#define BRIGHT_GREEN    RGB(0, 255, 0)
+#define DARK_GREEN      RGB(0, 130, 0)
+#define RED             RGB(255, 0, 0)
+#define BLACK           RGB(0, 0, 0)
 
 
 WNDPROC             OldGraphWndProc;
@@ -57,10 +58,6 @@ static void Graph_DrawCpuUsageGraph(HDC hDC, HWND hWnd)
 /* Top bars that are "unused", i.e. are dark green, representing free cpu time */
     int                i;
 
-    static const WCHAR    wszFormatI[] = {'%','d','%','%',0};
-    static const WCHAR    wszFormatII[] = {' ',' ','%','d','%','%',0};
-    static const WCHAR    wszFormatIII[] = {' ','%','d','%','%',0};
-    
     /*
      * Get the client area rectangle
      */
@@ -69,31 +66,15 @@ static void Graph_DrawCpuUsageGraph(HDC hDC, HWND hWnd)
     /*
      * Fill it with blackness
      */
-    FillSolidRect(hDC, &rcClient, RGB(0, 0, 0));
+    FillSolidRect(hDC, &rcClient, BLACK);
     
     /*
      * Get the CPU usage
      */
     CpuUsage = PerfDataGetProcessorUsage();
     CpuKernelUsage = PerfDataGetProcessorSystemUsage();
+    swprintf(Text, ARRAY_SIZE(Text), L"%3d%%", (int)CpuUsage);
 
-    /*
-     * Check and see how many digits it will take
-     * so we get the indentation right every time.
-     */
-    if (CpuUsage == 100)
-    {
-        swprintf(Text, ARRAY_SIZE(Text), wszFormatI, (int)CpuUsage);
-    }
-    else if (CpuUsage < 10)
-    {
-        swprintf(Text, ARRAY_SIZE(Text), wszFormatII, (int)CpuUsage);
-    }
-    else
-    {
-        swprintf(Text, ARRAY_SIZE(Text), wszFormatIII, (int)CpuUsage);
-    }
-    
     /*
      * Draw the font text onto the graph
      * The bottom 20 pixels are reserved for the text
@@ -248,13 +229,13 @@ static void Graph_DrawMemUsageGraph(HDC hDC, HWND hWnd)
     /*
      * Fill it with blackness
      */
-    FillSolidRect(hDC, &rcClient, RGB(0, 0, 0));
+    FillSolidRect(hDC, &rcClient, BLACK);
     
     /*
      * Get the memory usage
      */
-    CommitChargeTotal = (ULONGLONG)PerfDataGetCommitChargeTotalK();
-    CommitChargeLimit = (ULONGLONG)PerfDataGetCommitChargeLimitK();
+    CommitChargeTotal = (ULONGLONG)PerfDataGetCommitChargeTotalK() << 10;
+    CommitChargeLimit = (ULONGLONG)PerfDataGetCommitChargeLimitK() << 10;
 
     if (CommitChargeTotal < 1024)
         StrFormatKBSizeW(CommitChargeTotal, Text, ARRAY_SIZE(Text));
@@ -344,7 +325,7 @@ static void Graph_DrawMemUsageHistoryGraph(HDC hDC, HWND hWnd)
     /*
      * Fill it with blackness
      */
-    FillSolidRect(hDC, &rcClient, RGB(0, 0, 0));
+    FillSolidRect(hDC, &rcClient, BLACK);
 
     /*
      * Draw the graph background

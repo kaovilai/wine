@@ -16,15 +16,25 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include <errno.h>
 #include <stdarg.h>
 
 #include "msvcp90.h"
 #include "windef.h"
 #include "winbase.h"
 #include "winternl.h"
+#include "rtlsupportapi.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msvcp);
+
+#define CXX_FRAME_MAGIC_VC6 0x19930520
+
+#ifdef RTTI_USE_RVA
+#define CXX_EXCEPTION_PARAMS 4
+#else
+#define CXX_EXCEPTION_PARAMS 3
+#endif
 
 CREATE_TYPE_INFO_VTABLE
 
@@ -36,7 +46,7 @@ int* __cdecl __processing_throw(void);
 #if _MSVCP_VER >= 70 || defined(_MSVCIRT)
 typedef const char **exception_name;
 #define EXCEPTION_STR(name) (*name)
-#define EXCEPTION_NAME(str) ((exception_name)&str)
+#define EXCEPTION_NAME(str) (&str)
 #else
 typedef const char *exception_name;
 #define EXCEPTION_STR(name) (name)
@@ -65,6 +75,8 @@ extern const vtable_ptr failure_vtable;
 extern const vtable_ptr bad_cast_vtable;
 /* ??_7range_error@std@@6B@ */
 extern const vtable_ptr range_error_vtable;
+/* ??_7bad_function_call@std@@6B@ */
+extern const vtable_ptr bad_function_call_vtable;
 
 /* ??0exception@@QAE@ABQBD@Z */
 /* ??0exception@@QEAA@AEBQEBD@Z */
@@ -96,7 +108,7 @@ exception* __thiscall exception_copy_ctor(exception *this, const exception *rhs)
         this->name = rhs->name;
         this->do_free = FALSE;
     } else
-        MSVCP_exception_ctor(this, EXCEPTION_NAME(rhs->name));
+        MSVCP_exception_ctor(this, (exception_name)EXCEPTION_NAME(rhs->name));
     TRACE("name = %s\n", this->name);
     return this;
 }
@@ -214,7 +226,7 @@ bad_alloc* __thiscall MSVCP_bad_alloc_ctor(bad_alloc *this, exception_name name)
 DEFINE_THISCALL_WRAPPER(MSVCP_bad_alloc_default_ctor, 4)
 bad_alloc* __thiscall MSVCP_bad_alloc_default_ctor(bad_alloc *this)
 {
-    static const char name[] = "bad allocation";
+    static const char *name = "bad allocation";
     return MSVCP_bad_alloc_ctor(this, EXCEPTION_NAME(name));
 }
 
@@ -635,7 +647,7 @@ DEFINE_CXX_DATA1(runtime_error, &exception_cxx_type_info, MSVCP_runtime_error_dt
 typedef struct {
     runtime_error base;
 #if _MSVCP_VER > 90
-    int err;
+    error_code code;
 #endif
 } system_error;
 typedef system_error _System_error;
@@ -646,8 +658,8 @@ static failure* MSVCP_failure_ctor( failure *this, exception_name name )
     TRACE("%p %s\n", this, EXCEPTION_STR(name));
     MSVCP_runtime_error_ctor(&this->base, name);
 #if _MSVCP_VER > 90
-    /* FIXME: set err correctly */
-    this->err = 0;
+    this->code.code = 1;
+    this->code.category = std_iostream_category();
 #endif
     this->base.e.vtable = &failure_vtable;
     return this;
@@ -660,7 +672,7 @@ failure* __thiscall failure_copy_ctor(
     TRACE("%p %p\n", this, rhs);
     runtime_error_copy_ctor(&this->base, &rhs->base);
 #if _MSVCP_VER > 90
-    this->err = rhs->err;
+    this->code = rhs->code;
 #endif
     this->base.e.vtable = &failure_vtable;
     return this;
@@ -720,7 +732,9 @@ DEFINE_RTTI_DATA4(failure, 0, &system_error_rtti_base_descriptor,
         &_System_error_rtti_base_descriptor, &runtime_error_rtti_base_descriptor,
         &exception_rtti_base_descriptor, ".?AVfailure@ios_base@std@@")
 DEFINE_CXX_TYPE_INFO(_System_error)
-DEFINE_CXX_TYPE_INFO(system_error);
+DEFINE_CXX_DATA3(system_error, &_System_error_cxx_type_info,
+        &runtime_error_cxx_type_info, &exception_cxx_type_info,
+        MSVCP_runtime_error_dtor)
 DEFINE_CXX_DATA4(failure, &system_error_cxx_type_info,
         &_System_error_cxx_type_info, &runtime_error_cxx_type_info,
         &exception_cxx_type_info, MSVCP_runtime_error_dtor)
@@ -730,7 +744,12 @@ DEFINE_RTTI_DATA2(system_error, 0, &runtime_error_rtti_base_descriptor,
 DEFINE_RTTI_DATA3(failure, 0, &system_error_rtti_base_descriptor,
         &runtime_error_rtti_base_descriptor, &exception_rtti_base_descriptor,
         ".?AVfailure@ios_base@std@@")
+#if _MSVCP_VER == 100
 DEFINE_CXX_TYPE_INFO(system_error);
+#else
+DEFINE_CXX_DATA2(system_error, &runtime_error_cxx_type_info,
+        &exception_cxx_type_info, MSVCP_runtime_error_dtor)
+#endif
 DEFINE_CXX_DATA3(failure, &system_error_cxx_type_info, &runtime_error_cxx_type_info,
         &exception_cxx_type_info, MSVCP_runtime_error_dtor)
 #else
@@ -865,6 +884,33 @@ range_error* __thiscall MSVCP_range_error_assign(range_error *this, const range_
 DEFINE_RTTI_DATA2(range_error, 0, &runtime_error_rtti_base_descriptor, &exception_rtti_base_descriptor, ".?AVrange_error@std@@")
 DEFINE_CXX_DATA2(range_error, &runtime_error_cxx_type_info, &exception_cxx_type_info, MSVCP_runtime_error_dtor)
 
+#if _MSVCP_VER > 90
+/* bad_function_call class data */
+typedef exception bad_function_call;
+
+static bad_function_call* MSVCP_bad_function_call_ctor(bad_function_call *this)
+{
+    static const char *name = "bad function call";
+
+    TRACE("%p\n", this);
+    MSVCP_exception_ctor(this, EXCEPTION_NAME(name));
+    this->vtable = &bad_function_call_vtable;
+    return this;
+}
+
+DEFINE_THISCALL_WRAPPER(bad_function_call_copy_ctor, 8)
+bad_function_call* __thiscall bad_function_call_copy_ctor(bad_function_call *this, const bad_function_call *rhs)
+{
+    TRACE("%p %p\n", this, rhs);
+    exception_copy_ctor(this, rhs);
+    this->vtable = &bad_function_call_vtable;
+    return this;
+}
+
+DEFINE_RTTI_DATA1(bad_function_call, 0, &exception_rtti_base_descriptor, ".?AVbad_function_call@std@@")
+DEFINE_CXX_DATA1(bad_function_call, &exception_cxx_type_info, MSVCP_exception_dtor)
+#endif
+
 /* ?_Nomemory@std@@YAXXZ */
 void __cdecl DECLSPEC_NORETURN _Nomemory(void)
 {
@@ -873,7 +919,7 @@ void __cdecl DECLSPEC_NORETURN _Nomemory(void)
     TRACE("()\n");
 
     MSVCP_bad_alloc_default_ctor(&e);
-    _CxxThrowException(&e, &bad_alloc_cxx_type);
+    _CxxThrowException(&e, &bad_alloc_exception_type);
 }
 
 /* ?_Xmem@tr1@std@@YAXXZ */
@@ -884,7 +930,7 @@ void __cdecl DECLSPEC_NORETURN _Xmem(void)
     TRACE("()\n");
 
     MSVCP_bad_alloc_default_ctor(&e);
-    _CxxThrowException(&e, &bad_alloc_cxx_type);
+    _CxxThrowException(&e, &bad_alloc_exception_type);
 }
 
 /* ?_Xinvalid_argument@std@@YAXPBD@Z */
@@ -897,7 +943,7 @@ void __cdecl DECLSPEC_NORETURN _Xinvalid_argument(const char *str)
     TRACE("(%s)\n", debugstr_a(str));
 
     MSVCP_invalid_argument_ctor(&e, name);
-    _CxxThrowException(&e, &invalid_argument_cxx_type);
+    _CxxThrowException(&e, &invalid_argument_exception_type);
 }
 
 /* ?_Xlength_error@std@@YAXPBD@Z */
@@ -910,7 +956,7 @@ void __cdecl DECLSPEC_NORETURN _Xlength_error(const char *str)
     TRACE("(%s)\n", debugstr_a(str));
 
     MSVCP_length_error_ctor(&e, name);
-    _CxxThrowException(&e, &length_error_cxx_type);
+    _CxxThrowException(&e, &length_error_exception_type);
 }
 
 /* ?_Xout_of_range@std@@YAXPBD@Z */
@@ -923,7 +969,7 @@ void __cdecl DECLSPEC_NORETURN _Xout_of_range(const char *str)
     TRACE("(%s)\n", debugstr_a(str));
 
     MSVCP_out_of_range_ctor(&e, name);
-    _CxxThrowException(&e, &out_of_range_cxx_type);
+    _CxxThrowException(&e, &out_of_range_exception_type);
 }
 
 /* ?_Xruntime_error@std@@YAXPBD@Z */
@@ -936,8 +982,21 @@ void __cdecl DECLSPEC_NORETURN _Xruntime_error(const char *str)
     TRACE("(%s)\n", debugstr_a(str));
 
     MSVCP_runtime_error_ctor(&e, name);
-    _CxxThrowException(&e, &runtime_error_cxx_type);
+    _CxxThrowException(&e, &runtime_error_exception_type);
 }
+
+#if _MSVCP_VER > 90
+/* ?_Xbad_function_call@std@@YAXXZ() */
+void __cdecl _Xbad_function_call(void)
+{
+    exception e;
+
+    TRACE("()\n");
+
+    MSVCP_bad_function_call_ctor(&e);
+    _CxxThrowException(&e, &bad_function_call_exception_type);
+}
+#endif
 
 /* ?uncaught_exception@std@@YA_NXZ */
 bool __cdecl MSVCP__uncaught_exception(void)
@@ -946,9 +1005,80 @@ bool __cdecl MSVCP__uncaught_exception(void)
 }
 
 #if _MSVCP_VER >= 140
-int __cdecl __uncaught_exceptions(void)
+/* ?_XGetLastError@std@@YAXXZ */
+void __cdecl _XGetLastError(void)
 {
-    return *__processing_throw();
+    int err = GetLastError();
+    system_error se;
+    const char *msg;
+
+    TRACE("() GetLastError()=%d\n", err);
+
+    msg = _Winerror_map_str(err);
+    MSVCP_runtime_error_ctor(&se.base, &msg);
+    se.code.code = err;
+    se.code.category = std_system_category();
+    se.base.e.vtable = &system_error_vtable;
+
+    _CxxThrowException(&se, &system_error_exception_type);
+}
+#endif
+
+#if _MSVCP_VER >= 110
+typedef struct
+{
+    logic_error base;
+    error_code code;
+} future_error;
+
+extern const vtable_ptr future_error_vtable;
+
+DEFINE_THISCALL_WRAPPER(future_error_copy_ctor, 8)
+future_error* __thiscall future_error_copy_ctor(future_error *this, const future_error *rhs)
+{
+    logic_error_copy_ctor(&this->base, &rhs->base);
+    this->code = rhs->code;
+    this->base.e.vtable = &future_error_vtable;
+    return this;
+}
+
+DEFINE_THISCALL_WRAPPER(MSVCP_future_error_what, 4)
+const char* __thiscall MSVCP_future_error_what(future_error *this)
+{
+    const char *names[4] = {
+        "broken promise",
+        "future already retrieved",
+        "promise already satisfied",
+        "no state",
+    };
+#if _MSVCP_VER == 110
+    int code = this->code.code;
+#else
+    int code = this->code.code-1;
+#endif
+    TRACE("%p\n", this);
+    return code >= 0 && code < ARRAY_SIZE(names) ? names[code] : NULL;
+}
+
+DEFINE_RTTI_DATA3(future_error, 0, &future_error_rtti_base_descriptor,
+        &logic_error_rtti_base_descriptor, &exception_rtti_base_descriptor,
+        ".?AVfuture_error@std@@")
+DEFINE_CXX_DATA3(future_error, &logic_error_cxx_type_info, &logic_error_cxx_type_info,
+        &exception_cxx_type_info, MSVCP_logic_error_dtor)
+
+/* ?_Throw_future_error@std@@YAXABVerror_code@1@@Z */
+/* ?_Throw_future_error@std@@YAXAEBVerror_code@1@@Z */
+void __cdecl DECLSPEC_NORETURN _Throw_future_error( const error_code *error_code )
+{
+    future_error e;
+    const char *name = "";
+
+    TRACE("(%p)\n", error_code);
+
+    MSVCP_logic_error_ctor(&e.base, EXCEPTION_NAME(name));
+    e.code = *error_code;
+    e.base.e.vtable = &future_error_vtable;
+    _CxxThrowException(&e, &future_error_exception_type);
 }
 
 typedef struct
@@ -956,6 +1086,133 @@ typedef struct
     EXCEPTION_RECORD *rec;
     LONG *ref; /* not binary compatible with native */
 } exception_ptr;
+
+static void exception_ptr_rethrow(const exception_ptr *ep)
+{
+    TRACE("(%p)\n", ep);
+
+    if (!ep->rec)
+    {
+        static const char *exception_msg = "bad exception";
+        exception e;
+
+        MSVCP_exception_ctor(&e, &exception_msg);
+        _CxxThrowException(&e, &exception_exception_type);
+        return;
+    }
+
+    RaiseException(ep->rec->ExceptionCode, ep->rec->ExceptionFlags & ~EXCEPTION_UNWINDING,
+            ep->rec->NumberParameters, ep->rec->ExceptionInformation);
+}
+
+/* ?_Rethrow_future_exception@std@@YAXVexception_ptr@1@@Z */
+void __cdecl _Rethrow_future_exception(const exception_ptr ep)
+{
+    exception_ptr_rethrow(&ep);
+}
+
+/* ?_Throw_C_error@std@@YAXH@Z */
+void __cdecl _Throw_C_error(int code)
+{
+    system_error se;
+    const char *msg;
+    errno_t err;
+
+    TRACE("(%d)\n", code);
+
+    switch(code)
+    {
+    case 1:
+    case 2:
+        err = EAGAIN;
+        break;
+    case 3:
+        err = EBUSY;
+        break;
+    case 4:
+        err = EINVAL;
+        break;
+    default:
+#if _MSVCP_VER >= 140
+        abort();
+#else
+        return;
+#endif
+    }
+
+    msg = strerror(err);
+    MSVCP_runtime_error_ctor(&se.base, &msg);
+    se.code.code = err;
+    se.code.category = std_generic_category();
+    se.base.e.vtable = &system_error_vtable;
+
+    _CxxThrowException(&se, &system_error_exception_type);
+}
+#endif
+
+#if _MSVCP_VER >= 140
+void** CDECL __current_exception(void);
+
+/* compute the this pointer for a base class of a given type */
+static inline void *get_this_pointer( const this_ptr_offsets *off, void *object )
+{
+    if (!object) return NULL;
+
+    if (off->vbase_descr >= 0)
+    {
+        int *offset_ptr;
+
+        /* move this ptr to vbase descriptor */
+        object = (char *)object + off->vbase_descr;
+        /* and fetch additional offset from vbase descriptor */
+        offset_ptr = (int *)(*(char **)object + off->vbase_offset);
+        object = (char *)object + *offset_ptr;
+    }
+
+    object = (char *)object + off->this_offset;
+    return object;
+}
+
+#ifdef __ASM_USE_THISCALL_WRAPPER
+extern void call_copy_ctor( void *func, void *this, void *src, int has_vbase );
+__ASM_GLOBAL_FUNC( call_copy_ctor,
+                   "pushl %ebp\n\t"
+                   __ASM_CFI(".cfi_adjust_cfa_offset 4\n\t")
+                   __ASM_CFI(".cfi_rel_offset %ebp,0\n\t")
+                   "movl %esp, %ebp\n\t"
+                   __ASM_CFI(".cfi_def_cfa_register %ebp\n\t")
+                   "pushl $1\n\t"
+                   "movl 12(%ebp), %ecx\n\t"
+                   "pushl 16(%ebp)\n\t"
+                   "call *8(%ebp)\n\t"
+                   "leave\n"
+                   __ASM_CFI(".cfi_def_cfa %esp,4\n\t")
+                   __ASM_CFI(".cfi_same_value %ebp\n\t")
+                   "ret" )
+extern void call_dtor( void *func, void *this );
+__ASM_GLOBAL_FUNC( call_dtor,
+                   "movl 8(%esp),%ecx\n\t"
+                   "call *4(%esp)\n\t"
+                   "ret" )
+#else
+static inline void call_copy_ctor( void *func, void *this, void *src, int has_vbase )
+{
+    TRACE( "calling copy ctor %p object %p src %p\n", func, this, src );
+    if (has_vbase)
+        ((void (__thiscall*)(void*, void*, BOOL))func)(this, src, 1);
+    else
+        ((void (__thiscall*)(void*, void*))func)(this, src);
+}
+static inline void call_dtor( void *func, void *this )
+{
+    ((void (__thiscall*)(void*))func)( this );
+}
+#endif
+
+int __cdecl __uncaught_exceptions(void)
+{
+    return *__processing_throw();
+}
 
 /*********************************************************************
  * ?__ExceptionPtrCreate@@YAXPAX@Z
@@ -968,24 +1225,6 @@ void __cdecl __ExceptionPtrCreate(exception_ptr *ep)
     ep->rec = NULL;
     ep->ref = NULL;
 }
-
-#ifdef __ASM_USE_THISCALL_WRAPPER
-extern void call_dtor(const cxx_exception_type *type, void *func, void *object);
-
-__ASM_GLOBAL_FUNC( call_dtor,
-                   "movl 12(%esp),%ecx\n\t"
-                   "call *8(%esp)\n\t"
-                   "ret" );
-#elif __x86_64__
-static inline void call_dtor(const cxx_exception_type *type, unsigned int dtor, void *object)
-{
-    char *base = RtlPcToFileHeader((void*)type, (void**)&base);
-    void (__cdecl *func)(void*) = (void*)(base + dtor);
-    func(object);
-}
-#else
-#define call_dtor(type, func, object) ((void (__thiscall*)(void*))(func))(object)
-#endif
 
 /*********************************************************************
  * ?__ExceptionPtrDestroy@@YAXPAX@Z
@@ -1004,14 +1243,167 @@ void __cdecl __ExceptionPtrDestroy(exception_ptr *ep)
         {
             const cxx_exception_type *type = (void*)ep->rec->ExceptionInformation[2];
             void *obj = (void*)ep->rec->ExceptionInformation[1];
+            uintptr_t base = rtti_rva_base( type );
 
-            if (type && type->destructor) call_dtor(type, type->destructor, obj);
+            if (type && type->destructor) call_dtor( rtti_rva(type->destructor, base), obj );
             HeapFree(GetProcessHeap(), 0, obj);
         }
 
         HeapFree(GetProcessHeap(), 0, ep->rec);
         HeapFree(GetProcessHeap(), 0, ep->ref);
     }
+}
+
+/*********************************************************************
+ * ?__ExceptionPtrCopy@@YAXPAXPBX@Z
+ * ?__ExceptionPtrCopy@@YAXPEAXPEBX@Z
+ */
+void __cdecl __ExceptionPtrCopy(exception_ptr *ep, const exception_ptr *copy)
+{
+    TRACE("(%p %p)\n", ep, copy);
+
+    /* don't destroy object stored in ep */
+    *ep = *copy;
+    if (ep->ref)
+        InterlockedIncrement(copy->ref);
+}
+
+/*********************************************************************
+ * ?__ExceptionPtrAssign@@YAXPAXPBX@Z
+ * ?__ExceptionPtrAssign@@YAXPEAXPEBX@Z
+ */
+void __cdecl __ExceptionPtrAssign(exception_ptr *ep, const exception_ptr *assign)
+{
+    TRACE("(%p %p)\n", ep, assign);
+
+    /* don't destroy object stored in ep */
+    if (ep->ref)
+        InterlockedDecrement(ep->ref);
+
+    *ep = *assign;
+    if (ep->ref)
+        InterlockedIncrement(ep->ref);
+}
+
+/*********************************************************************
+ * ?__ExceptionPtrRethrow@@YAXPBX@Z
+ * ?__ExceptionPtrRethrow@@YAXPEBX@Z
+ */
+void __cdecl __ExceptionPtrRethrow(const exception_ptr *ep)
+{
+    exception_ptr_rethrow(ep);
+}
+
+/*********************************************************************
+ * ?__ExceptionPtrCurrentException@@YAXPAX@Z
+ * ?__ExceptionPtrCurrentException@@YAXPEAX@Z
+ */
+void __cdecl __ExceptionPtrCurrentException(exception_ptr *ep)
+{
+    void **current_exception = __current_exception();
+    EXCEPTION_RECORD *rec = current_exception ? *current_exception : NULL;
+
+    TRACE("(%p)\n", ep);
+
+    if (!rec)
+    {
+        ep->rec = NULL;
+        ep->ref = NULL;
+        return;
+    }
+
+    ep->rec = HeapAlloc(GetProcessHeap(), 0, sizeof(EXCEPTION_RECORD));
+    ep->ref = HeapAlloc(GetProcessHeap(), 0, sizeof(int));
+
+    *ep->rec = *rec;
+    *ep->ref = 1;
+
+    if (ep->rec->ExceptionCode == CXX_EXCEPTION)
+    {
+        void *obj = (void*)ep->rec->ExceptionInformation[1];
+        const cxx_exception_type *et = (void*)ep->rec->ExceptionInformation[2];
+        uintptr_t base = rtti_rva_base( et );
+        const cxx_type_info_table *table = rtti_rva( et->type_info_table, base );
+        const cxx_type_info *ti = rtti_rva( table->info[0], base );
+        void **data = HeapAlloc(GetProcessHeap(), 0, ti->size);
+
+        if (ti->flags & CLASS_IS_SIMPLE_TYPE)
+        {
+            memcpy(data, obj, ti->size);
+            if (ti->size == sizeof(void *)) *data = get_this_pointer(&ti->offsets, *data);
+        }
+        else if (ti->copy_ctor)
+        {
+            call_copy_ctor(rtti_rva(ti->copy_ctor, base), data, get_this_pointer(&ti->offsets, obj),
+                    ti->flags & CLASS_HAS_VIRTUAL_BASE_CLASS);
+        }
+        else
+            memcpy(data, get_this_pointer(&ti->offsets, obj), ti->size);
+        ep->rec->ExceptionInformation[1] = (ULONG_PTR)data;
+    }
+    return;
+}
+
+/*********************************************************************
+ * ?__ExceptionPtrToBool@@YA_NPBX@Z
+ * ?__ExceptionPtrToBool@@YA_NPEBX@Z
+ */
+bool __cdecl __ExceptionPtrToBool(exception_ptr *ep)
+{
+    return !!ep->rec;
+}
+
+/*********************************************************************
+ * ?__ExceptionPtrCopyException@@YAXPAXPBX1@Z
+ * ?__ExceptionPtrCopyException@@YAXPEAXPEBX1@Z
+ */
+void __cdecl __ExceptionPtrCopyException(exception_ptr *ep,
+        exception *object, const cxx_exception_type *type)
+{
+    const cxx_type_info_table *table;
+    const cxx_type_info *ti;
+    void **data;
+    uintptr_t base = rtti_rva_base( type );
+
+    __ExceptionPtrDestroy(ep);
+
+    ep->rec = HeapAlloc(GetProcessHeap(), 0, sizeof(EXCEPTION_RECORD));
+    ep->ref = HeapAlloc(GetProcessHeap(), 0, sizeof(int));
+    *ep->ref = 1;
+
+    memset(ep->rec, 0, sizeof(EXCEPTION_RECORD));
+    ep->rec->ExceptionCode = CXX_EXCEPTION;
+    ep->rec->ExceptionFlags = EXCEPTION_NONCONTINUABLE;
+    ep->rec->NumberParameters = CXX_EXCEPTION_PARAMS;
+    ep->rec->ExceptionInformation[0] = CXX_FRAME_MAGIC_VC6;
+    ep->rec->ExceptionInformation[2] = (ULONG_PTR)type;
+    if (CXX_EXCEPTION_PARAMS == 4) ep->rec->ExceptionInformation[3] = base;
+
+    table = rtti_rva( type->type_info_table, base );
+    ti = rtti_rva( table->info[0], base );
+    data = HeapAlloc(GetProcessHeap(), 0, ti->size);
+    if (ti->flags & CLASS_IS_SIMPLE_TYPE)
+    {
+        memcpy(data, object, ti->size);
+        if (ti->size == sizeof(void *)) *data = get_this_pointer(&ti->offsets, *data);
+    }
+    else if (ti->copy_ctor)
+    {
+        call_copy_ctor( rtti_rva(ti->copy_ctor, base), data, get_this_pointer(&ti->offsets, object),
+                ti->flags & CLASS_HAS_VIRTUAL_BASE_CLASS);
+    }
+    else
+        memcpy(data, get_this_pointer(&ti->offsets, object), ti->size);
+    ep->rec->ExceptionInformation[1] = (ULONG_PTR)data;
+}
+
+/*********************************************************************
+ * ?__ExceptionPtrCompare@@YA_NPBX0@Z
+ * ?__ExceptionPtrCompare@@YA_NPEBX0@Z
+ */
+bool __cdecl __ExceptionPtrCompare(const exception_ptr *ep1, const exception_ptr *ep2)
+{
+    return ep1->rec == ep2->rec;
 }
 #endif
 
@@ -1043,6 +1435,11 @@ __ASM_BLOCK_BEGIN(exception_vtables)
     EXCEPTION_VTABLE(runtime_error,
             VTABLE_ADD_FUNC(MSVCP_runtime_error_vector_dtor)
             VTABLE_ADD_FUNC(MSVCP_runtime_error_what));
+#if _MSVCP_VER >= 110
+    EXCEPTION_VTABLE(future_error,
+            VTABLE_ADD_FUNC(MSVCP_logic_error_vector_dtor)
+            VTABLE_ADD_FUNC(MSVCP_future_error_what));
+#endif
 #if _MSVCP_VER > 110
     EXCEPTION_VTABLE(_System_error,
             VTABLE_ADD_FUNC(MSVCP_failure_vector_dtor)
@@ -1052,6 +1449,9 @@ __ASM_BLOCK_BEGIN(exception_vtables)
     EXCEPTION_VTABLE(system_error,
             VTABLE_ADD_FUNC(MSVCP_failure_vector_dtor)
             VTABLE_ADD_FUNC(MSVCP_failure_what));
+    EXCEPTION_VTABLE(bad_function_call,
+            VTABLE_ADD_FUNC(MSVCP_exception_vector_dtor)
+            VTABLE_ADD_FUNC(MSVCP_exception_what));
 #endif
     EXCEPTION_VTABLE(failure,
             VTABLE_ADD_FUNC(MSVCP_failure_vector_dtor)
@@ -1062,6 +1462,7 @@ __ASM_BLOCK_BEGIN(exception_vtables)
     EXCEPTION_VTABLE(range_error,
             VTABLE_ADD_FUNC(MSVCP_runtime_error_vector_dtor)
             VTABLE_ADD_FUNC(MSVCP_runtime_error_what));
+
 __ASM_BLOCK_END
 
 /* Internal: throws exception */
@@ -1071,7 +1472,7 @@ void DECLSPEC_NORETURN throw_exception(const char *str)
     exception e;
 
     MSVCP_exception_ctor(&e, name);
-    _CxxThrowException(&e, &exception_cxx_type);
+    _CxxThrowException(&e, &exception_exception_type);
 }
 
 /* Internal: throws range_error exception */
@@ -1081,7 +1482,7 @@ void DECLSPEC_NORETURN throw_range_error(const char *str)
     range_error e;
 
     MSVCP_range_error_ctor(&e, name);
-    _CxxThrowException(&e, &range_error_cxx_type);
+    _CxxThrowException(&e, &range_error_exception_type);
 }
 
 /* Internal: throws failure exception */
@@ -1091,12 +1492,12 @@ void DECLSPEC_NORETURN throw_failure(const char *str)
     failure e;
 
     MSVCP_failure_ctor(&e, name);
-    _CxxThrowException(&e, &failure_cxx_type);
+    _CxxThrowException(&e, &failure_exception_type);
 }
 
 void init_exception(void *base)
 {
-#ifdef __x86_64__
+#ifdef RTTI_USE_RVA
     init_type_info_rtti(base);
     init_exception_rtti(base);
     init_bad_alloc_rtti(base);
@@ -1105,11 +1506,15 @@ void init_exception(void *base)
     init_out_of_range_rtti(base);
     init_invalid_argument_rtti(base);
     init_runtime_error_rtti(base);
+#if _MSVCP_VER >= 110
+    init_future_error_rtti(base);
+#endif
 #if _MSVCP_VER > 110
     init__System_error_rtti(base);
 #endif
 #if _MSVCP_VER > 90
     init_system_error_rtti(base);
+    init_bad_function_call_rtti(base);
 #endif
     init_failure_rtti(base);
     init_bad_cast_rtti(base);
@@ -1122,11 +1527,19 @@ void init_exception(void *base)
     init_out_of_range_cxx(base);
     init_invalid_argument_cxx(base);
     init_runtime_error_cxx(base);
+#if _MSVCP_VER >= 110
+    init_future_error_cxx(base);
+#endif
 #if _MSVCP_VER > 110
     init__System_error_cxx_type_info(base);
 #endif
-#if _MSVCP_VER > 90
+#if _MSVCP_VER == 100
     init_system_error_cxx_type_info(base);
+#elif _MSVCP_VER > 100
+    init_system_error_cxx(base);
+#endif
+#if _MSVCP_VER > 90
+    init_bad_function_call_cxx(base);
 #endif
     init_failure_cxx(base);
     init_range_error_cxx(base);

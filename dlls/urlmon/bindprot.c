@@ -224,8 +224,8 @@ static void mime_available(BindProtocol *This, LPCWSTR mime, BOOL verified)
     IInternetProtocol *mime_filter;
     HRESULT hres;
 
-    heap_free(This->mime);
-    This->mime = heap_strdupW(mime);
+    free(This->mime);
+    This->mime = wcsdup(mime);
 
     if(This->protocol_handler==&This->default_protocol_handler.IInternetProtocol_iface
             && (mime_filter = get_mime_filter(mime))) {
@@ -234,7 +234,7 @@ static void mime_available(BindProtocol *This, LPCWSTR mime, BOOL verified)
         hres = handle_mime_filter(This, mime_filter);
         IInternetProtocol_Release(mime_filter);
         if(FAILED(hres))
-            FIXME("MIME filter failed: %08x\n", hres);
+            FIXME("MIME filter failed: %08lx\n", hres);
     }
 
     if(This->reported_mime || verified || !(This->pi & PI_MIMEVERIFICATION)) {
@@ -282,7 +282,7 @@ static HRESULT WINAPI BindProtocol_QueryInterface(IInternetProtocolEx *iface, RE
     }else if(This->protocol_unk) {
         HRESULT hres;
         hres = IUnknown_QueryInterface(This->protocol_unk, riid, ppv);
-        TRACE("(%p) aggregated handler returned %08x for %s\n", This, hres, debugstr_guid(riid));
+        TRACE("(%p) aggregated handler returned %08lx for %s\n", This, hres, debugstr_guid(riid));
         return hres;
     }else {
         WARN("not supported interface %s\n", debugstr_guid(riid));
@@ -299,7 +299,7 @@ static ULONG WINAPI BindProtocol_AddRef(IInternetProtocolEx *iface)
 {
     BindProtocol *This = impl_from_IInternetProtocolEx(iface);
     LONG ref = InterlockedIncrement(&This->ref);
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
     return ref;
 }
 
@@ -329,7 +329,7 @@ static ULONG WINAPI BindProtocol_Release(IInternetProtocolEx *iface)
     BindProtocol *This = impl_from_IInternetProtocolEx(iface);
     LONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     if(!ref) {
         release_protocol_handler(This);
@@ -348,8 +348,8 @@ static ULONG WINAPI BindProtocol_Release(IInternetProtocolEx *iface)
         This->section.DebugInfo->Spare[0] = 0;
         DeleteCriticalSection(&This->section);
 
-        heap_free(This->mime);
-        heap_free(This);
+        free(This->mime);
+        free(This);
 
         URLMON_UnlockModule();
     }
@@ -365,7 +365,7 @@ static HRESULT WINAPI BindProtocol_Start(IInternetProtocolEx *iface, LPCWSTR szU
     IUri *uri;
     HRESULT hres;
 
-    TRACE("(%p)->(%s %p %p %08x %lx)\n", This, debugstr_w(szUrl), pOIProtSink,
+    TRACE("(%p)->(%s %p %p %08lx %Ix)\n", This, debugstr_w(szUrl), pOIProtSink,
             pOIBindInfo, grfPI, dwReserved);
 
     hres = CreateUri(szUrl, Uri_CREATE_FILE_USE_DOS_PATH, 0, &uri);
@@ -393,7 +393,7 @@ static HRESULT WINAPI BindProtocol_Abort(IInternetProtocolEx *iface, HRESULT hrR
 {
     BindProtocol *This = impl_from_IInternetProtocolEx(iface);
 
-    TRACE("(%p)->(%08x %08x)\n", This, hrReason, dwOptions);
+    TRACE("(%p)->(%08lx %08lx)\n", This, hrReason, dwOptions);
 
     return IInternetProtocol_Abort(This->protocol_handler, hrReason, dwOptions);
 }
@@ -402,7 +402,7 @@ static HRESULT WINAPI BindProtocol_Terminate(IInternetProtocolEx *iface, DWORD d
 {
     BindProtocol *This = impl_from_IInternetProtocolEx(iface);
 
-    TRACE("(%p)->(%08x)\n", This, dwOptions);
+    TRACE("(%p)->(%08lx)\n", This, dwOptions);
 
     return IInternetProtocol_Terminate(This->protocol_handler, dwOptions);
 }
@@ -426,7 +426,7 @@ static HRESULT WINAPI BindProtocol_Read(IInternetProtocolEx *iface, void *pv,
 {
     BindProtocol *This = impl_from_IInternetProtocolEx(iface);
 
-    TRACE("(%p)->(%p %u %p)\n", This, pv, cb, pcbRead);
+    TRACE("(%p)->(%p %lu %p)\n", This, pv, cb, pcbRead);
 
     if(pcbRead)
         *pcbRead = 0;
@@ -437,7 +437,7 @@ static HRESULT WINAPI BindProtocol_Seek(IInternetProtocolEx *iface, LARGE_INTEGE
         DWORD dwOrigin, ULARGE_INTEGER *plibNewPosition)
 {
     BindProtocol *This = impl_from_IInternetProtocolEx(iface);
-    FIXME("(%p)->(%d %d %p)\n", This, dlibMove.u.LowPart, dwOrigin, plibNewPosition);
+    FIXME("(%p)->(%ld %ld %p)\n", This, dlibMove.u.LowPart, dwOrigin, plibNewPosition);
     return E_NOTIMPL;
 }
 
@@ -445,7 +445,7 @@ static HRESULT WINAPI BindProtocol_LockRequest(IInternetProtocolEx *iface, DWORD
 {
     BindProtocol *This = impl_from_IInternetProtocolEx(iface);
 
-    TRACE("(%p)->(%08x)\n", This, dwOptions);
+    TRACE("(%p)->(%08lx)\n", This, dwOptions);
 
     return IInternetProtocol_LockRequest(This->protocol_handler, dwOptions);
 }
@@ -473,7 +473,7 @@ static HRESULT WINAPI BindProtocol_StartEx(IInternetProtocolEx *iface, IUri *pUr
     LPOLESTR clsid_str;
     HRESULT hres;
 
-    TRACE("(%p)->(%p %p %p %08x %p)\n", This, pUri, pOIProtSink, pOIBindInfo, grfPI, dwReserved);
+    TRACE("(%p)->(%p %p %p %08lx %p)\n", This, pUri, pOIProtSink, pOIBindInfo, grfPI, dwReserved);
 
     if(!pUri || !pOIProtSink || !pOIBindInfo)
         return E_INVALIDARG;
@@ -670,7 +670,7 @@ static HRESULT WINAPI ProtocolHandler_Continue(IInternetProtocol *iface, PROTOCO
 
     hres = IInternetProtocol_Continue(protocol ? protocol : This->protocol, pProtocolData);
 
-    heap_free(pProtocolData);
+    free(pProtocolData);
     if(protocol)
         IInternetProtocol_Release(protocol);
     return hres;
@@ -681,7 +681,7 @@ static HRESULT WINAPI ProtocolHandler_Abort(IInternetProtocol *iface, HRESULT hr
 {
     BindProtocol *This = impl_from_IInternetProtocol(iface);
 
-    TRACE("(%p)->(%08x %08x)\n", This, hrReason, dwOptions);
+    TRACE("(%p)->(%08lx %08lx)\n", This, hrReason, dwOptions);
 
     if(This->protocol && !This->reported_result)
         return IInternetProtocol_Abort(This->protocol, hrReason, dwOptions);
@@ -693,7 +693,7 @@ static HRESULT WINAPI ProtocolHandler_Terminate(IInternetProtocol *iface, DWORD 
 {
     BindProtocol *This = impl_from_IInternetProtocol(iface);
 
-    TRACE("(%p)->(%08x)\n", This, dwOptions);
+    TRACE("(%p)->(%08lx)\n", This, dwOptions);
 
     if(!This->reported_result)
         return E_FAIL;
@@ -747,14 +747,14 @@ static HRESULT WINAPI ProtocolHandler_Read(IInternetProtocol *iface, void *pv,
     ULONG read = 0;
     HRESULT hres = S_OK;
 
-    TRACE("(%p)->(%p %u %p)\n", This, pv, cb, pcbRead);
+    TRACE("(%p)->(%p %lu %p)\n", This, pv, cb, pcbRead);
 
     if(This->buf_size) {
         read = min(cb, This->buf_size);
         memcpy(pv, This->buf, read);
 
         if(read == This->buf_size) {
-            heap_free(This->buf);
+            free(This->buf);
             This->buf = NULL;
         }else {
             memmove(This->buf, This->buf+cb, This->buf_size-cb);
@@ -796,7 +796,7 @@ static HRESULT WINAPI ProtocolHandler_Seek(IInternetProtocol *iface, LARGE_INTEG
         DWORD dwOrigin, ULARGE_INTEGER *plibNewPosition)
 {
     BindProtocol *This = impl_from_IInternetProtocol(iface);
-    FIXME("(%p)->(%d %d %p)\n", This, dlibMove.u.LowPart, dwOrigin, plibNewPosition);
+    FIXME("(%p)->(%ld %ld %p)\n", This, dlibMove.u.LowPart, dwOrigin, plibNewPosition);
     return E_NOTIMPL;
 }
 
@@ -804,7 +804,7 @@ static HRESULT WINAPI ProtocolHandler_LockRequest(IInternetProtocol *iface, DWOR
 {
     BindProtocol *This = impl_from_IInternetProtocol(iface);
 
-    TRACE("(%p)->(%08x)\n", This, dwOptions);
+    TRACE("(%p)->(%08lx)\n", This, dwOptions);
 
     return IInternetProtocol_LockRequest(This->protocol, dwOptions);
 }
@@ -815,7 +815,9 @@ static HRESULT WINAPI ProtocolHandler_UnlockRequest(IInternetProtocol *iface)
 
     TRACE("(%p)\n", This);
 
-    return IInternetProtocol_UnlockRequest(This->protocol);
+    if (This->protocol)
+        return IInternetProtocol_UnlockRequest(This->protocol);
+    return S_OK;
 }
 
 static const IInternetProtocolVtbl InternetProtocolHandlerVtbl = {
@@ -909,7 +911,7 @@ static HRESULT WINAPI ProtocolSinkHandler_ReportProgress(IInternetProtocolSink *
         break;
 
     default:
-        FIXME("unsupported ulStatusCode %u\n", status_code);
+        FIXME("unsupported ulStatusCode %lu\n", status_code);
     }
 
     return S_OK;
@@ -933,13 +935,13 @@ static HRESULT report_data(BindProtocol *This)
                 return hres;
 
             if(!This->buf) {
-                This->buf = heap_alloc(BUFFER_SIZE);
+                This->buf = malloc(BUFFER_SIZE);
                 if(!This->buf)
                     return E_OUTOFMEMORY;
             }else if(read + This->buf_size > BUFFER_SIZE) {
                 BYTE *tmp;
 
-                tmp = heap_realloc(This->buf, read+This->buf_size);
+                tmp = realloc(This->buf, read + This->buf_size);
                 if(!tmp)
                     return E_OUTOFMEMORY;
                 This->buf = tmp;
@@ -969,8 +971,8 @@ static HRESULT report_data(BindProtocol *This)
             if(FAILED(hres))
                 return hres;
 
-            heap_free(This->mime);
-            This->mime = heap_strdupW(mime);
+            free(This->mime);
+            This->mime = wcsdup(mime);
             CoTaskMemFree(mime);
             This->reported_mime = TRUE;
             if(This->protocol_sink)
@@ -990,7 +992,7 @@ static HRESULT WINAPI ProtocolSinkHandler_ReportData(IInternetProtocolSink *ifac
     BindProtocol *This = impl_from_IInternetProtocolSinkHandler(iface);
     HRESULT hres;
 
-    TRACE("(%p)->(%x %u %u)\n", This, bscf, progress, progress_max);
+    TRACE("(%p)->(%lx %lu %lu)\n", This, bscf, progress, progress_max);
 
     This->bscf = bscf;
     This->progress = progress;
@@ -1039,7 +1041,7 @@ static HRESULT WINAPI ProtocolSinkHandler_ReportResult(IInternetProtocolSink *if
 {
     BindProtocol *This = impl_from_IInternetProtocolSinkHandler(iface);
 
-    TRACE("(%p)->(%08x %d %s)\n", This, hrResult, dwError, debugstr_w(szResult));
+    TRACE("(%p)->(%08lx %ld %s)\n", This, hrResult, dwError, debugstr_w(szResult));
 
     if(hrResult == INET_E_REDIRECT_FAILED) {
         hrResult = handle_redirect(This, szResult);
@@ -1097,7 +1099,7 @@ static HRESULT WINAPI BindInfo_GetBindInfo(IInternetBindInfo *iface,
 
     hres = IInternetBindInfo_GetBindInfo(This->bind_info, grfBINDF, pbindinfo);
     if(FAILED(hres)) {
-        WARN("GetBindInfo failed: %08x\n", hres);
+        WARN("GetBindInfo failed: %08lx\n", hres);
         return hres;
     }
 
@@ -1121,7 +1123,7 @@ static HRESULT WINAPI BindInfo_GetBindString(IInternetBindInfo *iface,
 {
     BindProtocol *This = impl_from_IInternetBindInfo(iface);
 
-    TRACE("(%p)->(%d %p %d %p)\n", This, ulStringType, ppwzStr, cEl, pcElFetched);
+    TRACE("(%p)->(%ld %p %ld %p)\n", This, ulStringType, ppwzStr, cEl, pcElFetched);
 
     return IInternetBindInfo_GetBindString(This->bind_info, ulStringType, ppwzStr, cEl, pcElFetched);
 }
@@ -1162,7 +1164,7 @@ static HRESULT WINAPI InternetPriority_SetPriority(IInternetPriority *iface, LON
 {
     BindProtocol *This = impl_from_IInternetPriority(iface);
 
-    TRACE("(%p)->(%d)\n", This, nPriority);
+    TRACE("(%p)->(%ld)\n", This, nPriority);
 
     This->priority = nPriority;
     return S_OK;
@@ -1222,7 +1224,7 @@ static void switch_proc(BindProtocol *bind, task_header_t *t)
 
     IInternetProtocol_Continue(bind->protocol_handler, task->data);
 
-    heap_free(task);
+    free(task);
 }
 
 static HRESULT WINAPI BPInternetProtocolSink_Switch(IInternetProtocolSink *iface,
@@ -1233,10 +1235,10 @@ static HRESULT WINAPI BPInternetProtocolSink_Switch(IInternetProtocolSink *iface
 
     TRACE("(%p)->(%p)\n", This, pProtocolData);
 
-    TRACE("flags %x state %x data %p cb %u\n", pProtocolData->grfFlags, pProtocolData->dwState,
+    TRACE("flags %lx state %lx data %p cb %lu\n", pProtocolData->grfFlags, pProtocolData->dwState,
           pProtocolData->pData, pProtocolData->cbData);
 
-    data = heap_alloc(sizeof(PROTOCOLDATA));
+    data = malloc(sizeof(PROTOCOLDATA));
     if(!data)
         return E_OUTOFMEMORY;
     memcpy(data, pProtocolData, sizeof(PROTOCOLDATA));
@@ -1245,10 +1247,10 @@ static HRESULT WINAPI BPInternetProtocolSink_Switch(IInternetProtocolSink *iface
             || !do_direct_notif(This)) {
         switch_task_t *task;
 
-        task = heap_alloc(sizeof(switch_task_t));
+        task = malloc(sizeof(switch_task_t));
         if(!task)
         {
-            heap_free(data);
+            free(data);
             return E_OUTOFMEMORY;
         }
 
@@ -1274,8 +1276,8 @@ static void on_progress_proc(BindProtocol *This, task_header_t *t)
 
     IInternetProtocolSink_ReportProgress(This->protocol_sink_handler, task->status_code, task->status_text);
 
-    heap_free(task->status_text);
-    heap_free(task);
+    free(task->status_text);
+    free(task);
 }
 
 static HRESULT WINAPI BPInternetProtocolSink_ReportProgress(IInternetProtocolSink *iface,
@@ -1283,17 +1285,17 @@ static HRESULT WINAPI BPInternetProtocolSink_ReportProgress(IInternetProtocolSin
 {
     BindProtocol *This = impl_from_IInternetProtocolSink(iface);
 
-    TRACE("(%p)->(%u %s)\n", This, ulStatusCode, debugstr_w(szStatusText));
+    TRACE("(%p)->(%lu %s)\n", This, ulStatusCode, debugstr_w(szStatusText));
 
     if(do_direct_notif(This)) {
         IInternetProtocolSink_ReportProgress(This->protocol_sink_handler, ulStatusCode, szStatusText);
     }else {
         on_progress_task_t *task;
 
-        task = heap_alloc(sizeof(on_progress_task_t));
+        task = malloc(sizeof(on_progress_task_t));
 
         task->status_code = ulStatusCode;
-        task->status_text = heap_strdupW(szStatusText);
+        task->status_text = wcsdup(szStatusText);
 
         push_task(This, &task->header, on_progress_proc);
     }
@@ -1315,7 +1317,7 @@ static void report_data_proc(BindProtocol *This, task_header_t *t)
     IInternetProtocolSink_ReportData(This->protocol_sink_handler,
             task->bscf, task->progress, task->progress_max);
 
-    heap_free(task);
+    free(task);
 }
 
 static HRESULT WINAPI BPInternetProtocolSink_ReportData(IInternetProtocolSink *iface,
@@ -1323,7 +1325,7 @@ static HRESULT WINAPI BPInternetProtocolSink_ReportData(IInternetProtocolSink *i
 {
     BindProtocol *This = impl_from_IInternetProtocolSink(iface);
 
-    TRACE("(%p)->(%x %u %u)\n", This, grfBSCF, ulProgress, ulProgressMax);
+    TRACE("(%p)->(%lx %lu %lu)\n", This, grfBSCF, ulProgress, ulProgressMax);
 
     if(!This->protocol_sink)
         return S_OK;
@@ -1331,7 +1333,7 @@ static HRESULT WINAPI BPInternetProtocolSink_ReportData(IInternetProtocolSink *i
     if(!do_direct_notif(This)) {
         report_data_task_t *task;
 
-        task = heap_alloc(sizeof(report_data_task_t));
+        task = malloc(sizeof(report_data_task_t));
         if(!task)
             return E_OUTOFMEMORY;
 
@@ -1361,8 +1363,8 @@ static void report_result_proc(BindProtocol *This, task_header_t *t)
 
     IInternetProtocolSink_ReportResult(This->protocol_sink_handler, task->hres, task->err, task->str);
 
-    heap_free(task->str);
-    heap_free(task);
+    free(task->str);
+    free(task);
 }
 
 static HRESULT WINAPI BPInternetProtocolSink_ReportResult(IInternetProtocolSink *iface,
@@ -1370,7 +1372,7 @@ static HRESULT WINAPI BPInternetProtocolSink_ReportResult(IInternetProtocolSink 
 {
     BindProtocol *This = impl_from_IInternetProtocolSink(iface);
 
-    TRACE("(%p)->(%08x %d %s)\n", This, hrResult, dwError, debugstr_w(szResult));
+    TRACE("(%p)->(%08lx %ld %s)\n", This, hrResult, dwError, debugstr_w(szResult));
 
     if(!This->protocol_sink)
         return E_FAIL;
@@ -1379,13 +1381,13 @@ static HRESULT WINAPI BPInternetProtocolSink_ReportResult(IInternetProtocolSink 
     if(!do_direct_notif(This)) {
         report_result_task_t *task;
 
-        task = heap_alloc(sizeof(report_result_task_t));
+        task = malloc(sizeof(report_result_task_t));
         if(!task)
             return E_OUTOFMEMORY;
 
         task->hres = hrResult;
         task->err = dwError;
-        task->str = heap_strdupW(szResult);
+        task->str = wcsdup(szResult);
 
         push_task(This, &task->header, report_result_proc);
         return S_OK;
@@ -1450,7 +1452,7 @@ static const IServiceProviderVtbl ServiceProviderVtbl = {
 
 HRESULT create_binding_protocol(BindProtocol **protocol)
 {
-    BindProtocol *ret = heap_alloc_zero(sizeof(BindProtocol));
+    BindProtocol *ret = calloc(1, sizeof(BindProtocol));
 
     ret->IInternetProtocolEx_iface.lpVtbl   = &BindProtocolVtbl;
     ret->IInternetBindInfo_iface.lpVtbl     = &InternetBindInfoVtbl;
@@ -1466,7 +1468,7 @@ HRESULT create_binding_protocol(BindProtocol **protocol)
     ret->notif_hwnd = get_notif_hwnd();
     ret->protocol_handler = &ret->default_protocol_handler.IInternetProtocol_iface;
     ret->protocol_sink_handler = &ret->default_protocol_handler.IInternetProtocolSink_iface;
-    InitializeCriticalSection(&ret->section);
+    InitializeCriticalSectionEx(&ret->section, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
     ret->section.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": BindProtocol.section");
 
     URLMON_LockModule();

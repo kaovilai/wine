@@ -90,7 +90,7 @@ HANDLE WINAPI SHMapHandle(HANDLE hShared, DWORD dwSrcProcId, DWORD dwDstProcId,
   DWORD dwMyProcId = GetCurrentProcessId();
   HANDLE hRet = NULL;
 
-  TRACE("(%p,%d,%d,%08x,%08x)\n", hShared, dwDstProcId, dwSrcProcId,
+  TRACE("(%p,%ld,%ld,%08lx,%08lx)\n", hShared, dwDstProcId, dwSrcProcId,
         dwAccess, dwOptions);
 
   if (!hShared)
@@ -160,7 +160,7 @@ HANDLE WINAPI SHAllocShared(LPCVOID lpvData, DWORD dwSize, DWORD dwProcId)
   LPVOID pMapped;
   HANDLE hRet = NULL;
 
-  TRACE("(%p,%d,%d)\n", lpvData, dwSize, dwProcId);
+  TRACE("(%p,%ld,%ld)\n", lpvData, dwSize, dwProcId);
 
   /* Create file mapping of the correct length */
   hMap = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, FILE_MAP_READ, 0,
@@ -207,7 +207,7 @@ PVOID WINAPI SHLockShared(HANDLE hShared, DWORD dwProcId)
   HANDLE hDup;
   LPVOID pMapped;
 
-  TRACE("(%p %d)\n", hShared, dwProcId);
+  TRACE("(%p %ld)\n", hShared, dwProcId);
 
   /* Get handle to shared memory for current process */
   hDup = SHMapHandle(hShared, dwProcId, GetCurrentProcessId(), FILE_MAP_ALL_ACCESS, 0);
@@ -258,7 +258,7 @@ BOOL WINAPI SHFreeShared(HANDLE hShared, DWORD dwProcId)
 {
   HANDLE hClose;
 
-  TRACE("(%p %d)\n", hShared, dwProcId);
+  TRACE("(%p %ld)\n", hShared, dwProcId);
 
   if (!hShared)
     return TRUE;
@@ -289,9 +289,7 @@ BOOL WINAPI SHFreeShared(HANDLE hShared, DWORD dwProcId)
  */
 HRESULT WINAPI RegisterDefaultAcceptHeaders(LPBC lpBC, IUnknown *lpUnknown)
 {
-  static const WCHAR szProperty[] = { '{','D','0','F','C','A','4','2','0',
-      '-','D','3','F','5','-','1','1','C','F', '-','B','2','1','1','-','0',
-      '0','A','A','0','0','4','A','E','8','3','7','}','\0' };
+  static const WCHAR szProperty[] = L"{D0FCA420-D3F5-11CF-B211-00AA004AE837}";
   BSTR property;
   IEnumFORMATETC* pIEnumFormatEtc = NULL;
   VARIANTARG var;
@@ -340,7 +338,7 @@ HRESULT WINAPI RegisterDefaultAcceptHeaders(LPBC lpBC, IUnknown *lpUnknown)
     dwNumValues = dwCount;
 
     /* Note: dwCount = number of items + 1; The extra item is the end node */
-    format = formatList = HeapAlloc(GetProcessHeap(), 0, dwCount * sizeof(FORMATETC));
+    format = formatList = malloc(dwCount * sizeof(FORMATETC));
     if (!formatList)
     {
       RegCloseKey(hDocs);
@@ -364,7 +362,7 @@ HRESULT WINAPI RegisterDefaultAcceptHeaders(LPBC lpBC, IUnknown *lpUnknown)
                               (PBYTE)szValueBuff, &dwValueSize);
         if (!dwRet)
         {
-          HeapFree(GetProcessHeap(), 0, formatList);
+          free(formatList);
           RegCloseKey(hDocs);
           hr = E_FAIL;
           goto exit;
@@ -392,7 +390,7 @@ HRESULT WINAPI RegisterDefaultAcceptHeaders(LPBC lpBC, IUnknown *lpUnknown)
 
     /* Create a clipboard enumerator */
     hr = CreateFormatEnumerator(dwNumValues, formatList, &pIEnumFormatEtc);
-    HeapFree(GetProcessHeap(), 0, formatList);
+    free(formatList);
     if (FAILED(hr)) goto exit;
 
     /* Set our enumerator as the browsers property */
@@ -491,13 +489,11 @@ INT WINAPI SHStringFromGUIDW(REFGUID guid, LPWSTR lpszDest, INT cchMax)
 {
   WCHAR xguid[40];
   INT iLen;
-  static const WCHAR wszFormat[] = {'{','%','0','8','l','X','-','%','0','4','X','-','%','0','4','X','-',
-      '%','0','2','X','%','0','2','X','-','%','0','2','X','%','0','2','X','%','0','2','X','%','0','2',
-      'X','%','0','2','X','%','0','2','X','}',0};
 
   TRACE("(%s,%p,%d)\n", debugstr_guid(guid), lpszDest, cchMax);
 
-  swprintf(xguid, ARRAY_SIZE(xguid), wszFormat, guid->Data1, guid->Data2, guid->Data3,
+  swprintf(xguid, ARRAY_SIZE(xguid), L"{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+          guid->Data1, guid->Data2, guid->Data3,
           guid->Data4[0], guid->Data4[1], guid->Data4[2], guid->Data4[3],
           guid->Data4[4], guid->Data4[5], guid->Data4[6], guid->Data4[7]);
 
@@ -535,7 +531,7 @@ BOOL WINAPI SHAboutInfoA(LPSTR lpszDest, DWORD dwDestLen)
 {
   WCHAR buff[2084];
 
-  TRACE("(%p,%d)\n", lpszDest, dwDestLen);
+  TRACE("(%p,%ld)\n", lpszDest, dwDestLen);
 
   if (lpszDest && SHAboutInfoW(buff, dwDestLen))
   {
@@ -552,36 +548,15 @@ BOOL WINAPI SHAboutInfoA(LPSTR lpszDest, DWORD dwDestLen)
  */
 BOOL WINAPI SHAboutInfoW(LPWSTR lpszDest, DWORD dwDestLen)
 {
-  static const WCHAR szIEKey[] = { 'S','O','F','T','W','A','R','E','\\',
-    'M','i','c','r','o','s','o','f','t','\\','I','n','t','e','r','n','e','t',
-    ' ','E','x','p','l','o','r','e','r','\0' };
-  static const WCHAR szWinNtKey[] = { 'S','O','F','T','W','A','R','E','\\',
-    'M','i','c','r','o','s','o','f','t','\\','W','i','n','d','o','w','s',' ',
-    'N','T','\\','C','u','r','r','e','n','t','V','e','r','s','i','o','n','\0' };
-  static const WCHAR szWinKey[] = { 'S','O','F','T','W','A','R','E','\\',
-    'M','i','c','r','o','s','o','f','t','\\','W','i','n','d','o','w','s','\\',
-    'C','u','r','r','e','n','t','V','e','r','s','i','o','n','\0' };
-  static const WCHAR szRegKey[] = { 'S','O','F','T','W','A','R','E','\\',
-    'M','i','c','r','o','s','o','f','t','\\','I','n','t','e','r','n','e','t',
-    ' ','E','x','p','l','o','r','e','r','\\',
-    'R','e','g','i','s','t','r','a','t','i','o','n','\0' };
-  static const WCHAR szVersion[] = { 'V','e','r','s','i','o','n','\0' };
-  static const WCHAR szCustomized[] = { 'C','u','s','t','o','m','i','z','e','d',
-    'V','e','r','s','i','o','n','\0' };
-  static const WCHAR szOwner[] = { 'R','e','g','i','s','t','e','r','e','d',
-    'O','w','n','e','r','\0' };
-  static const WCHAR szOrg[] = { 'R','e','g','i','s','t','e','r','e','d',
-    'O','r','g','a','n','i','z','a','t','i','o','n','\0' };
-  static const WCHAR szProduct[] = { 'P','r','o','d','u','c','t','I','d','\0' };
-  static const WCHAR szUpdate[] = { 'I','E','A','K',
-    'U','p','d','a','t','e','U','r','l','\0' };
-  static const WCHAR szHelp[] = { 'I','E','A','K',
-    'H','e','l','p','S','t','r','i','n','g','\0' };
+  static const WCHAR szIEKey[] = L"SOFTWARE\\Microsoft\\Internet Explorer";
+  static const WCHAR szWinNtKey[] = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+  static const WCHAR szWinKey[] = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion";
+  static const WCHAR szRegKey[] = L"SOFTWARE\\Microsoft\\Internet Explorer\\Registration";
   WCHAR buff[2084];
   HKEY hReg;
   DWORD dwType, dwLen;
 
-  TRACE("(%p,%d)\n", lpszDest, dwDestLen);
+  TRACE("(%p,%ld)\n", lpszDest, dwDestLen);
 
   if (!lpszDest)
     return FALSE;
@@ -596,25 +571,25 @@ BOOL WINAPI SHAboutInfoW(LPWSTR lpszDest, DWORD dwDestLen)
   /* OS Version */
   buff[0] = '\0';
   dwLen = 30;
-  if (!SHGetValueW(HKEY_LOCAL_MACHINE, szIEKey, szVersion, &dwType, buff, &dwLen))
+  if (!SHGetValueW(HKEY_LOCAL_MACHINE, szIEKey, L"Version", &dwType, buff, &dwLen))
   {
     DWORD dwStrLen = lstrlenW(buff);
     dwLen = 30 - dwStrLen;
     SHGetValueW(HKEY_LOCAL_MACHINE, szIEKey,
-                szCustomized, &dwType, buff+dwStrLen, &dwLen);
+                L"CustomizedVersion", &dwType, buff+dwStrLen, &dwLen);
   }
   StrCatBuffW(lpszDest, buff, dwDestLen);
 
   /* ~Registered Owner */
   buff[0] = '~';
   dwLen = 256;
-  if (SHGetValueW(hReg, szOwner, 0, &dwType, buff+1, &dwLen))
+  if (SHGetValueW(hReg, L"RegisteredOwner", 0, &dwType, buff+1, &dwLen))
     buff[1] = '\0';
   StrCatBuffW(lpszDest, buff, dwDestLen);
 
   /* ~Registered Organization */
   dwLen = 256;
-  if (SHGetValueW(hReg, szOrg, 0, &dwType, buff+1, &dwLen))
+  if (SHGetValueW(hReg, L"RegisteredOrganization", 0, &dwType, buff+1, &dwLen))
     buff[1] = '\0';
   StrCatBuffW(lpszDest, buff, dwDestLen);
 
@@ -626,19 +601,19 @@ BOOL WINAPI SHAboutInfoW(LPWSTR lpszDest, DWORD dwDestLen)
 
   /* ~Product Id */
   dwLen = 256;
-  if (SHGetValueW(HKEY_LOCAL_MACHINE, szRegKey, szProduct, &dwType, buff+1, &dwLen))
+  if (SHGetValueW(HKEY_LOCAL_MACHINE, szRegKey, L"ProductId", &dwType, buff+1, &dwLen))
     buff[1] = '\0';
   StrCatBuffW(lpszDest, buff, dwDestLen);
 
   /* ~IE Update Url */
   dwLen = 2048;
-  if(SHGetValueW(HKEY_LOCAL_MACHINE, szWinKey, szUpdate, &dwType, buff+1, &dwLen))
+  if(SHGetValueW(HKEY_LOCAL_MACHINE, szWinKey, L"IEAKUpdateUrl", &dwType, buff+1, &dwLen))
     buff[1] = '\0';
   StrCatBuffW(lpszDest, buff, dwDestLen);
 
   /* ~IE Help String */
   dwLen = 256;
-  if(SHGetValueW(hReg, szHelp, 0, &dwType, buff+1, &dwLen))
+  if(SHGetValueW(hReg, L"IEAKHelpString", 0, &dwType, buff+1, &dwLen))
     buff[1] = '\0';
   StrCatBuffW(lpszDest, buff, dwDestLen);
 
@@ -669,7 +644,7 @@ HRESULT WINAPI IUnknown_QueryStatus(IUnknown* lpUnknown, REFGUID pguidCmdGroup,
 {
   HRESULT hRet = E_FAIL;
 
-  TRACE("(%p,%p,%d,%p,%p)\n",lpUnknown, pguidCmdGroup, cCmds, prgCmds, pCmdText);
+  TRACE("(%p,%p,%ld,%p,%p)\n",lpUnknown, pguidCmdGroup, cCmds, prgCmds, pCmdText);
 
   if (lpUnknown)
   {
@@ -709,7 +684,7 @@ HRESULT WINAPI IUnknown_Exec(IUnknown* lpUnknown, REFGUID pguidCmdGroup,
 {
   HRESULT hRet = E_FAIL;
 
-  TRACE("(%p,%p,%d,%d,%p,%p)\n",lpUnknown, pguidCmdGroup, nCmdID,
+  TRACE("(%p,%p,%ld,%ld,%p,%p)\n",lpUnknown, pguidCmdGroup, nCmdID,
         nCmdexecopt, pvaIn, pvaOut);
 
   if (lpUnknown)
@@ -1095,7 +1070,7 @@ HRESULT WINAPI IUnknown_QueryServiceExec(IUnknown *lpUnknown, REFIID service,
     IOleCommandTarget *target;
     HRESULT hr;
 
-    TRACE("%p %s %s %d %08x %p %p\n", lpUnknown, debugstr_guid(service),
+    TRACE("%p %s %s %ld %08lx %p %p\n", lpUnknown, debugstr_guid(service),
         debugstr_guid(group), cmdId, cmdOpt, pIn, pOut);
 
     hr = iunknown_query_service(lpUnknown, service, &IID_IOleCommandTarget, (void**)&target);
@@ -1105,7 +1080,7 @@ HRESULT WINAPI IUnknown_QueryServiceExec(IUnknown *lpUnknown, REFIID service,
         IOleCommandTarget_Release(target);
     }
 
-    TRACE("<-- hr=0x%08x\n", hr);
+    TRACE("<-- hr=0x%08lx\n", hr);
 
     return hr;
 }
@@ -1259,7 +1234,7 @@ void WINAPI SHPropagateMessage(HWND hWnd, UINT uiMsgId, WPARAM wParam, LPARAM lP
 {
   enumWndData data;
 
-  TRACE("(%p,%u,%ld,%ld,%d)\n", hWnd, uiMsgId, wParam, lParam, bSend);
+  TRACE("(%p,%u,%Id,%Id,%d)\n", hWnd, uiMsgId, wParam, lParam, bSend);
 
   if(hWnd)
   {
@@ -1370,7 +1345,7 @@ BOOL WINAPI SHSimulateDrop(IDropTarget *pDrop, IDataObject *pDataObj,
   DWORD dwEffect = DROPEFFECT_LINK | DROPEFFECT_MOVE | DROPEFFECT_COPY;
   POINTL pt = { 0, 0 };
 
-  TRACE("%p %p 0x%08x %p %p\n", pDrop, pDataObj, grfKeyState, lpPt, pdwEffect);
+  TRACE("%p %p 0x%08lx %p %p\n", pDrop, pDataObj, grfKeyState, lpPt, pdwEffect);
 
   if (!lpPt)
     lpPt = &pt;
@@ -1439,7 +1414,7 @@ HRESULT WINAPI IUnknown_TranslateAcceleratorOCS(IUnknown *lpUnknown, LPMSG lpMsg
   IOleControlSite* lpCSite = NULL;
   HRESULT hRet = E_INVALIDARG;
 
-  TRACE("(%p,%p,0x%08x)\n", lpUnknown, lpMsg, dwModifiers);
+  TRACE("(%p,%p,0x%08lx)\n", lpUnknown, lpMsg, dwModifiers);
   if (lpUnknown)
   {
     hRet = IUnknown_QueryInterface(lpUnknown, &IID_IOleControlSite,
@@ -1721,7 +1696,7 @@ HRESULT WINAPI MayQSForward(IUnknown* lpUnknown, PVOID lpReserved,
                             REFGUID riidCmdGrp, ULONG cCmds,
                             OLECMD *prgCmds, OLECMDTEXT* pCmdText)
 {
-  FIXME("(%p,%p,%p,%d,%p,%p) - stub\n",
+  FIXME("(%p,%p,%p,%ld,%p,%p) - stub\n",
         lpUnknown, lpReserved, riidCmdGrp, cCmds, prgCmds, pCmdText);
 
   /* FIXME: Calls IsQSForward & IUnknown_QueryStatus */
@@ -1736,7 +1711,7 @@ HRESULT WINAPI MayExecForward(IUnknown* lpUnknown, INT iUnk, REFGUID pguidCmdGro
                            DWORD nCmdID, DWORD nCmdexecopt, VARIANT* pvaIn,
                            VARIANT* pvaOut)
 {
-  FIXME("(%p,%d,%p,%d,%d,%p,%p) - stub!\n", lpUnknown, iUnk, pguidCmdGroup,
+  FIXME("(%p,%d,%p,%ld,%ld,%p,%p) - stub!\n", lpUnknown, iUnk, pguidCmdGroup,
         nCmdID, nCmdexecopt, pvaIn, pvaOut);
   return DRAGDROP_E_NOTREGISTERED;
 }
@@ -1747,7 +1722,7 @@ HRESULT WINAPI MayExecForward(IUnknown* lpUnknown, INT iUnk, REFGUID pguidCmdGro
  */
 HRESULT WINAPI IsQSForward(REFGUID pguidCmdGroup,ULONG cCmds, OLECMD *prgCmds)
 {
-  FIXME("(%p,%d,%p) - stub!\n", pguidCmdGroup, cCmds, prgCmds);
+  FIXME("(%p,%ld,%p) - stub!\n", pguidCmdGroup, cCmds, prgCmds);
   return DRAGDROP_E_NOTREGISTERED;
 }
 
@@ -1799,7 +1774,7 @@ typedef struct
 BOOL WINAPI FDSA_Initialize(DWORD block_size, DWORD inc, FDSA_info *info, void *mem,
                             DWORD init_blocks)
 {
-    TRACE("(0x%08x 0x%08x %p %p 0x%08x)\n", block_size, inc, info, mem, init_blocks);
+    TRACE("(0x%08lx 0x%08lx %p %p 0x%08lx)\n", block_size, inc, info, mem, init_blocks);
 
     if(inc == 0)
         inc = 1;
@@ -1828,7 +1803,7 @@ BOOL WINAPI FDSA_Destroy(FDSA_info *info)
 
     if(info->flags & FDSA_FLAG_INTERNAL_ALLOC)
     {
-        HeapFree(GetProcessHeap(), 0, info->mem);
+        free(info->mem);
         return FALSE;
     }
 
@@ -1842,7 +1817,7 @@ BOOL WINAPI FDSA_Destroy(FDSA_info *info)
  */
 DWORD WINAPI FDSA_InsertItem(FDSA_info *info, DWORD where, const void *block)
 {
-    TRACE("(%p 0x%08x %p)\n", info, where, block);
+    TRACE("(%p 0x%08lx %p)\n", info, where, block);
     if(where > info->num_items)
         where = info->num_items;
 
@@ -1850,11 +1825,11 @@ DWORD WINAPI FDSA_InsertItem(FDSA_info *info, DWORD where, const void *block)
     {
         DWORD size = (info->blocks_alloced + info->inc) * info->block_size;
         if(info->flags & 0x1)
-            info->mem = HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, info->mem, size);
+            info->mem = _recalloc(info->mem, 1, size);
         else
         {
             void *old_mem = info->mem;
-            info->mem = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
+            info->mem = calloc(1, size);
             memcpy(info->mem, old_mem, info->blocks_alloced * info->block_size);
         }
         info->blocks_alloced += info->inc;
@@ -1880,7 +1855,7 @@ DWORD WINAPI FDSA_InsertItem(FDSA_info *info, DWORD where, const void *block)
  */
 BOOL WINAPI FDSA_DeleteItem(FDSA_info *info, DWORD where)
 {
-    TRACE("(%p 0x%08x)\n", info, where);
+    TRACE("(%p 0x%08lx)\n", info, where);
 
     if(where >= info->num_items)
         return FALSE;
@@ -2080,7 +2055,7 @@ HWND WINAPI SHCreateWorkerWindowA(WNDPROC wndProc, HWND hWndParent, DWORD dwExSt
   WNDCLASSA wc;
   HWND hWnd;
 
-  TRACE("(%p, %p, 0x%08x, 0x%08x, %p, 0x%08lx)\n",
+  TRACE("(%p, %p, 0x%08lx, 0x%08lx, %p, 0x%08Ix)\n",
          wndProc, hWndParent, dwExStyle, dwStyle, hMenu, wnd_extra);
 
   /* Create Window class */
@@ -2117,12 +2092,6 @@ typedef struct tagPOLICYDATA
 
 #define SHELL_NO_POLICY 0xffffffff
 
-/* default shell policy registry key */
-static const WCHAR strRegistryPolicyW[] = {'S','o','f','t','w','a','r','e','\\','M','i','c','r','o',
-                                      's','o','f','t','\\','W','i','n','d','o','w','s','\\',
-                                      'C','u','r','r','e','n','t','V','e','r','s','i','o','n',
-                                      '\\','P','o','l','i','c','i','e','s',0};
-
 /*************************************************************************
  * @                          [SHLWAPI.271]
  *
@@ -2142,7 +2111,7 @@ DWORD WINAPI SHGetRestriction(LPCWSTR lpSubKey, LPCWSTR lpSubName, LPCWSTR lpVal
 	HKEY hKey;
 
 	if (!lpSubKey)
-	  lpSubKey = strRegistryPolicyW;
+	  lpSubKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies";
 
 	retval = RegOpenKeyW(HKEY_LOCAL_MACHINE, lpSubKey, &hKey);
         if (retval != ERROR_SUCCESS)
@@ -2181,7 +2150,7 @@ DWORD WINAPI SHRestrictionLookup(
 	LPPOLICYDATA polTable,
 	LPDWORD polArr)
 {
-	TRACE("(0x%08x %s %p %p)\n", policy, debugstr_w(initial), polTable, polArr);
+	TRACE("(0x%08lx %s %p %p)\n", policy, debugstr_w(initial), polTable, polArr);
 
 	if (!polTable || !polArr)
 	  return 0;
@@ -2199,7 +2168,7 @@ DWORD WINAPI SHRestrictionLookup(
 	  }
 	}
 	/* we don't know this policy, return 0 */
-	TRACE("unknown policy: (%08x)\n", policy);
+	TRACE("unknown policy: (%08lx)\n", policy);
 	return 0;
 }
 
@@ -2232,7 +2201,7 @@ HRESULT WINAPI SHWeakQueryInterface(
             hret = IUnknown_QueryInterface(pInner, riid, ppv);
 	    if (SUCCEEDED(hret)) IUnknown_Release(pUnk);
 	}
-	TRACE("-- 0x%08x\n", hret);
+	TRACE("-- 0x%08lx\n", hret);
 	return hret;
 }
 
@@ -2303,13 +2272,13 @@ HWND WINAPI SHCreateWorkerWindowW(WNDPROC wndProc, HWND hWndParent, DWORD dwExSt
   WNDCLASSW wc;
   HWND hWnd;
 
-  TRACE("(%p, %p, 0x%08x, 0x%08x, %p, 0x%08lx)\n",
+  TRACE("(%p, %p, 0x%08lx, 0x%08lx, %p, 0x%08Ix)\n",
          wndProc, hWndParent, dwExStyle, dwStyle, hMenu, wnd_extra);
 
   /* If our OS is natively ANSI, use the ANSI version */
   if (GetVersion() & 0x80000000)  /* not NT */
   {
-    TRACE("fallback to ANSI, ver 0x%08x\n", GetVersion());
+    TRACE("fallback to ANSI, ver 0x%08lx\n", GetVersion());
     return SHCreateWorkerWindowA(wndProc, hWndParent, dwExStyle, dwStyle, hMenu, wnd_extra);
   }
 
@@ -2479,7 +2448,7 @@ HRESULT WINAPI IConnectionPoint_InvokeWithCancel( IConnectionPoint* iCP,
     IID iid;
     HRESULT result;
 
-    FIXME("(%p)->(0x%x %p %x %x) partial stub\n", iCP, dispId, dispParams, unknown1, unknown2);
+    FIXME("(%p)->(0x%lx %p %lx %lx) partial stub\n", iCP, dispId, dispParams, unknown1, unknown2);
 
     result = IConnectionPoint_GetConnectionInterface(iCP, &iid);
     if (SUCCEEDED(result))
@@ -2504,7 +2473,7 @@ HRESULT WINAPI IConnectionPoint_SimpleInvoke(
   IID iid;
   HRESULT result;
 
-  TRACE("(%p)->(0x%x %p)\n",iCP,dispId,dispParams);
+  TRACE("(%p)->(0x%lx %p)\n",iCP,dispId,dispParams);
 
   result = IConnectionPoint_GetConnectionInterface(iCP, &iid);
   if (SUCCEEDED(result))
@@ -2534,7 +2503,7 @@ HRESULT WINAPI IConnectionPoint_OnChanged(IConnectionPoint* lpCP, DISPID dispID)
   IEnumConnections *lpEnum;
   HRESULT hRet = E_NOINTERFACE;
 
-  TRACE("(%p,0x%8X)\n", lpCP, dispID);
+  TRACE("(%p,0x%8lX)\n", lpCP, dispID);
 
   /* Get an enumerator for the connections */
   if (lpCP)
@@ -2622,7 +2591,7 @@ HRESULT WINAPI IUnknown_CPContainerOnChanged(IUnknown *lpUnknown, DISPID dispID)
   IConnectionPointContainer* lpCPC = NULL;
   HRESULT hRet = E_NOINTERFACE;
 
-  TRACE("(%p,0x%8X)\n", lpUnknown, dispID);
+  TRACE("(%p,0x%8lX)\n", lpUnknown, dispID);
 
   if (lpUnknown)
     hRet = IUnknown_QueryInterface(lpUnknown, &IID_IConnectionPointContainer, (void**)&lpCPC);
@@ -2672,13 +2641,13 @@ DWORD WINAPI SHGetIniStringW(LPCWSTR appName, LPCWSTR keyName, LPWSTR out,
     INT ret;
     WCHAR *buf;
 
-    TRACE("(%s,%s,%p,%08x,%s)\n", debugstr_w(appName), debugstr_w(keyName),
+    TRACE("(%s,%s,%p,%08lx,%s)\n", debugstr_w(appName), debugstr_w(keyName),
         out, outLen, debugstr_w(filename));
 
     if(outLen == 0)
         return 0;
 
-    buf = HeapAlloc(GetProcessHeap(), 0, outLen * sizeof(WCHAR));
+    buf = malloc(outLen * sizeof(WCHAR));
     if(!buf){
         *out = 0;
         return 0;
@@ -2690,7 +2659,7 @@ DWORD WINAPI SHGetIniStringW(LPCWSTR appName, LPCWSTR keyName, LPWSTR out,
     else
         *out = 0;
 
-    HeapFree(GetProcessHeap(), 0, buf);
+    free(buf);
 
     return lstrlenW(out);
 }
@@ -2915,7 +2884,7 @@ HRESULT WINAPI SHInvokeCommand(HWND hWnd, IShellFolder* lpFolder, LPCITEMIDLIST 
   IContextMenu *iContext;
   HRESULT hRet;
 
-  TRACE("(%p, %p, %p, %u)\n", hWnd, lpFolder, lpApidl, dwCommandId);
+  TRACE("(%p, %p, %p, %lu)\n", hWnd, lpFolder, lpApidl, dwCommandId);
 
   if (!lpFolder)
     return E_FAIL;
@@ -3008,7 +2977,7 @@ HMODULE WINAPI MLLoadLibraryA(LPCSTR new_mod, HMODULE inst_hwnd, DWORD dwCrossCo
     LPSTR ptr;
     DWORD len;
 
-    FIXME("(%s,%p,%d) semi-stub!\n", debugstr_a(new_mod), inst_hwnd, dwCrossCodePage);
+    FIXME("(%s,%p,%ld) semi-stub!\n", debugstr_a(new_mod), inst_hwnd, dwCrossCodePage);
     len = GetModuleFileNameA(inst_hwnd, mod_path, sizeof(mod_path));
     if (!len || len >= sizeof(mod_path)) return NULL;
 
@@ -3032,7 +3001,7 @@ HMODULE WINAPI MLLoadLibraryW(LPCWSTR new_mod, HMODULE inst_hwnd, DWORD dwCrossC
     LPWSTR ptr;
     DWORD len;
 
-    FIXME("(%s,%p,%d) semi-stub!\n", debugstr_w(new_mod), inst_hwnd, dwCrossCodePage);
+    FIXME("(%s,%p,%ld) semi-stub!\n", debugstr_w(new_mod), inst_hwnd, dwCrossCodePage);
     len = GetModuleFileNameW(inst_hwnd, mod_path, ARRAY_SIZE(mod_path));
     if (!len || len >= ARRAY_SIZE(mod_path)) return NULL;
 
@@ -3060,7 +3029,7 @@ HMODULE WINAPI MLLoadLibraryW(LPCWSTR new_mod, HMODULE inst_hwnd, DWORD dwCrossC
  */
 COLORREF WINAPI ColorAdjustLuma(COLORREF cRGB, int dwLuma, BOOL bUnknown)
 {
-  TRACE("(0x%8x,%d,%d)\n", cRGB, dwLuma, bUnknown);
+  TRACE("(0x%8lx,%d,%d)\n", cRGB, dwLuma, bUnknown);
 
   if (dwLuma)
   {
@@ -3234,7 +3203,7 @@ DWORD WINAPI SHGetMachineInfo(DWORD dwFlags)
 {
   HW_PROFILE_INFOA hwInfo;
 
-  TRACE("(0x%08x)\n", dwFlags);
+  TRACE("(0x%08lx)\n", dwFlags);
 
   GetCurrentHwProfileA(&hwInfo);
   switch (hwInfo.dwDockInfo & (DOCKINFO_DOCKED|DOCKINFO_UNDOCKED))
@@ -3254,7 +3223,7 @@ DWORD WINAPI SHGetMachineInfo(DWORD dwFlags)
 DWORD WINAPI SHWinHelpOnDemandW(HWND hwnd, LPCWSTR helpfile, DWORD flags1, VOID *ptr1, DWORD flags2)
 {
 
-    FIXME("(%p, %s, 0x%x, %p, %d)\n", hwnd, debugstr_w(helpfile), flags1, ptr1, flags2);
+    FIXME("(%p, %s, 0x%lx, %p, %ld)\n", hwnd, debugstr_w(helpfile), flags1, ptr1, flags2);
     return 0;
 }
 
@@ -3265,7 +3234,7 @@ DWORD WINAPI SHWinHelpOnDemandW(HWND hwnd, LPCWSTR helpfile, DWORD flags1, VOID 
 DWORD WINAPI SHWinHelpOnDemandA(HWND hwnd, LPCSTR helpfile, DWORD flags1, VOID *ptr1, DWORD flags2)
 {
 
-    FIXME("(%p, %s, 0x%x, %p, %d)\n", hwnd, debugstr_a(helpfile), flags1, ptr1, flags2);
+    FIXME("(%p, %s, 0x%lx, %p, %ld)\n", hwnd, debugstr_a(helpfile), flags1, ptr1, flags2);
     return 0;
 }
 
@@ -3322,7 +3291,7 @@ DWORD WINAPI MLSetMLHInstance(HINSTANCE hInst, HANDLE hHeap)
  */
 DWORD WINAPI MLClearMLHInstance(DWORD x)
 {
-	FIXME("(0x%08x)stub\n", x);
+	FIXME("(0x%08lx)stub\n", x);
 	return 0xabba1247;
 }
 
@@ -3468,7 +3437,7 @@ VOID WINAPI ColorRGBToHLS(COLORREF cRGB, LPWORD pwHue,
 {
   int wR, wG, wB, wMax, wMin, wHue, wLuminosity, wSaturation;
 
-  TRACE("(%08x,%p,%p,%p)\n", cRGB, pwHue, pwLuminance, pwSaturation);
+  TRACE("(%08lx,%p,%p,%p)\n", cRGB, pwHue, pwLuminance, pwSaturation);
 
   wR = GetRValue(cRGB);
   wG = GetGValue(cRGB);
@@ -3560,7 +3529,7 @@ HRESULT WINAPI SHGetInverseCMAP(LPDWORD dest, DWORD dwSize)
 	*dest = (DWORD)0xabba1249;
 	return 0;
     }
-    FIXME("(%p, %#x) stub\n", dest, dwSize);
+    FIXME("(%p, %#lx) stub\n", dest, dwSize);
     return 0;
 }
 
@@ -3630,7 +3599,7 @@ VOID WINAPI FixSlashesAndColonW(LPWSTR lpwstr)
  */
 DWORD WINAPI SHGetAppCompatFlags(DWORD dwUnknown)
 {
-  FIXME("(0x%08x) stub\n", dwUnknown);
+  FIXME("(0x%08lx) stub\n", dwUnknown);
   return 0;
 }
 
@@ -3660,8 +3629,7 @@ HRESULT WINAPI SHCoCreateInstanceAC(REFCLSID rclsid, LPUNKNOWN pUnkOuter,
  */
 BOOL WINAPI SHSkipJunction(IBindCtx *pbc, const CLSID *pclsid)
 {
-  static WCHAR szSkipBinding[] = { 'S','k','i','p',' ',
-    'B','i','n','d','i','n','g',' ','C','L','S','I','D','\0' };
+  static WCHAR szSkipBinding[] = L"Skip Binding CLSID";
   BOOL bRet = FALSE;
 
   if (pbc)
@@ -3729,7 +3697,7 @@ HKEY WINAPI SHGetShellKey(DWORD flags, LPCWSTR sub_key, BOOL create)
     int size_key, size_subkey, size_user;
     HKEY hkey = NULL;
 
-    TRACE("(0x%08x, %s, %d)\n", flags, debugstr_w(sub_key), create);
+    TRACE("(0x%08lx, %s, %d)\n", flags, debugstr_w(sub_key), create);
 
     /* For compatibility with Vista+ */
     if(flags == 0x1ffff)
@@ -3753,7 +3721,7 @@ HKEY WINAPI SHGetShellKey(DWORD flags, LPCWSTR sub_key, BOOL create)
         size_key = sizeof(classesW);
         break;
     default:
-        FIXME("unsupported flags (0x%08x)\n", flags);
+        FIXME("unsupported flags (0x%08lx)\n", flags);
         return NULL;
     }
 
@@ -3787,7 +3755,7 @@ HKEY WINAPI SHGetShellKey(DWORD flags, LPCWSTR sub_key, BOOL create)
         size_subkey = sizeof(file_extsW);
         break;
     default:
-        FIXME("unsupported flags (0x%08x)\n", flags);
+        FIXME("unsupported flags (0x%08lx)\n", flags);
         return NULL;
     }
 
@@ -3796,7 +3764,7 @@ HKEY WINAPI SHGetShellKey(DWORD flags, LPCWSTR sub_key, BOOL create)
     else
         size_user = 0;
 
-    path = HeapAlloc(GetProcessHeap(), 0, size_key+size_subkey+size_user+sizeof(WCHAR));
+    path = malloc(size_key + size_subkey + size_user + sizeof(WCHAR));
     if(!path) {
         ERR("Out of memory\n");
         return NULL;
@@ -3816,7 +3784,7 @@ HKEY WINAPI SHGetShellKey(DWORD flags, LPCWSTR sub_key, BOOL create)
         RegOpenKeyExW((flags&0xf)==SHKEY_Root_HKLM?HKEY_LOCAL_MACHINE:HKEY_CURRENT_USER,
                 path, 0, MAXIMUM_ALLOWED, &hkey);
 
-    HeapFree(GetProcessHeap(), 0, path);
+    free(path);
     return hkey;
 }
 
@@ -3827,7 +3795,7 @@ BOOL WINAPI SHQueueUserWorkItem(LPTHREAD_START_ROUTINE pfnCallback,
         LPVOID pContext, LONG lPriority, DWORD_PTR dwTag,
         DWORD_PTR *pdwId, LPCSTR pszModule, DWORD dwFlags)
 {
-    TRACE("(%p, %p, %d, %lx, %p, %s, %08x)\n", pfnCallback, pContext,
+    TRACE("(%p, %p, %ld, %Ix, %p, %s, %08lx)\n", pfnCallback, pContext,
           lPriority, dwTag, pdwId, debugstr_a(pszModule), dwFlags);
 
     if(lPriority || dwTag || pdwId || pszModule || dwFlags)
@@ -3894,7 +3862,7 @@ HRESULT WINAPI SKAllocValueW(DWORD flags, LPCWSTR subkey, LPCWSTR value, DWORD *
     DWORD ret, size;
     HKEY hkey;
 
-    TRACE("(0x%x, %s, %s, %p, %p, %p)\n", flags, debugstr_w(subkey),
+    TRACE("(0x%lx, %s, %s, %p, %p, %p)\n", flags, debugstr_w(subkey),
         debugstr_w(value), type, data, count);
 
     hkey = SHGetShellKey(flags, subkey, FALSE);
@@ -3930,7 +3898,7 @@ HRESULT WINAPI SKDeleteValueW(DWORD flags, LPCWSTR subkey, LPCWSTR value)
     DWORD ret;
     HKEY hkey;
 
-    TRACE("(0x%x, %s %s)\n", flags, debugstr_w(subkey), debugstr_w(value));
+    TRACE("(0x%lx, %s %s)\n", flags, debugstr_w(subkey), debugstr_w(value));
 
     hkey = SHGetShellKey(flags, subkey, FALSE);
     if (!hkey)
@@ -3951,7 +3919,7 @@ HRESULT WINAPI SKGetValueW(DWORD flags, LPCWSTR subkey, LPCWSTR value, DWORD *ty
     DWORD ret;
     HKEY hkey;
 
-    TRACE("(0x%x, %s, %s, %p, %p, %p)\n", flags, debugstr_w(subkey),
+    TRACE("(0x%lx, %s, %s, %p, %p, %p)\n", flags, debugstr_w(subkey),
         debugstr_w(value), type, data, count);
 
     hkey = SHGetShellKey(flags, subkey, FALSE);
@@ -3973,7 +3941,7 @@ HRESULT WINAPI SKSetValueW(DWORD flags, LPCWSTR subkey, LPCWSTR value,
     DWORD ret;
     HKEY hkey;
 
-    TRACE("(0x%x, %s, %s, %x, %p, %d)\n", flags, debugstr_w(subkey),
+    TRACE("(0x%lx, %s, %s, %lx, %p, %ld)\n", flags, debugstr_w(subkey),
             debugstr_w(value), type, data, count);
 
     hkey = SHGetShellKey(flags, subkey, TRUE);
@@ -4050,7 +4018,7 @@ INT WINAPIV ShellMessageBoxWrapW(HINSTANCE hInstance, HWND hWnd, LPCWSTR lpText,
 
         if (len)
         {
-            szText = HeapAlloc(GetProcessHeap(), 0, (len + 1) * sizeof(WCHAR));
+            szText = malloc((len + 1) * sizeof(WCHAR));
             if (szText) LoadStringW(hInstance, LOWORD(lpText), szText, len + 1);
         }
         pszText = szText;
@@ -4070,7 +4038,7 @@ INT WINAPIV ShellMessageBoxWrapW(HINSTANCE hInstance, HWND hWnd, LPCWSTR lpText,
 
     ret = MessageBoxW(hWnd, pszTemp, pszTitle, uType);
 
-    HeapFree(GetProcessHeap(), 0, szText);
+    free(szText);
     LocalFree(pszTemp);
     return ret;
 }
@@ -4138,7 +4106,7 @@ PSECURITY_DESCRIPTOR WINAPI GetShellSecurityDescriptor(const PSHELL_USER_PERMISS
     if (apUserPerm == NULL || cUserPerm <= 0)
         return NULL;
 
-    sidlist = HeapAlloc(GetProcessHeap(), 0, cUserPerm * sizeof(PSID));
+    sidlist = malloc(cUserPerm * sizeof(PSID));
     if (!sidlist)
         return NULL;
 
@@ -4235,7 +4203,7 @@ free_sids:
         if (!cur_user || sidlist[i] != cur_user)
             FreeSid(sidlist[i]);
     }
-    HeapFree(GetProcessHeap(), 0, sidlist);
+    free(sidlist);
 
     return psd;
 }
@@ -4260,7 +4228,7 @@ free_sids:
 HRESULT WINAPI SHCreatePropertyBagOnRegKey (HKEY hKey, LPCWSTR subkey,
     DWORD grfMode, REFIID riid, void **ppv)
 {
-    FIXME("%p %s %d %s %p STUB\n", hKey, debugstr_w(subkey), grfMode,
+    FIXME("%p %s %ld %s %p STUB\n", hKey, debugstr_w(subkey), grfMode,
           debugstr_guid(riid), ppv);
 
     return E_NOTIMPL;
@@ -4282,13 +4250,12 @@ HRESULT WINAPI SHCreatePropertyBagOnRegKey (HKEY hKey, LPCWSTR subkey,
  *  failure: 0
  *
  */
-INT WINAPI SHFormatDateTimeW(const FILETIME UNALIGNED *fileTime, DWORD *flags,
+INT WINAPI SHFormatDateTimeW(const FILETIME *fileTime, DWORD *flags,
     LPWSTR buf, UINT size)
 {
 #define SHFORMATDT_UNSUPPORTED_FLAGS (FDTF_RELATIVE | FDTF_LTRDATE | FDTF_RTLDATE | FDTF_NOAUTOREADINGORDER)
     DWORD fmt_flags = flags ? *flags : FDTF_DEFAULT;
     SYSTEMTIME st;
-    FILETIME ft;
     INT ret = 0;
 
     TRACE("%p %p %p %u\n", fileTime, flags, buf, size);
@@ -4297,17 +4264,14 @@ INT WINAPI SHFormatDateTimeW(const FILETIME UNALIGNED *fileTime, DWORD *flags,
         return 0;
 
     if (fmt_flags & SHFORMATDT_UNSUPPORTED_FLAGS)
-        FIXME("ignoring some flags - 0x%08x\n", fmt_flags & SHFORMATDT_UNSUPPORTED_FLAGS);
+        FIXME("ignoring some flags - 0x%08lx\n", fmt_flags & SHFORMATDT_UNSUPPORTED_FLAGS);
 
-    FileTimeToLocalFileTime(fileTime, &ft);
-    FileTimeToSystemTime(&ft, &st);
+    FileTimeToSystemTime(fileTime, &st);
+    SystemTimeToTzSpecificLocalTime(NULL, &st, &st);
 
     /* first of all date */
     if (fmt_flags & (FDTF_LONGDATE | FDTF_SHORTDATE))
     {
-        static const WCHAR sep1[] = {',',' ',0};
-        static const WCHAR sep2[] = {' ',0};
-
         DWORD date = fmt_flags & FDTF_LONGDATE ? DATE_LONGDATE : DATE_SHORTDATE;
         ret = GetDateFormatW(LOCALE_USER_DEFAULT, date, &st, NULL, buf, size);
         if (ret >= size) return ret;
@@ -4317,12 +4281,12 @@ INT WINAPI SHFormatDateTimeW(const FILETIME UNALIGNED *fileTime, DWORD *flags,
         {
             if ((fmt_flags & FDTF_LONGDATE) && (ret < size + 2))
             {
-                lstrcatW(&buf[ret-1], sep1);
+                lstrcatW(&buf[ret-1], L", ");
                 ret += 2;
             }
             else
             {
-                lstrcatW(&buf[ret-1], sep2);
+                lstrcatW(&buf[ret-1], L" ");
                 ret++;
             }
         }
@@ -4347,7 +4311,7 @@ INT WINAPI SHFormatDateTimeW(const FILETIME UNALIGNED *fileTime, DWORD *flags,
  * See SHFormatDateTimeW.
  *
  */
-INT WINAPI SHFormatDateTimeA(const FILETIME UNALIGNED *fileTime, DWORD *flags,
+INT WINAPI SHFormatDateTimeA(const FILETIME *fileTime, DWORD *flags,
     LPSTR buf, UINT size)
 {
     WCHAR *bufW;
@@ -4356,13 +4320,13 @@ INT WINAPI SHFormatDateTimeA(const FILETIME UNALIGNED *fileTime, DWORD *flags,
     if (!buf || !size)
         return 0;
 
-    bufW = HeapAlloc(GetProcessHeap(), 0, sizeof(WCHAR) * size);
+    bufW = malloc(sizeof(WCHAR) * size);
     retval = SHFormatDateTimeW(fileTime, flags, bufW, size);
 
     if (retval != 0)
         retval = WideCharToMultiByte(CP_ACP, 0, bufW, -1, buf, size, NULL, NULL);
 
-    HeapFree(GetProcessHeap(), 0, bufW);
+    free(bufW);
     return retval;
 }
 
@@ -4385,7 +4349,7 @@ INT WINAPI ZoneCheckUrlExW(LPWSTR szURL, PVOID pUnknown, DWORD dwUnknown2,
     DWORD dwUnknown3, DWORD dwUnknown4, DWORD dwUnknown5, DWORD dwUnknown6,
     DWORD dwUnknown7)
 {
-    FIXME("(%s,%p,%x,%x,%x,%x,%x,%x) STUB\n", debugstr_w(szURL), pUnknown, dwUnknown2,
+    FIXME("(%s,%p,%lx,%lx,%lx,%lx,%lx,%lx) STUB\n", debugstr_w(szURL), pUnknown, dwUnknown2,
         dwUnknown3, dwUnknown4, dwUnknown5, dwUnknown6, dwUnknown7);
 
     return 0;
@@ -4406,7 +4370,7 @@ INT WINAPI ZoneCheckUrlExW(LPWSTR szURL, PVOID pUnknown, DWORD dwUnknown2,
  */
 INT WINAPI SHVerbExistsNA(LPSTR verb, PVOID pUnknown, PVOID pUnknown2, DWORD dwUnknown3)
 {
-    FIXME("(%s, %p, %p, %i) STUB\n",verb, pUnknown, pUnknown2, dwUnknown3);
+    FIXME("(%s, %p, %p, %li) STUB\n",verb, pUnknown, pUnknown2, dwUnknown3);
     return 0;
 }
 
@@ -4488,34 +4452,23 @@ struct objcompat_entry {
 };
 
 /* expected to be sorted by name */
+#define OBJCOMPAT_ENTRY(name) { L""#name, OBJCOMPAT_##name }
 static const struct objcompat_entry objcompat_table[] = {
-    { {'C','O','C','R','E','A','T','E','S','H','E','L','L','F','O','L','D','E','R','O','N','L','Y',0},
-      OBJCOMPAT_COCREATESHELLFOLDERONLY },
-    { {'C','T','X','M','E','N','U','_','L','I','M','I','T','E','D','Q','I',0},
-      OBJCOMPAT_CTXMENU_LIMITEDQI },
-    { {'C','T','X','M','E','N','U','_','N','O','V','E','R','B','S',0},
-      OBJCOMPAT_CTXMENU_LIMITEDQI },
-    { {'C','T','X','M','E','N','U','_','X','P','Q','C','M','F','L','A','G','S',0},
-      OBJCOMPAT_CTXMENU_XPQCMFLAGS },
-    { {'N','E','E','D','S','F','I','L','E','S','Y','S','A','N','C','E','S','T','O','R',0},
-      OBJCOMPAT_NEEDSFILESYSANCESTOR },
-    { {'N','E','E','D','S','S','T','O','R','A','G','E','A','N','C','E','S','T','O','R',0},
-      OBJCOMPAT_NEEDSSTORAGEANCESTOR },
-    { {'N','O','I','P','R','O','P','E','R','T','Y','S','T','O','R','E',0},
-      OBJCOMPAT_NOIPROPERTYSTORE },
-    { {'N','O','L','E','G','A','C','Y','W','E','B','V','I','E','W',0},
-      OBJCOMPAT_NOLEGACYWEBVIEW },
-    { {'N','O','T','A','F','I','L','E','S','Y','S','T','E','M',0},
-      OBJCOMPAT_NOTAFILESYSTEM },
-    { {'N','O','_','W','E','B','V','I','E','W',0},
-      OBJCOMPAT_NO_WEBVIEW },
-    { {'O','T','N','E','E','D','S','S','F','C','A','C','H','E',0},
-      OBJCOMPAT_OTNEEDSSFCACHE },
-    { {'P','I','N','D','L','L',0},
-      OBJCOMPAT_PINDLL },
-    { {'U','N','B','I','N','D','A','B','L','E',0},
-      OBJCOMPAT_UNBINDABLE }
+    OBJCOMPAT_ENTRY(COCREATESHELLFOLDERONLY),
+    OBJCOMPAT_ENTRY(CTXMENU_LIMITEDQI),
+    OBJCOMPAT_ENTRY(CTXMENU_NOVERBS),
+    OBJCOMPAT_ENTRY(CTXMENU_XPQCMFLAGS),
+    OBJCOMPAT_ENTRY(NEEDSFILESYSANCESTOR),
+    OBJCOMPAT_ENTRY(NEEDSSTORAGEANCESTOR),
+    OBJCOMPAT_ENTRY(NOIPROPERTYSTORE),
+    OBJCOMPAT_ENTRY(NOLEGACYWEBVIEW),
+    OBJCOMPAT_ENTRY(NOTAFILESYSTEM),
+    OBJCOMPAT_ENTRY(NO_WEBVIEW),
+    OBJCOMPAT_ENTRY(OTNEEDSSFCACHE),
+    OBJCOMPAT_ENTRY(PINDLL),
+    OBJCOMPAT_ENTRY(UNBINDABLE),
 };
+#undef OBJCOMPAT_ENTRY
 
 /**************************************************************************
  *  SHGetObjectCompatFlags (SHLWAPI.476)
@@ -4533,10 +4486,7 @@ static const struct objcompat_entry objcompat_table[] = {
 DWORD WINAPI SHGetObjectCompatFlags(IUnknown *pUnk, const CLSID *clsid)
 {
     static const WCHAR compatpathW[] =
-        {'S','o','f','t','w','a','r','e','\\','M','i','c','r','o','s','o','f','t','\\',
-         'W','i','n','d','o','w','s','\\','C','u','r','r','e','n','t','V','e','r','s','i','o','n','\\',
-         'S','h','e','l','l','C','o','m','p','a','t','i','b','i','l','i','t','y','\\',
-         'O','b','j','e','c','t','s','\\','%','s',0};
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\ShellCompatibility\\Objects\\%s";
     WCHAR strW[ARRAY_SIZE(compatpathW) + 38 /* { CLSID } */];
     DWORD ret, length = ARRAY_SIZE(strW);
     OLECHAR *clsid_str;

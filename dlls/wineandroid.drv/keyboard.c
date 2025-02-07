@@ -26,13 +26,13 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#define NONAMELESSUNION
-#define NONAMELESSSTRUCT
+#if 0
+#pragma makedep unix
+#endif
 
 #include "config.h"
 
 #include "android.h"
-#include "wine/unicode.h"
 #include "wine/server.h"
 #include "wine/debug.h"
 
@@ -654,33 +654,18 @@ static const char* vkey_to_name( UINT vkey )
     return NULL;
 }
 
-static BOOL get_async_key_state( BYTE state[256] )
-{
-    BOOL ret;
-
-    SERVER_START_REQ( get_key_state )
-    {
-        req->async = 1;
-        req->key = -1;
-        wine_server_set_reply( req, state, 256 );
-        ret = !wine_server_call( req );
-    }
-    SERVER_END_REQ;
-    return ret;
-}
-
 static void send_keyboard_input( HWND hwnd, WORD vkey, WORD scan, DWORD flags )
 {
     INPUT input;
 
-    input.type             = INPUT_KEYBOARD;
-    input.u.ki.wVk         = vkey;
-    input.u.ki.wScan       = scan;
-    input.u.ki.dwFlags     = flags;
-    input.u.ki.time        = 0;
-    input.u.ki.dwExtraInfo = 0;
+    input.type           = INPUT_KEYBOARD;
+    input.ki.wVk         = vkey;
+    input.ki.wScan       = scan;
+    input.ki.dwFlags     = flags;
+    input.ki.time        = 0;
+    input.ki.dwExtraInfo = 0;
 
-    __wine_send_input( hwnd, &input, NULL );
+    NtUserSendHardwareInput( hwnd, 0, &input, 0 );
 }
 
 /***********************************************************************
@@ -690,7 +675,7 @@ void update_keyboard_lock_state( WORD vkey, UINT state )
 {
     BYTE keystate[256];
 
-    if (!get_async_key_state( keystate )) return;
+    if (!NtUserGetAsyncKeyboardState( keystate )) return;
 
     if (!(keystate[VK_CAPITAL] & 0x01) != !(state & AMETA_CAPS_LOCK_ON) && vkey != VK_CAPITAL)
     {
@@ -733,18 +718,18 @@ jboolean keyboard_event( JNIEnv *env, jobject obj, jint win, jint action, jint k
     }
     data.type = KEYBOARD_EVENT;
     data.kbd.hwnd = LongToHandle( win );
-    data.kbd.lock_state             = state;
-    data.kbd.input.type             = INPUT_KEYBOARD;
-    data.kbd.input.u.ki.wVk         = keycode_to_vkey[keycode];
-    data.kbd.input.u.ki.wScan       = vkey_to_scancode[data.kbd.input.u.ki.wVk];
-    data.kbd.input.u.ki.time        = 0;
-    data.kbd.input.u.ki.dwExtraInfo = 0;
-    data.kbd.input.u.ki.dwFlags     = (data.kbd.input.u.ki.wScan & 0x100) ? KEYEVENTF_EXTENDEDKEY : 0;
-    if (action == AKEY_EVENT_ACTION_UP) data.kbd.input.u.ki.dwFlags |= KEYEVENTF_KEYUP;
+    data.kbd.lock_state           = state;
+    data.kbd.input.type           = INPUT_KEYBOARD;
+    data.kbd.input.ki.wVk         = keycode_to_vkey[keycode];
+    data.kbd.input.ki.wScan       = vkey_to_scancode[data.kbd.input.ki.wVk];
+    data.kbd.input.ki.time        = 0;
+    data.kbd.input.ki.dwExtraInfo = 0;
+    data.kbd.input.ki.dwFlags     = (data.kbd.input.ki.wScan & 0x100) ? KEYEVENTF_EXTENDEDKEY : 0;
+    if (action == AKEY_EVENT_ACTION_UP) data.kbd.input.ki.dwFlags |= KEYEVENTF_KEYUP;
 
     p__android_log_print( ANDROID_LOG_INFO, "wine",
                           "keyboard_event: win %x code %u vkey %x scan %x meta %x",
-                          win, keycode, data.kbd.input.u.ki.wVk, data.kbd.input.u.ki.wScan, state );
+                          win, keycode, data.kbd.input.ki.wVk, data.kbd.input.ki.wScan, state );
     send_event( &data );
     return JNI_TRUE;
 }
@@ -753,11 +738,12 @@ jboolean keyboard_event( JNIEnv *env, jobject obj, jint win, jint action, jint k
 /***********************************************************************
  *           ANDROID_GetKeyNameText
  */
-INT CDECL ANDROID_GetKeyNameText( LONG lparam, LPWSTR buffer, INT size )
+INT ANDROID_GetKeyNameText( LONG lparam, LPWSTR buffer, INT size )
 {
-    int scancode, vkey, len;
+    int scancode, vkey;
     const char *name;
     char key[2];
+    DWORD len;
 
     scancode = (lparam >> 16) & 0x1FF;
     vkey = scancode_to_vkey( scancode );
@@ -795,17 +781,20 @@ INT CDECL ANDROID_GetKeyNameText( LONG lparam, LPWSTR buffer, INT size )
         name = vkey_to_name( vkey );
     }
 
-    len = MultiByteToWideChar( CP_UTF8, 0, name, -1, buffer, size );
+    RtlUTF8ToUnicodeN( buffer, size * sizeof(WCHAR), &len, name, strlen( name ) + 1 );
+    len /= sizeof(WCHAR);
     if (len) len--;
 
     if (!len)
     {
-        static const WCHAR format[] = {'K','e','y',' ','0','x','%','0','2','x',0};
-        snprintfW( buffer, size, format, vkey );
-        len = strlenW( buffer );
+        char name[16];
+        len = sprintf( name, "Key 0x%02x", vkey );
+        len = min( len + 1, size );
+        ascii_to_unicode( buffer, name, len );
+        if (len) buffer[--len] = 0;
     }
 
-    TRACE( "lparam 0x%08x -> %s\n", lparam, debugstr_w( buffer ));
+    TRACE( "lparam 0x%08x -> %s\n", (int)lparam, debugstr_w( buffer ));
     return len;
 }
 
@@ -813,7 +802,7 @@ INT CDECL ANDROID_GetKeyNameText( LONG lparam, LPWSTR buffer, INT size )
 /***********************************************************************
  *           ANDROID_MapVirtualKeyEx
  */
-UINT CDECL ANDROID_MapVirtualKeyEx( UINT code, UINT maptype, HKL hkl )
+UINT ANDROID_MapVirtualKeyEx( UINT code, UINT maptype, HKL hkl )
 {
     UINT ret = 0;
     const char *s;
@@ -881,7 +870,7 @@ UINT CDECL ANDROID_MapVirtualKeyEx( UINT code, UINT maptype, HKL hkl )
 /***********************************************************************
  *           ANDROID_VkKeyScanEx
  */
-SHORT CDECL ANDROID_VkKeyScanEx( WCHAR ch, HKL hkl )
+SHORT ANDROID_VkKeyScanEx( WCHAR ch, HKL hkl )
 {
     SHORT ret = -1;
     if (ch < ARRAY_SIZE( char_vkey_map )) ret = char_vkey_map[ch];

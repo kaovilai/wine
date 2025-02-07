@@ -23,11 +23,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <capstone/capstone.h>
 
 #include "debugger.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(winedbg);
+
+cs_opt_mem cs_mem =
+{
+    .malloc = malloc,
+    .calloc = calloc,
+    .realloc = realloc,
+    .free = free,
+    .vsnprintf = vsnprintf,
+};
 
 void* be_cpu_linearize(HANDLE hThread, const ADDRESS64* addr)
 {
@@ -114,8 +124,8 @@ BOOL memory_write_value(const struct dbg_lvalue* lvalue, DWORD size, void* value
     if (!types_get_info(&lvalue->type, TI_GET_LENGTH, &os)) return FALSE;
     if (size != os)
     {
-        dbg_printf("Size mismatch in memory_write_value, got %u from type while expecting %u\n",
-                   (DWORD)os, size);
+        dbg_printf("Size mismatch in memory_write_value, got %I64u from type while expecting %lu\n",
+                   os, size);
         return FALSE;
     }
 
@@ -248,13 +258,13 @@ void memory_examine(const struct dbg_lvalue *lvalue, int count, char format)
     case 'd': DO_DUMP(unsigned int, 4, " %4.4d"); break;
     case 'w': DO_DUMP(unsigned short, 8, " %04x"); break;
     case 'a':
-        if (sizeof(DWORD_PTR) == 4)
+        if (ADDRSIZE == 4)
         {
-            DO_DUMP(DWORD_PTR, 4, " %8.8Ix");
+            DO_DUMP(DWORD, 4, " %8.8lx");
         }
         else
         {
-            DO_DUMP(DWORD_PTR, 2, " %16.16Ix");
+            DO_DUMP(DWORD64, 2, " %16.16I64x");
         }
         break;
     case 'c': DO_DUMP2(char, 32, " %c", (_v < 0x20) ? ' ' : _v); break;
@@ -386,11 +396,11 @@ BOOL memory_get_string(struct dbg_process* pcs, void* addr, BOOL in_debuggee,
         if (!unicode) ret = pcs->process_io->read(pcs->handle, addr, buffer, size, &sz);
         else
         {
-            buffW = HeapAlloc(GetProcessHeap(), 0, size * sizeof(WCHAR));
+            buffW = malloc(size * sizeof(WCHAR));
             ret = pcs->process_io->read(pcs->handle, addr, buffW, size * sizeof(WCHAR), &sz);
             WideCharToMultiByte(CP_ACP, 0, buffW, sz / sizeof(WCHAR), buffer, size,
                                 NULL, NULL);
-            HeapFree(GetProcessHeap(), 0, buffW);
+            free(buffW);
         }
         if (size) buffer[size-1] = 0;
         return ret;
@@ -418,11 +428,11 @@ BOOL memory_get_string_indirect(struct dbg_process* pcs, void* addr, BOOL unicod
             ret = pcs->process_io->read(pcs->handle, ad, buffer, size * sizeof(WCHAR), &sz) && sz != 0;
         else
         {
-            if ((buff = HeapAlloc(GetProcessHeap(), 0, size)))
+            if ((buff = malloc(size)))
             {
                 ret = pcs->process_io->read(pcs->handle, ad, buff, size, &sz) && sz != 0;
                 MultiByteToWideChar(CP_ACP, 0, buff, sz, buffer, size);
-                HeapFree(GetProcessHeap(), 0, buff);
+                free(buff);
             }
             else ret = FALSE;
         }
@@ -452,8 +462,7 @@ char* memory_offset_to_string(char *str, DWORD64 offset, unsigned mode)
     if (mode == 32)
         sprintf(str, "0x%08x", (unsigned int) offset);
     else
-        sprintf(str, "0x%08x%08x", (unsigned int)(offset >> 32),
-                (unsigned int)offset);
+        sprintf(str, "%#016I64x", offset);
 
     return str;
 }
@@ -501,7 +510,6 @@ static void print_typed_basic(const struct dbg_lvalue* lvalue)
         case btInt:
         case btLong:
             if (!memory_fetch_integer(lvalue, size, TRUE, &val_int)) return;
-            if (size == 1) goto print_char;
             dbg_print_hex(size, val_int);
             break;
         case btUInt:
@@ -514,24 +522,25 @@ static void print_typed_basic(const struct dbg_lvalue* lvalue)
             dbg_printf("%f", val_real);
             break;
         case btChar:
-        case btWChar:
-            /* sometimes WCHAR is defined as btChar with size = 2, so discrimate
-             * Ansi/Unicode based on size, not on basetype
-             */
             if (!memory_fetch_integer(lvalue, size, TRUE, &val_int)) return;
-        print_char:
-            if ((size == 1 && isprint((char)val_int)) ||
-                 (size == 2 && val_int < 127 && isprint((char)val_int)))
+            if (size == 1 && isprint((char)val_int))
                 dbg_printf("'%c'", (char)val_int);
             else
-                dbg_printf("%d", (int)val_int);
+                dbg_print_hex(size, val_int);
+            break;
+        case btWChar:
+            if (!memory_fetch_integer(lvalue, size, TRUE, &val_int)) return;
+            if (size == 2 && iswprint((WCHAR)val_int))
+                dbg_printf("L'%lc'", (WCHAR)val_int);
+            else
+                dbg_print_hex(size, val_int);
             break;
         case btBool:
             if (!memory_fetch_integer(lvalue, size, TRUE, &val_int)) return;
             dbg_printf("%s", val_int ? "true" : "false");
             break;
         default:
-            WINE_FIXME("Unsupported basetype %u\n", bt);
+            WINE_FIXME("Unsupported basetype %lu\n", bt);
             break;
         }
         break;
@@ -550,11 +559,11 @@ static void print_typed_basic(const struct dbg_lvalue* lvalue)
             char    buffer[1024];
 
             if (!val_ptr) dbg_printf("0x0");
-            else if (((bt == btChar || bt == btInt) && size64 == 1) || (bt == btUInt && size64 == 2))
+            else if ((bt == btChar && size64 == 1) || (bt == btWChar && size64 == 2))
             {
                 if (memory_get_string(dbg_curr_process, val_ptr, sub_lvalue.in_debuggee,
-                                      size64 == 2, buffer, sizeof(buffer)))
-                    dbg_printf("\"%s\"", buffer);
+                                      bt == btWChar, buffer, sizeof(buffer)))
+                    dbg_printf("%s\"%s\"", bt == btWChar ? "L" : "", buffer);
                 else
                     dbg_printf("*** invalid address %p ***", val_ptr);
                 break;
@@ -619,7 +628,7 @@ static void print_typed_basic(const struct dbg_lvalue* lvalue)
         }
         break;
     default:
-        WINE_FIXME("Unsupported tag %u\n", tag);
+        WINE_FIXME("Unsupported tag %lu\n", tag);
         break;
     }
 }
@@ -641,7 +650,6 @@ void print_basic(const struct dbg_lvalue* lvalue, char format)
     {
         unsigned size;
         dbg_lgint_t res = types_extract_as_lgint(lvalue, &size, NULL);
-        WCHAR wch;
 
         switch (format)
         {
@@ -658,10 +666,7 @@ void print_basic(const struct dbg_lvalue* lvalue, char format)
             return;
 
         case 'u':
-            wch = (WCHAR)(res & 0xFFFF);
-            dbg_printf("%d = '", wch);
-            dbg_outputW(&wch, 1);
-            dbg_printf("'");
+            dbg_printf("%d = '%lc'", (WCHAR)(res & 0xFFFF), (WCHAR)(res & 0xFFFF));
             return;
 
         case 'i':
@@ -701,12 +706,7 @@ void print_bare_address(const ADDRESS64* addr)
     }
 }
 
-/***********************************************************************
- *           print_address
- *
- * Print an 16- or 32-bit address, with the nearest symbol if any.
- */
-void print_address(const ADDRESS64* addr, BOOLEAN with_line)
+void print_address_symbol(const ADDRESS64* addr, BOOL with_line, const char *sep)
 {
     char                buffer[sizeof(SYMBOL_INFO) + 256];
     SYMBOL_INFO*        si = (SYMBOL_INFO*)buffer;
@@ -715,23 +715,21 @@ void print_address(const ADDRESS64* addr, BOOLEAN with_line)
     DWORD               disp;
     IMAGEHLP_MODULE     im;
 
-    print_bare_address(addr);
-
     si->SizeOfStruct = sizeof(*si);
     si->MaxNameLen   = 256;
     im.SizeOfStruct  = 0;
     if (SymFromAddr(dbg_curr_process->handle, lin, &disp64, si) && disp64 < si->Size)
     {
-        dbg_printf(" %s", si->Name);
+        dbg_printf("%s %s", sep, si->Name);
         if (disp64) dbg_printf("+0x%I64x", disp64);
     }
     else
     {
         im.SizeOfStruct = sizeof(im);
         if (!SymGetModuleInfo(dbg_curr_process->handle, lin, &im)) return;
-        dbg_printf(" %s", im.ModuleName);
+        dbg_printf("%s %s", sep, im.ModuleName);
         if (lin > im.BaseOfImage)
-            dbg_printf("+0x%Ix", lin - im.BaseOfImage);
+            dbg_printf("+0x%Ix", lin - (DWORD_PTR)im.BaseOfImage);
     }
     if (with_line)
     {
@@ -739,7 +737,7 @@ void print_address(const ADDRESS64* addr, BOOLEAN with_line)
 
         il.SizeOfStruct = sizeof(il);
         if (SymGetLineFromAddr64(dbg_curr_process->handle, lin, &disp, &il))
-            dbg_printf(" [%s:%u]", il.FileName, il.LineNumber);
+            dbg_printf(" [%s:%lu]", il.FileName, il.LineNumber);
         if (im.SizeOfStruct == 0) /* don't display again module if address is in module+disp form */
         {
             im.SizeOfStruct = sizeof(im);
@@ -747,6 +745,80 @@ void print_address(const ADDRESS64* addr, BOOLEAN with_line)
                 dbg_printf(" in %s", im.ModuleName);
         }
     }
+}
+
+/***********************************************************************
+ *           print_address
+ *
+ * Print an 16- or 32-bit address, with the nearest symbol if any.
+ */
+void print_address(const ADDRESS64* addr, BOOLEAN with_line)
+{
+    print_bare_address(addr);
+    print_address_symbol(addr, with_line, "");
+}
+
+void memory_disasm_one_x86_insn(ADDRESS64 *addr, int display)
+{
+    static csh handle;
+    cs_insn *insn;
+    unsigned char buffer[16];
+    SIZE_T count, len;
+
+    if (!dbg_curr_process->process_io->read( dbg_curr_process->handle, memory_to_linear_addr(addr),
+                                             buffer, sizeof(buffer), &len )) return;
+
+    if (!handle)
+    {
+        cs_option( 0, CS_OPT_MEM, (size_t)&cs_mem );
+        cs_open( CS_ARCH_X86, CS_MODE_32, &handle );
+    }
+
+    switch (addr->Mode)
+    {
+    case AddrModeReal:
+    case AddrMode1616:
+        cs_option( handle, CS_OPT_MODE, CS_MODE_16 );
+        break;
+    default:
+        cs_option( handle, CS_OPT_MODE, ADDRSIZE == 4 ? CS_MODE_32 : CS_MODE_64 );
+        break;
+    }
+    cs_option( handle, CS_OPT_SYNTAX, CS_OPT_SYNTAX_ATT );
+    cs_option( handle, CS_OPT_DETAIL, CS_OPT_ON );
+    count = cs_disasm( handle, buffer, len, addr->Offset, 0, &insn );
+
+    if (display)
+    {
+        dbg_printf( "%s %s", insn[0].mnemonic, insn[0].op_str );
+
+        if (cs_insn_group( handle, insn, X86_GRP_JUMP ) || cs_insn_group( handle, insn, X86_GRP_CALL ))
+        {
+            ADDRESS64 a = { .Mode = AddrModeFlat };
+            int pos = cs_op_index( handle, insn, X86_OP_MEM, 1 );
+
+            if (pos != -1 && insn->detail->x86.operands[pos].mem.index == X86_REG_INVALID &&
+                (insn->detail->x86.operands[pos].mem.base == X86_REG_INVALID ||
+                 insn->detail->x86.operands[pos].mem.base == X86_REG_EIP ||
+                 insn->detail->x86.operands[pos].mem.base == X86_REG_RIP))
+            {
+                unsigned char dest[8];
+                if (dbg_read_memory( (void *)(ULONG_PTR)X86_REL_ADDR(*insn), dest, ADDRSIZE ))
+                {
+                    dbg_printf( " -> " );
+                    a.Offset = ADDRSIZE == 4 ? *(DWORD *)dest : *(DWORD64 *)dest;
+                    print_address( &a, TRUE );
+                }
+            }
+            else if ((pos = cs_op_index( handle, insn, X86_OP_IMM, 1 )) != -1)
+            {
+                a.Offset = X86_REL_ADDR(*insn);
+                print_address_symbol( &a, TRUE, "" );
+            }
+        }
+    }
+    addr->Offset += insn[0].size;
+    cs_free( insn, count );
 }
 
 BOOL memory_disasm_one_insn(ADDRESS64* addr)
@@ -788,7 +860,7 @@ void memory_disassemble(const struct dbg_lvalue* xstart,
         memory_disasm_one_insn(&last);
 }
 
-BOOL memory_get_register(DWORD regno, DWORD_PTR** value, char* buffer, int len)
+BOOL memory_get_register(DWORD regno, struct dbg_lvalue* lvalue, char* buffer, int len)
 {
     const struct dbg_internal_var*  div;
 
@@ -818,7 +890,7 @@ BOOL memory_get_register(DWORD regno, DWORD_PTR** value, char* buffer, int len)
     {
         if (div->val == regno)
         {
-            if (!stack_get_register_frame(div, value))
+            if (!stack_get_register_frame(div, lvalue))
             {
                 if (buffer) snprintf(buffer, len, "<register %s not accessible in this frame>", div->name);
                 return FALSE;
@@ -828,6 +900,6 @@ BOOL memory_get_register(DWORD regno, DWORD_PTR** value, char* buffer, int len)
             return TRUE;
         }
     }
-    if (buffer) snprintf(buffer, len, "<unknown register %u>", regno);
+    if (buffer) snprintf(buffer, len, "<unknown register %lu>", regno);
     return FALSE;
 }

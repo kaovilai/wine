@@ -113,6 +113,8 @@ _se_translator_function __cdecl _set_se_translator(_se_translator_function func)
 void** __cdecl __current_exception(void);
 int* __cdecl __processing_throw(void);
 
+#define _MAX__TIME64_T     (((__time64_t)0x00000007 << 32) | 0x93406FFF)
+
 static void test__initialize_onexit_table(void)
 {
     _onexit_table_t table, table2;
@@ -1168,17 +1170,17 @@ static void test_exit(const char *argv0)
     ret = WaitForSingleObject(proc.hProcess, INFINITE);
     ok(ret == WAIT_OBJECT_0, "child process wait failed\n");
     GetExitCodeProcess(proc.hProcess, &ret);
-    ok(ret == 1, "child process exited with code %d\n", ret);
+    ok(ret == 1, "child process exited with code %ld\n", ret);
     CloseHandle(proc.hProcess);
     CloseHandle(proc.hThread);
-    ok(!*failures, "%d tests failed in child process\n", *failures);
+    ok(!*failures, "%ld tests failed in child process\n", *failures);
     free_failures_counter(failures, failures_map);
 
 
     ret = WaitForSingleObject(exit_event, 0);
-    ok(ret == WAIT_OBJECT_0, "exit_event was not set (%x)\n", ret);
+    ok(ret == WAIT_OBJECT_0, "exit_event was not set (%lx)\n", ret);
     ret = WaitForSingleObject(quick_exit_event, 0);
-    ok(ret == WAIT_TIMEOUT, "quick_exit_event should not have be set (%x)\n", ret);
+    ok(ret == WAIT_TIMEOUT, "quick_exit_event should not have be set (%lx)\n", ret);
 
     CloseHandle(exit_event);
     CloseHandle(quick_exit_event);
@@ -1190,7 +1192,7 @@ static void CDECL at_exit_func1(void)
 {
     HANDLE exit_event = CreateEventA(NULL, FALSE, FALSE, "exit_event");
 
-    ok(exit_event != NULL, "CreateEvent failed: %d\n", GetLastError());
+    ok(exit_event != NULL, "CreateEvent failed: %ld\n", GetLastError());
     ok(atexit_called == 1, "atexit_called = %d\n", atexit_called);
     atexit_called++;
     SetEvent(exit_event);
@@ -1211,7 +1213,7 @@ static void CDECL at_quick_exit_func1(void)
 {
     HANDLE quick_exit_event = CreateEventA(NULL, FALSE, FALSE, "quick_exit_event");
 
-    ok(quick_exit_event != NULL, "CreateEvent failed: %d\n", GetLastError());
+    ok(quick_exit_event != NULL, "CreateEvent failed: %ld\n", GetLastError());
     ok(atquick_exit_called == 1, "atquick_exit_called = %d\n", atquick_exit_called);
     atquick_exit_called++;
     SetEvent(quick_exit_event);
@@ -1269,16 +1271,16 @@ static void test_quick_exit(const char *argv0)
     ret = WaitForSingleObject(proc.hProcess, INFINITE);
     ok(ret == WAIT_OBJECT_0, "child process wait failed\n");
     GetExitCodeProcess(proc.hProcess, &ret);
-    ok(ret == 2, "child process exited with code %d\n", ret);
+    ok(ret == 2, "child process exited with code %ld\n", ret);
     CloseHandle(proc.hProcess);
     CloseHandle(proc.hThread);
-    ok(!*failures, "%d tests failed in child process\n", *failures);
+    ok(!*failures, "%ld tests failed in child process\n", *failures);
     free_failures_counter(failures, failures_map);
 
     ret = WaitForSingleObject(quick_exit_event, 0);
-    ok(ret == WAIT_OBJECT_0, "quick_exit_event was not set (%x)\n", ret);
+    ok(ret == WAIT_OBJECT_0, "quick_exit_event was not set (%lx)\n", ret);
     ret = WaitForSingleObject(exit_event, 0);
-    ok(ret == WAIT_TIMEOUT, "exit_event should not have be set (%x)\n", ret);
+    ok(ret == WAIT_TIMEOUT, "exit_event should not have be set (%lx)\n", ret);
 
     CloseHandle(exit_event);
     CloseHandle(quick_exit_event);
@@ -1309,7 +1311,7 @@ static void test__stat32(void)
         ok(!ret, "_stat32('%s') returned %d\n", path, ret);
         strcat(path, "\\");
         ret = _stat32(path, &buf);
-        todo_wine ok(ret, "_stat32('%s') returned %d\n", path, ret);
+        ok(ret, "_stat32('%s') returned %d\n", path, ret);
         close(fd);
         remove(path);
     }
@@ -1591,6 +1593,124 @@ static void test_fopen_exclusive( void )
     unlink(path);
 }
 
+#if defined(__i386__)
+#include "pshpack1.h"
+struct rewind_thunk {
+    BYTE push_esp[4]; /* push [esp+0x4] */
+    BYTE call_rewind; /* call */
+    DWORD rewind_addr; /* relative addr of rewind */
+    BYTE pop_eax; /* pop eax */
+    BYTE ret; /* ret */
+};
+#include "poppack.h"
+
+static FILE * (CDECL *test_rewind_wrapper)(FILE *fp);
+
+static void test_rewind_i386_abi(void)
+{
+    FILE *fp_in, *fp_out;
+
+    struct rewind_thunk *thunk = VirtualAlloc(NULL, sizeof(*thunk), MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+
+    thunk->push_esp[0] = 0xff;
+    thunk->push_esp[1] = 0x74;
+    thunk->push_esp[2] = 0x24;
+    thunk->push_esp[3] = 0x04;
+
+    thunk->call_rewind = 0xe8;
+    thunk->rewind_addr = (BYTE *) rewind - (BYTE *) (&thunk->rewind_addr + 1);
+
+    thunk->pop_eax = 0x58;
+    thunk->ret = 0xc3;
+
+    test_rewind_wrapper = (void *) thunk;
+
+    fp_in = fopen("rewind_abi.tst", "wb");
+    fp_out = test_rewind_wrapper(fp_in);
+    ok(fp_in == fp_out, "rewind modified the first argument in the stack\n");
+
+    fclose(fp_in);
+    unlink("rewind_abi.tst");
+}
+#endif
+
+static void test_gmtime64(void)
+{
+    struct tm *ptm, tm;
+    __time64_t t;
+    int ret;
+
+    t = -1;
+    memset(&tm, 0xcc, sizeof(tm));
+    ptm = _gmtime64(&t);
+    ok(!!ptm, "got NULL.\n");
+    ret = _gmtime64_s(&tm, &t);
+    ok(!ret, "got %d.\n", ret);
+    ok(tm.tm_year == 69 && tm.tm_hour == 23 && tm.tm_min == 59 && tm.tm_sec == 59, "got %d, %d, %d, %d.\n",
+            tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+    t = -43200;
+    memset(&tm, 0xcc, sizeof(tm));
+    ptm = _gmtime64(&t);
+    ok(!!ptm, "got NULL.\n");
+    ret = _gmtime64_s(&tm, &t);
+    ok(!ret, "got %d.\n", ret);
+    ok(tm.tm_year == 69 && tm.tm_hour == 12 && tm.tm_min == 0 && tm.tm_sec == 0, "got %d, %d, %d, %d.\n",
+            tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    ptm = _gmtime32((__time32_t *)&t);
+    ok(!!ptm, "got NULL.\n");
+    memset(&tm, 0xcc, sizeof(tm));
+    ret = _gmtime32_s(&tm, (__time32_t *)&t);
+    ok(!ret, "got %d.\n", ret);
+    todo_wine_if(tm.tm_year == 69 && tm.tm_hour == 12)
+    ok(tm.tm_year == 70 && tm.tm_hour == -12 && tm.tm_min == 0 && tm.tm_sec == 0, "got %d, %d, %d, %d.\n",
+            tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+    t = -43201;
+    ptm = _gmtime64(&t);
+    ok(!ptm, "got non-NULL.\n");
+    memset(&tm, 0xcc, sizeof(tm));
+    ret = _gmtime64_s(&tm, &t);
+    ok(ret == EINVAL, "got %d.\n", ret);
+    ok(tm.tm_year == -1 && tm.tm_hour == -1 && tm.tm_min == -1 && tm.tm_sec == -1, "got %d, %d, %d, %d.\n",
+            tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    ptm = _gmtime32((__time32_t *)&t);
+    ok(!ptm, "got NULL.\n");
+    memset(&tm, 0xcc, sizeof(tm));
+    ret = _gmtime32_s(&tm, (__time32_t *)&t);
+    ok(ret == EINVAL, "got %d.\n", ret);
+    ok(tm.tm_year == -1 && tm.tm_hour == -1 && tm.tm_min == -1 && tm.tm_sec == -1, "got %d, %d, %d, %d.\n",
+            tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+    t = _MAX__TIME64_T + 1605600;
+    memset(&tm, 0xcc, sizeof(tm));
+    ptm = _gmtime64(&t);
+    ok(!!ptm || broken(!ptm) /* before Win10 1909 */, "got NULL.\n");
+    if (!ptm)
+    {
+        win_skip("Old gmtime64 limits, skipping tests.\n");
+        return;
+    }
+    ret = _gmtime64_s(&tm, &t);
+    ok(!ret, "got %d.\n", ret);
+    ok(tm.tm_year == 1101 && tm.tm_hour == 21 && tm.tm_min == 59 && tm.tm_sec == 59, "got %d, %d, %d, %d.\n",
+            tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+    t = _MAX__TIME64_T + 1605601;
+    ptm = _gmtime64(&t);
+    ok(!ptm, "got non-NULL.\n");
+    memset(&tm, 0xcc, sizeof(tm));
+    ret = _gmtime64_s(&tm, &t);
+    ok(ret == EINVAL, "got %d.\n", ret);
+    ok(tm.tm_year == -1 && tm.tm_hour == -1 && tm.tm_min == -1 && tm.tm_sec == -1, "got %d, %d, %d, %d.\n",
+            tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
+
+static void test__get_heap_handle(void)
+{
+    ok((HANDLE)_get_heap_handle() == GetProcessHeap(), "Expected _get_heap_handle() to return GetProcessHeap()\n");
+}
+
 START_TEST(misc)
 {
     int arg_c;
@@ -1633,4 +1753,9 @@ START_TEST(misc)
     test_thread_storage();
     test_fenv();
     test_fopen_exclusive();
+#if defined(__i386__)
+    test_rewind_i386_abi();
+#endif
+    test_gmtime64();
+    test__get_heap_handle();
 }

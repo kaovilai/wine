@@ -57,6 +57,8 @@ thread_data_t *CDECL msvcrt_get_thread_data(void)
         ptr->random_seed = 1;
         ptr->locinfo = MSVCRT_locale->locinfo;
         ptr->mbcinfo = MSVCRT_locale->mbcinfo;
+        ptr->cached_locale[0] = 'C';
+        ptr->cached_locale[1] = 0;
 #if _MSVCR_VER >= 140
         ptr->module = NULL;
 #endif
@@ -164,7 +166,7 @@ uintptr_t CDECL _beginthread(
               (void*)start_address, &trampoline->module))
   {
       trampoline->module = NULL;
-      WARN("failed to get module for the start_address: %d\n", GetLastError());
+      WARN("failed to get module for the start_address: %lu\n", GetLastError());
   }
 #endif
 
@@ -230,7 +232,7 @@ uintptr_t CDECL _beginthreadex(
               (void*)start_address, &trampoline->module))
   {
      trampoline->module = NULL;
-     WARN("failed to get module for the start_address: %d\n", GetLastError());
+     WARN("failed to get module for the start_address: %lu\n", GetLastError());
   }
 #endif
 

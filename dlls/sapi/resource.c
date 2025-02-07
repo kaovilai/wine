@@ -70,7 +70,7 @@ static ULONG WINAPI resource_manager_AddRef(ISpResourceManager *iface)
     struct resource_manager *This = impl_from_ISpResourceManager(iface);
     ULONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p): ref=%u.\n", iface, ref);
+    TRACE("(%p): ref=%lu.\n", iface, ref);
 
     return ref;
 }
@@ -80,11 +80,11 @@ static ULONG WINAPI resource_manager_Release(ISpResourceManager *iface)
     struct resource_manager *This = impl_from_ISpResourceManager(iface);
     ULONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p): ref=%u.\n", iface, ref);
+    TRACE("(%p): ref=%lu.\n", iface, ref);
 
     if (!ref)
     {
-        heap_free(This);
+        free(This);
     }
 
     return ref;
@@ -126,7 +126,7 @@ const static ISpResourceManagerVtbl resource_manager_vtbl =
 
 HRESULT resource_manager_create(IUnknown *outer, REFIID iid, void **obj)
 {
-    struct resource_manager *This = heap_alloc(sizeof(*This));
+    struct resource_manager *This = malloc(sizeof(*This));
     HRESULT hr;
 
     if (!This) return E_OUTOFMEMORY;

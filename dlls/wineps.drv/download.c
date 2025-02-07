@@ -30,7 +30,6 @@
 #include "winnls.h"
 
 #include "psdrv.h"
-#include "data/agl.h"
 
 #include "wine/debug.h"
 
@@ -49,7 +48,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(psdrv);
 /****************************************************************************
  *  get_download_name
  */
-static void get_download_name(PHYSDEV dev, LPOUTLINETEXTMETRICA potm, char **str, BOOL vertical)
+static void get_download_name(print_ctx *ctx, LPOUTLINETEXTMETRICA potm, char **str, BOOL vertical)
 {
     static const char reserved_chars[] = " %/(){}[]<>\n\r\t\b\f";
     static const char vertical_suffix[] = "_vert";
@@ -57,7 +56,7 @@ static void get_download_name(PHYSDEV dev, LPOUTLINETEXTMETRICA potm, char **str
     char *p;
     DWORD size;
 
-    size = GetFontData(dev->hdc, MS_MAKE_TAG('n','a','m','e'), 0, NULL, 0);
+    size = GetFontData(ctx->hdc, MS_MAKE_TAG('n','a','m','e'), 0, NULL, 0);
     if(size != 0 && size != GDI_ERROR)
     {
         BYTE *name = HeapAlloc(GetProcessHeap(), 0, size);
@@ -75,7 +74,7 @@ static void get_download_name(PHYSDEV dev, LPOUTLINETEXTMETRICA potm, char **str
                 USHORT offset;
             } *name_record;
 
-            GetFontData(dev->hdc, MS_MAKE_TAG('n','a','m','e'), 0, name, size);
+            GetFontData(ctx->hdc, MS_MAKE_TAG('n','a','m','e'), 0, name, size);
             count = GET_BE_WORD(name + 2);
             strings = name + GET_BE_WORD(name + 4);
             name_record = (struct name_record *)(name + 6);
@@ -135,11 +134,11 @@ done:
 /****************************************************************************
  *  is_font_downloaded
  */
-static DOWNLOAD *is_font_downloaded(PSDRV_PDEVICE *physDev, char *ps_name)
+static DOWNLOAD *is_font_downloaded(print_ctx *ctx, char *ps_name)
 {
     DOWNLOAD *pdl;
 
-    for(pdl = physDev->downloaded_fonts; pdl; pdl = pdl->next)
+    for(pdl = ctx->downloaded_fonts; pdl; pdl = pdl->next)
         if(!strcmp(pdl->ps_name, ps_name))
 	    break;
     return pdl;
@@ -148,14 +147,14 @@ static DOWNLOAD *is_font_downloaded(PSDRV_PDEVICE *physDev, char *ps_name)
 /****************************************************************************
  *  is_room_for_font
  */
-static BOOL is_room_for_font(PSDRV_PDEVICE *physDev)
+static BOOL is_room_for_font(print_ctx *ctx)
 {
     DOWNLOAD *pdl;
     int count = 0;
 
     /* FIXME: should consider vm usage of each font and available printer memory.
        For now we allow up to two fonts to be downloaded at a time */
-    for(pdl = physDev->downloaded_fonts; pdl; pdl = pdl->next)
+    for(pdl = ctx->downloaded_fonts; pdl; pdl = pdl->next)
         count++;
 
     if(count > 1)
@@ -188,22 +187,6 @@ static UINT get_bbox(HDC hdc, RECT *rc)
         rc->top    = (signed short)GET_BE_WORD(head + 42); /* yMax */
     }
     return GET_BE_WORD(head + 18); /* unitsPerEm */
-}
-
-/****************************************************************************
- *  PSDRV_SelectDownloadFont
- *
- *  Set up physDev->font for a downloadable font
- *
- */
-BOOL PSDRV_SelectDownloadFont(PHYSDEV dev)
-{
-    PSDRV_PDEVICE *physDev = get_psdrv_dev( dev );
-
-    physDev->font.fontloc = Download;
-    physDev->font.fontinfo.Download = NULL;
-
-    return TRUE;
 }
 
 static UINT calc_ppem_for_height(HDC hdc, LONG height)
@@ -265,96 +248,88 @@ static BOOL is_fake_italic( HDC hdc )
  *  Write setfont for download font.
  *
  */
-BOOL PSDRV_WriteSetDownloadFont(PHYSDEV dev, BOOL vertical)
+BOOL PSDRV_WriteSetDownloadFont(print_ctx *ctx, BOOL vertical)
 {
-    PSDRV_PDEVICE *physDev = get_psdrv_dev( dev );
     char *ps_name;
     LPOUTLINETEXTMETRICA potm;
-    DWORD len = GetOutlineTextMetricsA(dev->hdc, 0, NULL);
+    DWORD len = GetOutlineTextMetricsA(ctx->hdc, 0, NULL);
     DOWNLOAD *pdl;
     LOGFONTW lf;
     UINT ppem;
     XFORM xform;
-    INT escapement;
 
-    assert(physDev->font.fontloc == Download);
+    assert(ctx->font.fontloc == Download);
 
-    if (!GetObjectW( GetCurrentObject(dev->hdc, OBJ_FONT), sizeof(lf), &lf ))
+    if (!GetObjectW( GetCurrentObject(ctx->hdc, OBJ_FONT), sizeof(lf), &lf ))
         return FALSE;
 
     potm = HeapAlloc(GetProcessHeap(), 0, len);
     if (!potm)
         return FALSE;
 
-    GetOutlineTextMetricsA(dev->hdc, len, potm);
+    GetOutlineTextMetricsA(ctx->hdc, len, potm);
 
-    get_download_name(dev, potm, &ps_name, vertical);
-    physDev->font.fontinfo.Download = is_font_downloaded(physDev, ps_name);
+    get_download_name(ctx, potm, &ps_name, vertical);
+    ctx->font.fontinfo.Download = is_font_downloaded(ctx, ps_name);
 
-    ppem = calc_ppem_for_height(dev->hdc, lf.lfHeight);
+    ppem = calc_ppem_for_height(ctx->hdc, lf.lfHeight);
 
     /* Retrieve the world -> device transform */
-    GetTransform(dev->hdc, 0x204, &xform);
+    GetTransform(ctx->hdc, 0x204, &xform);
 
-    if(GetGraphicsMode(dev->hdc) == GM_COMPATIBLE)
+    if(GetGraphicsMode(ctx->hdc) == GM_COMPATIBLE)
     {
-        if (xform.eM22 < 0) physDev->font.escapement = -physDev->font.escapement;
+        if (xform.eM22 < 0) lf.lfEscapement = -lf.lfEscapement;
         xform.eM11 = xform.eM22 = fabs(xform.eM22);
         xform.eM21 = xform.eM12 = 0;
     }
 
-    physDev->font.size.xx = ps_round(ppem * xform.eM11);
-    physDev->font.size.xy = ps_round(ppem * xform.eM12);
-    physDev->font.size.yx = -ps_round(ppem * xform.eM21);
-    physDev->font.size.yy = -ps_round(ppem * xform.eM22);
+    ctx->font.size.xx = ps_round(ppem * xform.eM11);
+    ctx->font.size.xy = ps_round(ppem * xform.eM12);
+    ctx->font.size.yx = -ps_round(ppem * xform.eM21);
+    ctx->font.size.yy = -ps_round(ppem * xform.eM22);
 
-    physDev->font.underlineThickness = potm->otmsUnderscoreSize;
-    physDev->font.underlinePosition = potm->otmsUnderscorePosition;
-    physDev->font.strikeoutThickness = potm->otmsStrikeoutSize;
-    physDev->font.strikeoutPosition = potm->otmsStrikeoutPosition;
-
-    if(physDev->font.fontinfo.Download == NULL) {
+    if(ctx->font.fontinfo.Download == NULL) {
         RECT bbox;
-        UINT emsize = get_bbox(dev->hdc, &bbox);
+        UINT emsize = get_bbox(ctx->hdc, &bbox);
 
         if (!emsize) {
             HeapFree(GetProcessHeap(), 0, ps_name);
             HeapFree(GetProcessHeap(), 0, potm);
             return FALSE;
         }
-        if(!is_room_for_font(physDev))
-            PSDRV_EmptyDownloadList(dev, TRUE);
+        if(!is_room_for_font(ctx))
+            PSDRV_EmptyDownloadList(ctx, TRUE);
 
         pdl = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*pdl));
 	pdl->ps_name = HeapAlloc(GetProcessHeap(), 0, strlen(ps_name)+1);
 	strcpy(pdl->ps_name, ps_name);
 	pdl->next = NULL;
 
-        if(physDev->pi->ppd->TTRasterizer == RO_Type42) {
-	    pdl->typeinfo.Type42 = T42_download_header(dev, ps_name, &bbox, emsize);
+        if(ctx->pi->ppd->TTRasterizer == RO_Type42) {
+	    pdl->typeinfo.Type42 = T42_download_header(ctx, ps_name, &bbox, emsize);
 	    pdl->type = Type42;
 	}
 	if(pdl->typeinfo.Type42 == NULL) {
-	    pdl->typeinfo.Type1 = T1_download_header(dev, ps_name, &bbox, emsize);
+	    pdl->typeinfo.Type1 = T1_download_header(ctx, ps_name, &bbox, emsize);
 	    pdl->type = Type1;
 	}
-	pdl->next = physDev->downloaded_fonts;
-	physDev->downloaded_fonts = pdl;
-	physDev->font.fontinfo.Download = pdl;
+	pdl->next = ctx->downloaded_fonts;
+	ctx->downloaded_fonts = pdl;
+	ctx->font.fontinfo.Download = pdl;
 
         if(pdl->type == Type42) {
             char g_name[MAX_G_NAME + 1];
-            get_glyph_name(dev->hdc, 0, g_name);
-            T42_download_glyph(dev, pdl, 0, g_name);
+            get_glyph_name(ctx->hdc, 0, g_name);
+            T42_download_glyph(ctx, pdl, 0, g_name);
         }
     }
 
-    escapement = physDev->font.escapement;
     if (vertical)
-        escapement += 900;
+        lf.lfEscapement += 900;
 
-    PSDRV_WriteSetFont(dev, ps_name, physDev->font.size, escapement,
-                        is_fake_italic( dev->hdc ));
+    PSDRV_WriteSetFont(ctx, ps_name, ctx->font.size, lf.lfEscapement,
+                        is_fake_italic( ctx->hdc ));
 
     HeapFree(GetProcessHeap(), 0, ps_name);
     HeapFree(GetProcessHeap(), 0, potm);
@@ -363,272 +338,268 @@ BOOL PSDRV_WriteSetDownloadFont(PHYSDEV dev, BOOL vertical)
 
 static void get_standard_glyph_name(WORD index, char *name)
 {
-    static const GLYPHNAME nonbreakingspace = { -1, "nonbreakingspace" };
-    static const GLYPHNAME nonmarkingreturn = { -1, "nonmarkingreturn" };
-    static const GLYPHNAME notdef = { -1, ".notdef" };
-    static const GLYPHNAME null = { -1, ".null" };
     /* These PostScript Format 1 glyph names are stored by glyph index, do not reorder them. */
-    static const GLYPHNAME *glyph_table[] = {
-        &notdef,
-        &null,
-        &nonmarkingreturn,
-        GN_space,
-        GN_exclam,
-        GN_quotedbl,
-        GN_numbersign,
-        GN_dollar,
-        GN_percent,
-        GN_ampersand,
-        GN_quotesingle,
-        GN_parenleft,
-        GN_parenright,
-        GN_asterisk,
-        GN_plus,
-        GN_comma,
-        GN_hyphen,
-        GN_period,
-        GN_slash,
-        GN_zero,
-        GN_one,
-        GN_two,
-        GN_three,
-        GN_four,
-        GN_five,
-        GN_six,
-        GN_seven,
-        GN_eight,
-        GN_nine,
-        GN_colon,
-        GN_semicolon,
-        GN_less,
-        GN_equal,
-        GN_greater,
-        GN_question,
-        GN_at,
-        GN_A,
-        GN_B,
-        GN_C,
-        GN_D,
-        GN_E,
-        GN_F,
-        GN_G,
-        GN_H,
-        GN_I,
-        GN_J,
-        GN_K,
-        GN_L,
-        GN_M,
-        GN_N,
-        GN_O,
-        GN_P,
-        GN_Q,
-        GN_R,
-        GN_S,
-        GN_T,
-        GN_U,
-        GN_V,
-        GN_W,
-        GN_X,
-        GN_Y,
-        GN_Z,
-        GN_bracketleft,
-        GN_backslash,
-        GN_bracketright,
-        GN_asciicircum,
-        GN_underscore,
-        GN_grave,
-        GN_a,
-        GN_b,
-        GN_c,
-        GN_d,
-        GN_e,
-        GN_f,
-        GN_g,
-        GN_h,
-        GN_i,
-        GN_j,
-        GN_k,
-        GN_l,
-        GN_m,
-        GN_n,
-        GN_o,
-        GN_p,
-        GN_q,
-        GN_r,
-        GN_s,
-        GN_t,
-        GN_u,
-        GN_v,
-        GN_w,
-        GN_x,
-        GN_y,
-        GN_z,
-        GN_braceleft,
-        GN_bar,
-        GN_braceright,
-        GN_asciitilde,
-        GN_Adieresis,
-        GN_Aring,
-        GN_Ccedilla,
-        GN_Eacute,
-        GN_Ntilde,
-        GN_Odieresis,
-        GN_Udieresis,
-        GN_aacute,
-        GN_agrave,
-        GN_acircumflex,
-        GN_adieresis,
-        GN_atilde,
-        GN_aring,
-        GN_ccedilla,
-        GN_eacute,
-        GN_egrave,
-        GN_ecircumflex,
-        GN_edieresis,
-        GN_iacute,
-        GN_igrave,
-        GN_icircumflex,
-        GN_idieresis,
-        GN_ntilde,
-        GN_oacute,
-        GN_ograve,
-        GN_ocircumflex,
-        GN_odieresis,
-        GN_otilde,
-        GN_uacute,
-        GN_ugrave,
-        GN_ucircumflex,
-        GN_udieresis,
-        GN_dagger,
-        GN_degree,
-        GN_cent,
-        GN_sterling,
-        GN_section,
-        GN_bullet,
-        GN_paragraph,
-        GN_germandbls,
-        GN_registered,
-        GN_copyright,
-        GN_trademark,
-        GN_acute,
-        GN_dieresis,
-        GN_notequal,
-        GN_AE,
-        GN_Oslash,
-        GN_infinity,
-        GN_plusminus,
-        GN_lessequal,
-        GN_greaterequal,
-        GN_yen,
-        GN_mu,
-        GN_partialdiff,
-        GN_summation,
-        GN_product,
-        GN_pi,
-        GN_integral,
-        GN_ordfeminine,
-        GN_ordmasculine,
-        GN_Omega,
-        GN_ae,
-        GN_oslash,
-        GN_questiondown,
-        GN_exclamdown,
-        GN_logicalnot,
-        GN_radical,
-        GN_florin,
-        GN_approxequal,
-        GN_Delta,
-        GN_guillemotleft,
-        GN_guillemotright,
-        GN_ellipsis,
-        &nonbreakingspace,
-        GN_Agrave,
-        GN_Atilde,
-        GN_Otilde,
-        GN_OE,
-        GN_oe,
-        GN_endash,
-        GN_emdash,
-        GN_quotedblleft,
-        GN_quotedblright,
-        GN_quoteleft,
-        GN_quoteright,
-        GN_divide,
-        GN_lozenge,
-        GN_ydieresis,
-        GN_Ydieresis,
-        GN_fraction,
-        GN_currency,
-        GN_guilsinglleft,
-        GN_guilsinglright,
-        GN_fi,
-        GN_fl,
-        GN_daggerdbl,
-        GN_periodcentered,
-        GN_quotesinglbase,
-        GN_quotedblbase,
-        GN_perthousand,
-        GN_Acircumflex,
-        GN_Ecircumflex,
-        GN_Aacute,
-        GN_Edieresis,
-        GN_Egrave,
-        GN_Iacute,
-        GN_Icircumflex,
-        GN_Idieresis,
-        GN_Igrave,
-        GN_Oacute,
-        GN_Ocircumflex,
-        GN_apple,
-        GN_Ograve,
-        GN_Uacute,
-        GN_Ucircumflex,
-        GN_Ugrave,
-        GN_dotlessi,
-        GN_circumflex,
-        GN_tilde,
-        GN_macron,
-        GN_breve,
-        GN_dotaccent,
-        GN_ring,
-        GN_cedilla,
-        GN_hungarumlaut,
-        GN_ogonek,
-        GN_caron,
-        GN_Lslash,
-        GN_lslash,
-        GN_Scaron,
-        GN_scaron,
-        GN_Zcaron,
-        GN_zcaron,
-        GN_brokenbar,
-        GN_Eth,
-        GN_eth,
-        GN_Yacute,
-        GN_yacute,
-        GN_Thorn,
-        GN_thorn,
-        GN_minus,
-        GN_multiply,
-        GN_onesuperior,
-        GN_twosuperior,
-        GN_threesuperior,
-        GN_onehalf,
-        GN_onequarter,
-        GN_threequarters,
-        GN_franc,
-        GN_Gbreve,
-        GN_gbreve,
-        GN_Idotaccent,
-        GN_Scedilla,
-        GN_scedilla,
-        GN_Cacute,
-        GN_cacute,
-        GN_Ccaron,
-        GN_ccaron,
-        GN_dcroat
+    static const char * const glyph_table[] = {
+        ".notdef",
+        ".null",
+        "nonmarkingreturn",
+        "space",
+        "exclam",
+        "quotedbl",
+        "numbersign",
+        "dollar",
+        "percent",
+        "ampersand",
+        "quotesingle",
+        "parenleft",
+        "parenright",
+        "asterisk",
+        "plus",
+        "comma",
+        "hyphen",
+        "period",
+        "slash",
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "colon",
+        "semicolon",
+        "less",
+        "equal",
+        "greater",
+        "question",
+        "at",
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "H",
+        "I",
+        "J",
+        "K",
+        "L",
+        "M",
+        "N",
+        "O",
+        "P",
+        "Q",
+        "R",
+        "S",
+        "T",
+        "U",
+        "V",
+        "W",
+        "X",
+        "Y",
+        "Z",
+        "bracketleft",
+        "backslash",
+        "bracketright",
+        "asciicircum",
+        "underscore",
+        "grave",
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "j",
+        "k",
+        "l",
+        "m",
+        "n",
+        "o",
+        "p",
+        "q",
+        "r",
+        "s",
+        "t",
+        "u",
+        "v",
+        "w",
+        "x",
+        "y",
+        "z",
+        "braceleft",
+        "bar",
+        "braceright",
+        "asciitilde",
+        "Adieresis",
+        "Aring",
+        "Ccedilla",
+        "Eacute",
+        "Ntilde",
+        "Odieresis",
+        "Udieresis",
+        "aacute",
+        "agrave",
+        "acircumflex",
+        "adieresis",
+        "atilde",
+        "aring",
+        "ccedilla",
+        "eacute",
+        "egrave",
+        "ecircumflex",
+        "edieresis",
+        "iacute",
+        "igrave",
+        "icircumflex",
+        "idieresis",
+        "ntilde",
+        "oacute",
+        "ograve",
+        "ocircumflex",
+        "odieresis",
+        "otilde",
+        "uacute",
+        "ugrave",
+        "ucircumflex",
+        "udieresis",
+        "dagger",
+        "degree",
+        "cent",
+        "sterling",
+        "section",
+        "bullet",
+        "paragraph",
+        "germandbls",
+        "registered",
+        "copyright",
+        "trademark",
+        "acute",
+        "dieresis",
+        "notequal",
+        "AE",
+        "Oslash",
+        "infinity",
+        "plusminus",
+        "lessequal",
+        "greaterequal",
+        "yen",
+        "mu",
+        "partialdiff",
+        "summation",
+        "product",
+        "pi",
+        "integral",
+        "ordfeminine",
+        "ordmasculine",
+        "Omega",
+        "ae",
+        "oslash",
+        "questiondown",
+        "exclamdown",
+        "logicalnot",
+        "radical",
+        "florin",
+        "approxequal",
+        "Delta",
+        "guillemotleft",
+        "guillemotright",
+        "ellipsis",
+        "nonbreakingspace",
+        "Agrave",
+        "Atilde",
+        "Otilde",
+        "OE",
+        "oe",
+        "endash",
+        "emdash",
+        "quotedblleft",
+        "quotedblright",
+        "quoteleft",
+        "quoteright",
+        "divide",
+        "lozenge",
+        "ydieresis",
+        "Ydieresis",
+        "fraction",
+        "currency",
+        "guilsinglleft",
+        "guilsinglright",
+        "fi",
+        "fl",
+        "daggerdbl",
+        "periodcentered",
+        "quotesinglbase",
+        "quotedblbase",
+        "perthousand",
+        "Acircumflex",
+        "Ecircumflex",
+        "Aacute",
+        "Edieresis",
+        "Egrave",
+        "Iacute",
+        "Icircumflex",
+        "Idieresis",
+        "Igrave",
+        "Oacute",
+        "Ocircumflex",
+        "apple",
+        "Ograve",
+        "Uacute",
+        "Ucircumflex",
+        "Ugrave",
+        "dotlessi",
+        "circumflex",
+        "tilde",
+        "macron",
+        "breve",
+        "dotaccent",
+        "ring",
+        "cedilla",
+        "hungarumlaut",
+        "ogonek",
+        "caron",
+        "Lslash",
+        "lslash",
+        "Scaron",
+        "scaron",
+        "Zcaron",
+        "zcaron",
+        "brokenbar",
+        "Eth",
+        "eth",
+        "Yacute",
+        "yacute",
+        "Thorn",
+        "thorn",
+        "minus",
+        "multiply",
+        "onesuperior",
+        "twosuperior",
+        "threesuperior",
+        "onehalf",
+        "onequarter",
+        "threequarters",
+        "franc",
+        "Gbreve",
+        "gbreve",
+        "Idotaccent",
+        "Scedilla",
+        "scedilla",
+        "Cacute",
+        "cacute",
+        "Ccaron",
+        "ccaron",
+        "dcroat",
     };
-    snprintf(name, MAX_G_NAME + 1, "%s", glyph_table[index]->sz);
+    snprintf(name, MAX_G_NAME + 1, "%s", glyph_table[index]);
 }
 
 static int get_post2_name_index(BYTE *post2header, DWORD size, WORD index)
@@ -655,14 +626,14 @@ static void get_post2_custom_glyph_name(BYTE *post2header, DWORD size, WORD inde
         name_offset += name_length;
         if(name_offset + sizeof(BYTE) > size)
         {
-            FIXME("Pascal name offset '%d' exceeds PostScript Format 2 table size (%d)\n",
+            FIXME("Pascal name offset '%d' exceeds PostScript Format 2 table size (%ld)\n",
                   name_offset + 1, size);
             return;
         }
         name_length = (post2header + name_offset)[0];
         if(name_offset + name_length > size)
         {
-            FIXME("Pascal name offset '%d' exceeds PostScript Format 2 table size (%d)\n",
+            FIXME("Pascal name offset '%d' exceeds PostScript Format 2 table size (%ld)\n",
                   name_offset + name_length, size);
             return;
         }
@@ -745,33 +716,32 @@ cleanup:
  *  Download and write out a number of glyphs
  *
  */
-BOOL PSDRV_WriteDownloadGlyphShow(PHYSDEV dev, const WORD *glyphs,
+BOOL PSDRV_WriteDownloadGlyphShow(print_ctx *ctx, const WORD *glyphs,
 				  UINT count)
 {
-    PSDRV_PDEVICE *physDev = get_psdrv_dev( dev );
     UINT i;
     char g_name[MAX_G_NAME + 1];
-    assert(physDev->font.fontloc == Download);
+    assert(ctx->font.fontloc == Download);
 
-    switch(physDev->font.fontinfo.Download->type) {
+    switch(ctx->font.fontinfo.Download->type) {
     case Type42:
     for(i = 0; i < count; i++) {
-        get_glyph_name(dev->hdc, glyphs[i], g_name);
-	T42_download_glyph(dev, physDev->font.fontinfo.Download, glyphs[i], g_name);
-	PSDRV_WriteGlyphShow(dev, g_name);
+        get_glyph_name(ctx->hdc, glyphs[i], g_name);
+	T42_download_glyph(ctx, ctx->font.fontinfo.Download, glyphs[i], g_name);
+	PSDRV_WriteGlyphShow(ctx, g_name);
     }
     break;
 
     case Type1:
     for(i = 0; i < count; i++) {
-        get_glyph_name(dev->hdc, glyphs[i], g_name);
-	T1_download_glyph(dev, physDev->font.fontinfo.Download, glyphs[i], g_name);
-	PSDRV_WriteGlyphShow(dev, g_name);
+        get_glyph_name(ctx->hdc, glyphs[i], g_name);
+	T1_download_glyph(ctx, ctx->font.fontinfo.Download, glyphs[i], g_name);
+	PSDRV_WriteGlyphShow(ctx, g_name);
     }
     break;
 
     default:
-        ERR("Type = %d\n", physDev->font.fontinfo.Download->type);
+        ERR("Type = %d\n", ctx->font.fontinfo.Download->type);
 	assert(0);
     }
     return TRUE;
@@ -783,26 +753,25 @@ BOOL PSDRV_WriteDownloadGlyphShow(PHYSDEV dev, const WORD *glyphs,
  *  Clear the list of downloaded fonts
  *
  */
-BOOL PSDRV_EmptyDownloadList(PHYSDEV dev, BOOL write_undef)
+BOOL PSDRV_EmptyDownloadList(print_ctx *ctx, BOOL write_undef)
 {
-    PSDRV_PDEVICE *physDev = get_psdrv_dev( dev );
     DOWNLOAD *pdl, *old;
     static const char undef[] = "/%s findfont 40 scalefont setfont /%s undefinefont\n";
     char buf[sizeof(undef) + 200];
-    const char *default_font = physDev->pi->ppd->DefaultFont ?
-        physDev->pi->ppd->DefaultFont : "Courier";
+    const char *default_font = ctx->pi->ppd->DefaultFont ?
+        ctx->pi->ppd->DefaultFont : "Courier";
 
-    if(physDev->font.fontloc == Download) {
-        physDev->font.set = FALSE;
-	physDev->font.fontinfo.Download = NULL;
+    if(ctx->font.fontloc == Download) {
+        ctx->font.set = FALSE;
+	ctx->font.fontinfo.Download = NULL;
     }
 
-    pdl = physDev->downloaded_fonts;
-    physDev->downloaded_fonts = NULL;
+    pdl = ctx->downloaded_fonts;
+    ctx->downloaded_fonts = NULL;
     while(pdl) {
         if(write_undef) {
             sprintf(buf, undef, default_font, pdl->ps_name);
-            PSDRV_WriteSpool(dev, buf, strlen(buf));
+            PSDRV_WriteSpool(ctx, buf, strlen(buf));
         }
 
         switch(pdl->type) {

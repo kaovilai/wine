@@ -96,9 +96,6 @@ unsigned int supported_machines_count = 0;
 USHORT supported_machines[8] = { 0 };
 USHORT native_machine = 0;
 BOOL process_exiting = FALSE;
-#ifndef _WIN64
-BOOL is_wow64 = FALSE;
-#endif
 
 timeout_t server_start_time = 0;  /* time of server startup */
 
@@ -159,7 +156,7 @@ static DECLSPEC_NORETURN void server_protocol_error( const char *err, ... )
     va_list args;
 
     va_start( args, err );
-    fprintf( stderr, "wine client error:%x: ", GetCurrentThreadId() );
+    fprintf( stderr, "wine client error:%x: ", (int)GetCurrentThreadId() );
     vfprintf( stderr, err, args );
     va_end( args );
     abort_thread(1);
@@ -171,7 +168,7 @@ static DECLSPEC_NORETURN void server_protocol_error( const char *err, ... )
  */
 static DECLSPEC_NORETURN void server_protocol_perror( const char *err )
 {
-    fprintf( stderr, "wine client error:%x: ", GetCurrentThreadId() );
+    fprintf( stderr, "wine client error:%x: ", (int)GetCurrentThreadId() );
     perror( err );
     abort_thread(1);
 }
@@ -287,6 +284,17 @@ unsigned int CDECL wine_server_call( void *req_ptr )
 
 
 /***********************************************************************
+ *           unixcall_wine_server_call
+ *
+ * Perform a server call.
+ */
+NTSTATUS unixcall_wine_server_call( void *args )
+{
+    return wine_server_call( args );
+}
+
+
+/***********************************************************************
  *           server_enter_uninterrupted_section
  */
 void server_enter_uninterrupted_section( pthread_mutex_t *mutex, sigset_t *sigset )
@@ -346,7 +354,7 @@ static int wait_select_reply( void *cookie )
 /***********************************************************************
  *              invoke_user_apc
  */
-static NTSTATUS invoke_user_apc( CONTEXT *context, const user_apc_t *apc, NTSTATUS status )
+static NTSTATUS invoke_user_apc( CONTEXT *context, const struct user_apc *apc, NTSTATUS status )
 {
     return call_user_apc_dispatcher( context, apc->args[0], apc->args[1], apc->args[2],
                                      wine_server_get_ptr( apc->func ), status );
@@ -356,7 +364,7 @@ static NTSTATUS invoke_user_apc( CONTEXT *context, const user_apc_t *apc, NTSTAT
 /***********************************************************************
  *              invoke_system_apc
  */
-static void invoke_system_apc( const apc_call_t *call, apc_result_t *result, BOOL self )
+static void invoke_system_apc( const union apc_call *call, union apc_result *result, BOOL self )
 {
     SIZE_T size, bits;
     void *addr;
@@ -371,7 +379,7 @@ static void invoke_system_apc( const apc_call_t *call, apc_result_t *result, BOO
     {
         struct async_fileio *user = wine_server_get_ptr( call->async_io.user );
         ULONG_PTR info = call->async_io.result;
-        NTSTATUS status;
+        unsigned int status;
 
         result->type = call->type;
         status = call->async_io.status;
@@ -401,6 +409,55 @@ static void invoke_system_apc( const apc_call_t *call, apc_result_t *result, BOO
         }
         else result->virtual_alloc.status = STATUS_WORKING_SET_LIMIT_RANGE;
         break;
+    case APC_VIRTUAL_ALLOC_EX:
+    {
+        MEM_ADDRESS_REQUIREMENTS r;
+        MEM_EXTENDED_PARAMETER ext[2];
+        ULONG count = 0;
+
+        result->type = call->type;
+        addr = wine_server_get_ptr( call->virtual_alloc_ex.addr );
+        size = call->virtual_alloc_ex.size;
+        if ((ULONG_PTR)addr != call->virtual_alloc_ex.addr || size != call->virtual_alloc_ex.size)
+        {
+            result->virtual_alloc_ex.status = STATUS_WORKING_SET_LIMIT_RANGE;
+            break;
+        }
+        if (call->virtual_alloc_ex.limit_low || call->virtual_alloc_ex.limit_high || call->virtual_alloc_ex.align)
+        {
+            SYSTEM_BASIC_INFORMATION sbi;
+            SIZE_T limit_low, limit_high, align;
+
+            virtual_get_system_info( &sbi, is_wow64() );
+            limit_low = call->virtual_alloc_ex.limit_low;
+            limit_high = min( (ULONG_PTR)sbi.HighestUserAddress, call->virtual_alloc_ex.limit_high );
+            align = call->virtual_alloc_ex.align;
+            if (limit_low != call->virtual_alloc_ex.limit_low || align != call->virtual_alloc_ex.align)
+            {
+                result->virtual_alloc_ex.status = STATUS_WORKING_SET_LIMIT_RANGE;
+                break;
+            }
+            r.LowestStartingAddress = (void *)limit_low;
+            r.HighestEndingAddress = (void *)limit_high;
+            r.Alignment = align;
+            ext[count].Type = MemExtendedParameterAddressRequirements;
+            ext[count].Pointer = &r;
+            count++;
+        }
+        if (call->virtual_alloc_ex.attributes)
+        {
+            ext[count].Type = MemExtendedParameterAttributeFlags;
+            ext[count].ULong64 = call->virtual_alloc_ex.attributes;
+            count++;
+        }
+        result->virtual_alloc_ex.status = NtAllocateVirtualMemoryEx( NtCurrentProcess(), &addr, &size,
+                                                                     call->virtual_alloc_ex.op_type,
+                                                                     call->virtual_alloc_ex.prot,
+                                                                     ext, count );
+        result->virtual_alloc_ex.addr = wine_server_client_ptr( addr );
+        result->virtual_alloc_ex.size = size;
+        break;
+    }
     case APC_VIRTUAL_FREE:
         result->type = call->type;
         addr = wine_server_get_ptr( call->virtual_free.addr );
@@ -444,11 +501,12 @@ static void invoke_system_apc( const apc_call_t *call, apc_result_t *result, BOO
         size = call->virtual_protect.size;
         if ((ULONG_PTR)addr == call->virtual_protect.addr && size == call->virtual_protect.size)
         {
+            ULONG prot;
             result->virtual_protect.status = NtProtectVirtualMemory( NtCurrentProcess(), &addr, &size,
-                                                                     call->virtual_protect.prot,
-                                                                     &result->virtual_protect.prot );
+                                                                     call->virtual_protect.prot, &prot );
             result->virtual_protect.addr = wine_server_client_ptr( addr );
             result->virtual_protect.size = size;
+            result->virtual_protect.prot = prot;
         }
         else result->virtual_protect.status = STATUS_INVALID_PARAMETER;
         break;
@@ -509,11 +567,58 @@ static void invoke_system_apc( const apc_call_t *call, apc_result_t *result, BOO
         else result->map_view.status = STATUS_INVALID_PARAMETER;
         if (!self) NtClose( wine_server_ptr_handle(call->map_view.handle) );
         break;
+    case APC_MAP_VIEW_EX:
+    {
+        MEM_ADDRESS_REQUIREMENTS addr_req;
+        MEM_EXTENDED_PARAMETER ext[2];
+        ULONG count = 0;
+        LARGE_INTEGER offset;
+        ULONG_PTR limit_low, limit_high;
+
+        result->type = call->type;
+        addr = wine_server_get_ptr( call->map_view_ex.addr );
+        size = call->map_view_ex.size;
+        offset.QuadPart = call->map_view_ex.offset;
+        limit_low = call->map_view_ex.limit_low;
+        if ((ULONG_PTR)addr != call->map_view_ex.addr || size != call->map_view_ex.size ||
+            limit_low != call->map_view_ex.limit_low)
+        {
+            result->map_view_ex.status = STATUS_WORKING_SET_LIMIT_RANGE;
+            break;
+        }
+        if (call->map_view_ex.limit_low || call->map_view_ex.limit_high)
+        {
+            SYSTEM_BASIC_INFORMATION sbi;
+
+            virtual_get_system_info( &sbi, is_wow64() );
+            limit_high = min( (ULONG_PTR)sbi.HighestUserAddress, call->map_view_ex.limit_high );
+            addr_req.LowestStartingAddress = (void *)limit_low;
+            addr_req.HighestEndingAddress = (void *)limit_high;
+            addr_req.Alignment = 0;
+            ext[count].Type = MemExtendedParameterAddressRequirements;
+            ext[count].Pointer = &addr_req;
+            count++;
+        }
+        if (call->map_view_ex.machine)
+        {
+            ext[count].Type = MemExtendedParameterImageMachine;
+            ext[count].ULong = call->map_view_ex.machine;
+            count++;
+        }
+        result->map_view_ex.status = NtMapViewOfSectionEx( wine_server_ptr_handle(call->map_view_ex.handle),
+                                                           NtCurrentProcess(), &addr, &offset, &size,
+                                                           call->map_view_ex.alloc_type,
+                                                           call->map_view_ex.prot, ext, count );
+        result->map_view_ex.addr = wine_server_client_ptr( addr );
+        result->map_view_ex.size = size;
+        if (!self) NtClose( wine_server_ptr_handle(call->map_view_ex.handle) );
+        break;
+    }
     case APC_UNMAP_VIEW:
         result->type = call->type;
         addr = wine_server_get_ptr( call->unmap_view.addr );
         if ((ULONG_PTR)addr == call->unmap_view.addr)
-            result->unmap_view.status = NtUnmapViewOfSection( NtCurrentProcess(), addr );
+            result->unmap_view.status = NtUnmapViewOfSectionEx( NtCurrentProcess(), addr, call->unmap_view.flags );
         else
             result->unmap_view.status = STATUS_INVALID_PARAMETER;
         break;
@@ -534,10 +639,8 @@ static void invoke_system_apc( const apc_call_t *call, apc_result_t *result, BOO
         if (reserve == call->create_thread.reserve && commit == call->create_thread.commit &&
             (ULONG_PTR)func == call->create_thread.func && (ULONG_PTR)arg == call->create_thread.arg)
         {
-#ifndef _WIN64
             /* FIXME: hack for debugging 32-bit process without a 64-bit ntdll */
-            if (is_wow64 && func == (void *)0x7ffe1000) func = pDbgUiRemoteBreakin;
-#endif
+            if (is_old_wow64() && func == (void *)0x7ffe1000) func = pDbgUiRemoteBreakin;
             attr->TotalLength = sizeof(buffer);
             attr->Attributes[0].Attribute    = PS_ATTRIBUTE_CLIENT_ID;
             attr->Attributes[0].Size         = sizeof(id);
@@ -584,17 +687,22 @@ static void invoke_system_apc( const apc_call_t *call, apc_result_t *result, BOO
 /***********************************************************************
  *              server_select
  */
-unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT flags,
-                            timeout_t abs_timeout, context_t *context, user_apc_t *user_apc )
+unsigned int server_select( const union select_op *select_op, data_size_t size, UINT flags,
+                            timeout_t abs_timeout, struct context_data *context, struct user_apc *user_apc )
 {
     unsigned int ret;
     int cookie;
     obj_handle_t apc_handle = 0;
     BOOL suspend_context = !!context;
-    apc_call_t call;
-    apc_result_t result;
+    union apc_result result;
     sigset_t old_set;
     int signaled;
+    data_size_t reply_size;
+    struct
+    {
+        union apc_call call;
+        struct context_data context[2];
+    } reply_data;
 
     memset( &result, 0, sizeof(result) );
 
@@ -618,20 +726,21 @@ unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT
                     wine_server_add_data( req, context, ctx_size );
                     suspend_context = FALSE; /* server owns the context now */
                 }
-                if (context) wine_server_set_reply( req, context, 2 * sizeof(*context) );
+                wine_server_set_reply( req, &reply_data,
+                                       context ? sizeof(reply_data) : sizeof(reply_data.call) );
                 ret = server_call_unlocked( req );
                 signaled    = reply->signaled;
                 apc_handle  = reply->apc_handle;
-                call        = reply->call;
+                reply_size  = wine_server_reply_size( reply );
             }
             SERVER_END_REQ;
 
             if (ret != STATUS_KERNEL_APC) break;
-            invoke_system_apc( &call, &result, FALSE );
+            invoke_system_apc( &reply_data.call, &result, FALSE );
 
             /* don't signal multiple times */
             if (size >= sizeof(select_op->signal_and_wait) && select_op->op == SELECT_SIGNAL_AND_WAIT)
-                size = offsetof( select_op_t, signal_and_wait.signal );
+                size = offsetof( union select_op, signal_and_wait.signal );
         }
         pthread_sigmask( SIG_SETMASK, &old_set, NULL );
         if (signaled) break;
@@ -640,7 +749,13 @@ unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT
     }
     while (ret == STATUS_USER_APC || ret == STATUS_KERNEL_APC);
 
-    if (ret == STATUS_USER_APC) *user_apc = call.user;
+    if (ret == STATUS_USER_APC) *user_apc = reply_data.call.user;
+    if (reply_size > sizeof(reply_data.call))
+    {
+        memcpy( context, reply_data.context, reply_size - sizeof(reply_data.call) );
+        context[0].flags &= ~SERVER_CTX_EXEC_SPACE;
+        context[1].flags &= ~SERVER_CTX_EXEC_SPACE;
+    }
     return ret;
 }
 
@@ -648,12 +763,12 @@ unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT
 /***********************************************************************
  *              server_wait
  */
-unsigned int server_wait( const select_op_t *select_op, data_size_t size, UINT flags,
+unsigned int server_wait( const union select_op *select_op, data_size_t size, UINT flags,
                           const LARGE_INTEGER *timeout )
 {
     timeout_t abs_timeout = timeout ? timeout->QuadPart : TIMEOUT_INFINITE;
     unsigned int ret;
-    user_apc_t apc;
+    struct user_apc apc;
 
     if (abs_timeout < 0)
     {
@@ -679,8 +794,23 @@ unsigned int server_wait( const select_op_t *select_op, data_size_t size, UINT f
  */
 NTSTATUS WINAPI NtContinue( CONTEXT *context, BOOLEAN alertable )
 {
-    user_apc_t apc;
+    return NtContinueEx( context, ULongToPtr(alertable) );
+}
+
+
+/***********************************************************************
+ *              NtContinueEx  (NTDLL.@)
+ */
+NTSTATUS WINAPI NtContinueEx( CONTEXT *context, KCONTINUE_ARGUMENT *args )
+{
+    struct user_apc apc;
     NTSTATUS status;
+    BOOL alertable;
+
+    if ((UINT_PTR)args > 0xff)
+        alertable = args->ContinueFlags & KCONTINUE_FLAG_TEST_ALERT;
+    else
+        alertable = !!args;
 
     if (alertable)
     {
@@ -696,7 +826,7 @@ NTSTATUS WINAPI NtContinue( CONTEXT *context, BOOLEAN alertable )
  */
 NTSTATUS WINAPI NtTestAlert(void)
 {
-    user_apc_t apc;
+    struct user_apc apc;
     NTSTATUS status;
 
     status = server_select( NULL, 0, SELECT_INTERRUPTIBLE | SELECT_ALERTABLE, 0, NULL, &apc );
@@ -708,7 +838,7 @@ NTSTATUS WINAPI NtTestAlert(void)
 /***********************************************************************
  *           server_queue_process_apc
  */
-unsigned int server_queue_process_apc( HANDLE process, const apc_call_t *call, apc_result_t *result )
+unsigned int server_queue_process_apc( HANDLE process, const union apc_call *call, union apc_result *result )
 {
     for (;;)
     {
@@ -719,7 +849,7 @@ unsigned int server_queue_process_apc( HANDLE process, const apc_call_t *call, a
         SERVER_START_REQ( queue_apc )
         {
             req->handle = wine_server_obj_handle( process );
-            req->call = *call;
+            wine_server_add_data( req, call, sizeof(*call) );
             if (!(ret = wine_server_call( req )))
             {
                 handle = wine_server_ptr_handle( reply->handle );
@@ -761,35 +891,30 @@ void wine_server_send_fd( int fd )
     struct send_fd data;
     struct msghdr msghdr;
     struct iovec vec;
-    int ret;
-
-#ifdef HAVE_STRUCT_MSGHDR_MSG_ACCRIGHTS
-    msghdr.msg_accrights    = (void *)&fd;
-    msghdr.msg_accrightslen = sizeof(fd);
-#else  /* HAVE_STRUCT_MSGHDR_MSG_ACCRIGHTS */
     char cmsg_buffer[256];
     struct cmsghdr *cmsg;
-    msghdr.msg_control    = cmsg_buffer;
-    msghdr.msg_controllen = sizeof(cmsg_buffer);
-    msghdr.msg_flags      = 0;
-    cmsg = CMSG_FIRSTHDR( &msghdr );
-    cmsg->cmsg_len   = CMSG_LEN( sizeof(fd) );
-    cmsg->cmsg_level = SOL_SOCKET;
-    cmsg->cmsg_type  = SCM_RIGHTS;
-    *(int *)CMSG_DATA(cmsg) = fd;
-    msghdr.msg_controllen = cmsg->cmsg_len;
-#endif  /* HAVE_STRUCT_MSGHDR_MSG_ACCRIGHTS */
+    int ret;
 
     msghdr.msg_name    = NULL;
     msghdr.msg_namelen = 0;
     msghdr.msg_iov     = &vec;
     msghdr.msg_iovlen  = 1;
+    msghdr.msg_control = cmsg_buffer;
+    msghdr.msg_controllen = sizeof(cmsg_buffer);
+    msghdr.msg_flags   = 0;
 
     vec.iov_base = (void *)&data;
     vec.iov_len  = sizeof(data);
 
     data.tid = GetCurrentThreadId();
     data.fd  = fd;
+
+    cmsg = CMSG_FIRSTHDR( &msghdr );
+    cmsg->cmsg_len   = CMSG_LEN( sizeof(fd) );
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type  = SCM_RIGHTS;
+    *(int *)CMSG_DATA(cmsg) = fd;
+    msghdr.msg_controllen = cmsg->cmsg_len;
 
     for (;;)
     {
@@ -811,22 +936,17 @@ static int receive_fd( obj_handle_t *handle )
 {
     struct iovec vec;
     struct msghdr msghdr;
-    int ret, fd = -1;
-
-#ifdef HAVE_STRUCT_MSGHDR_MSG_ACCRIGHTS
-    msghdr.msg_accrights    = (void *)&fd;
-    msghdr.msg_accrightslen = sizeof(fd);
-#else  /* HAVE_STRUCT_MSGHDR_MSG_ACCRIGHTS */
     char cmsg_buffer[256];
-    msghdr.msg_control    = cmsg_buffer;
-    msghdr.msg_controllen = sizeof(cmsg_buffer);
-    msghdr.msg_flags      = 0;
-#endif  /* HAVE_STRUCT_MSGHDR_MSG_ACCRIGHTS */
+    int ret, fd = -1;
 
     msghdr.msg_name    = NULL;
     msghdr.msg_namelen = 0;
     msghdr.msg_iov     = &vec;
     msghdr.msg_iovlen  = 1;
+    msghdr.msg_control = cmsg_buffer;
+    msghdr.msg_controllen = sizeof(cmsg_buffer);
+    msghdr.msg_flags   = 0;
+
     vec.iov_base = (void *)handle;
     vec.iov_len  = sizeof(*handle);
 
@@ -834,7 +954,6 @@ static int receive_fd( obj_handle_t *handle )
     {
         if ((ret = recvmsg( fd_socket, &msghdr, MSG_CMSG_CLOEXEC )) > 0)
         {
-#ifndef HAVE_STRUCT_MSGHDR_MSG_ACCRIGHTS
             struct cmsghdr *cmsg;
             for (cmsg = CMSG_FIRSTHDR( &msghdr ); cmsg; cmsg = CMSG_NXTHDR( &msghdr, cmsg ))
             {
@@ -848,7 +967,6 @@ static int receive_fd( obj_handle_t *handle )
                 }
 #endif
             }
-#endif  /* HAVE_STRUCT_MSGHDR_MSG_ACCRIGHTS */
             if (fd != -1) fcntl( fd, F_SETFD, FD_CLOEXEC ); /* in case MSG_CMSG_CLOEXEC is not supported */
             return fd;
         }
@@ -1043,7 +1161,7 @@ done:
  */
 NTSTATUS CDECL wine_server_fd_to_handle( int fd, unsigned int access, unsigned int attributes, HANDLE *handle )
 {
-    NTSTATUS ret;
+    unsigned int ret;
 
     *handle = 0;
     wine_server_send_fd( fd );
@@ -1057,6 +1175,17 @@ NTSTATUS CDECL wine_server_fd_to_handle( int fd, unsigned int access, unsigned i
     }
     SERVER_END_REQ;
     return ret;
+}
+
+
+/***********************************************************************
+ *           unixcall_wine_server_fd_to_handle
+ */
+NTSTATUS unixcall_wine_server_fd_to_handle( void *args )
+{
+    struct wine_server_fd_to_handle_params *params = args;
+
+    return wine_server_fd_to_handle( params->fd, params->access, params->attributes, params->handle );
 }
 
 
@@ -1076,6 +1205,17 @@ NTSTATUS CDECL wine_server_handle_to_fd( HANDLE handle, unsigned int access, int
         if ((*unix_fd = dup(*unix_fd)) == -1) ret = STATUS_TOO_MANY_OPENED_FILES;
     }
     return ret;
+}
+
+
+/***********************************************************************
+ *           unixcall_wine_server_handle_to_fd
+ */
+NTSTATUS unixcall_wine_server_handle_to_fd( void *args )
+{
+    struct wine_server_handle_to_fd_params *params = args;
+
+    return wine_server_handle_to_fd( params->handle, params->access, params->unix_fd, params->options );
 }
 
 
@@ -1110,29 +1250,13 @@ int server_pipe( int fd[2] )
  */
 static const char *init_server_dir( dev_t dev, ino_t ino )
 {
-    char *p, *dir;
-    size_t len = sizeof("/server-") + 2 * sizeof(dev) + 2 * sizeof(ino) + 2;
+    char *dir = NULL;
 
 #ifdef __ANDROID__  /* there's no /tmp dir on Android */
-    len += strlen( config_dir ) + sizeof("/.wineserver");
-    dir = malloc( len );
-    strcpy( dir, config_dir );
-    strcat( dir, "/.wineserver/server-" );
+    asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
 #else
-    len += sizeof("/tmp/.wine-") + 12;
-    dir = malloc( len );
-    sprintf( dir, "/tmp/.wine-%u/server-", getuid() );
+    asprintf( &dir, "/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino );
 #endif
-    p = dir + strlen( dir );
-    if (dev != (unsigned long)dev)
-        p += sprintf( p, "%lx%08lx-", (unsigned long)((unsigned long long)dev >> 32), (unsigned long)dev );
-    else
-        p += sprintf( p, "%lx-", (unsigned long)dev );
-
-    if (ino != (unsigned long)ino)
-        sprintf( p, "%lx%08lx", (unsigned long)((unsigned long long)ino >> 32), (unsigned long)ino );
-    else
-        sprintf( p, "%lx", (unsigned long)ino );
     return dir;
 }
 
@@ -1436,6 +1560,8 @@ size_t server_init_process(void)
     {
         const char *arch = getenv( "WINEARCH" );
 
+        if (is_win64 && arch && !strcmp( arch, "win32" ))
+            fatal_error( "WINEARCH is set to 'win32' but this is not supported in wow64 mode.\n" );
         if (arch && strcmp( arch, "win32" ) && strcmp( arch, "win64" ))
             fatal_error( "WINEARCH set to invalid value '%s', it must be either win32 or win64.\n", arch );
 
@@ -1515,9 +1641,9 @@ size_t server_init_process(void)
         if (arch && !strcmp( arch, "win32" ))
             fatal_error( "WINEARCH set to win32 but '%s' is a 64-bit installation.\n", config_dir );
 #ifndef _WIN64
-        is_wow64 = TRUE;
         NtCurrentTeb()->GdiBatchCount = PtrToUlong( (char *)NtCurrentTeb() - teb_offset );
         NtCurrentTeb()->WowTebOffset  = -teb_offset;
+        wow_peb = (PEB64 *)((char *)peb - page_size);
 #endif
     }
     else
@@ -1542,8 +1668,8 @@ size_t server_init_process(void)
  */
 void server_init_process_done(void)
 {
-    void *entry, *teb;
-    NTSTATUS status;
+    void *teb;
+    unsigned int status;
     int suspend;
     FILE_FS_DEVICE_INFORMATION info;
 
@@ -1554,8 +1680,6 @@ void server_init_process_done(void)
 #ifdef __APPLE__
     send_server_task_port();
 #endif
-    if (main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE)
-        virtual_set_large_address_space();
 
     /* Install signal handlers; this cannot be done earlier, since we cannot
      * send exceptions to the debugger before the create process event that
@@ -1575,12 +1699,11 @@ void server_init_process_done(void)
 #endif
         status = wine_server_call( req );
         suspend = reply->suspend;
-        entry = wine_server_get_ptr( reply->entry );
     }
     SERVER_END_REQ;
 
     assert( !status );
-    signal_start_thread( entry, peb, suspend, NtCurrentTeb() );
+    signal_start_thread( main_image_info.TransferAddress, peb, suspend, NtCurrentTeb() );
 }
 
 
@@ -1611,6 +1734,31 @@ void server_init_thread( void *entry_point, BOOL *suspend )
     close( reply_pipe );
 }
 
+NTSTATUS WINAPI NtAllocateReserveObject( HANDLE *handle, const OBJECT_ATTRIBUTES *attr,
+                                         MEMORY_RESERVE_OBJECT_TYPE type )
+{
+    struct object_attributes *objattr;
+    unsigned int ret;
+    data_size_t len;
+
+    TRACE("(%p, %p, %d)\n", handle, attr, type);
+
+    *handle = 0;
+    if ((ret = alloc_object_attributes( attr, &objattr, &len ))) return ret;
+
+    SERVER_START_REQ( allocate_reserve_object )
+    {
+        req->type = type;
+        wine_server_add_data( req, objattr, len );
+        if (!(ret = wine_server_call( req )))
+            *handle = wine_server_ptr_handle( reply->handle );
+    }
+    SERVER_END_REQ;
+
+    free( objattr );
+    return ret;
+}
+
 
 /******************************************************************************
  *           NtDuplicateObject
@@ -1619,15 +1767,15 @@ NTSTATUS WINAPI NtDuplicateObject( HANDLE source_process, HANDLE source, HANDLE 
                                    ACCESS_MASK access, ULONG attributes, ULONG options )
 {
     sigset_t sigset;
-    NTSTATUS ret;
+    unsigned int ret;
     int fd = -1;
 
     if (dest) *dest = 0;
 
     if ((options & DUPLICATE_CLOSE_SOURCE) && source_process != NtCurrentProcess())
     {
-        apc_call_t call;
-        apc_result_t result;
+        union apc_call call;
+        union apc_result result;
 
         memset( &call, 0, sizeof(call) );
 
@@ -1679,7 +1827,7 @@ NTSTATUS WINAPI NtDuplicateObject( HANDLE source_process, HANDLE source, HANDLE 
  */
 NTSTATUS WINAPI NtCompareObjects( HANDLE first, HANDLE second )
 {
-    NTSTATUS status;
+    unsigned int status;
 
     SERVER_START_REQ( compare_objects )
     {
@@ -1694,14 +1842,27 @@ NTSTATUS WINAPI NtCompareObjects( HANDLE first, HANDLE second )
 
 
 /**************************************************************************
+ *           NtCompareTokens   (NTDLL.@)
+ */
+NTSTATUS WINAPI NtCompareTokens( HANDLE first, HANDLE second, BOOLEAN *equal )
+{
+    FIXME( "%p,%p,%p: stub\n", first, second, equal );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+
+/**************************************************************************
  *           NtClose
  */
 NTSTATUS WINAPI NtClose( HANDLE handle )
 {
     sigset_t sigset;
     HANDLE port;
-    NTSTATUS ret;
+    unsigned int ret;
     int fd;
+
+    if (HandleToLong( handle ) >= ~5 && HandleToLong( handle ) <= ~0)
+        return STATUS_SUCCESS;
 
     server_enter_uninterrupted_section( &fd_cache_mutex, &sigset );
 
@@ -1729,3 +1890,81 @@ NTSTATUS WINAPI NtClose( HANDLE handle )
     }
     return ret;
 }
+
+#ifdef _WIN64
+
+struct __server_request_info32
+{
+    union
+    {
+        union generic_request req;
+        union generic_reply   reply;
+    } u;
+    unsigned int            data_count;
+    ULONG                   reply_data;
+    struct { ULONG ptr; data_size_t size; } data[__SERVER_MAX_DATA];
+};
+
+/**********************************************************************
+ *		wow64_wine_server_call
+ */
+NTSTATUS wow64_wine_server_call( void *args )
+{
+    struct __server_request_info32 *req32 = args;
+    unsigned int i;
+    NTSTATUS status;
+    struct __server_request_info req;
+
+    req.u.req = req32->u.req;
+    req.data_count = req32->data_count;
+    for (i = 0; i < req.data_count; i++)
+    {
+        req.data[i].ptr = ULongToPtr( req32->data[i].ptr );
+        req.data[i].size = req32->data[i].size;
+    }
+    req.reply_data = ULongToPtr( req32->reply_data );
+    status = wine_server_call( &req );
+    req32->u.reply = req.u.reply;
+    return status;
+}
+
+/***********************************************************************
+ *		wow64_wine_server_fd_to_handle
+ */
+NTSTATUS wow64_wine_server_fd_to_handle( void *args )
+{
+    struct
+    {
+        int          fd;
+        unsigned int access;
+        unsigned int attributes;
+        ULONG        handle;
+    } const *params32 = args;
+
+    ULONG *handle32 = ULongToPtr( params32->handle );
+    HANDLE handle;
+    NTSTATUS ret;
+
+    ret = wine_server_fd_to_handle( params32->fd, params32->access, params32->attributes, &handle );
+    *handle32 = HandleToULong( handle );
+    return ret;
+}
+
+/**********************************************************************
+ *           wow64_wine_server_handle_to_fd
+ */
+NTSTATUS wow64_wine_server_handle_to_fd( void *args )
+{
+    struct
+    {
+        ULONG        handle;
+        unsigned int access;
+        ULONG        unix_fd;
+        ULONG        options;
+    } const *params32 = args;
+
+    return wine_server_handle_to_fd( ULongToHandle( params32->handle ), params32->access,
+                                     ULongToPtr( params32->unix_fd ), ULongToPtr( params32->options ));
+}
+
+#endif /* _WIN64 */

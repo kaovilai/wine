@@ -28,7 +28,6 @@
 #include "opc_private.h"
 
 #include "wine/debug.h"
-#include "wine/heap.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msopc);
 
@@ -120,7 +119,7 @@ HRESULT compress_create_archive(IStream *output, struct zip_archive **out)
     WORD date, time;
     FILETIME ft;
 
-    if (!(archive = heap_alloc(sizeof(*archive))))
+    if (!(archive = malloc(sizeof(*archive))))
         return E_OUTOFMEMORY;
 
     archive->files = NULL;
@@ -152,7 +151,8 @@ static void compress_write(struct zip_archive *archive, void *data, ULONG size)
         archive->position += written;
 
     if (FAILED(archive->write_result))
-        WARN("Failed to write output %p, size %u, written %u, hr %#x.\n", data, size, written, archive->write_result);
+        WARN("Failed to write output %p, size %lu, written %lu, hr %#lx.\n",
+                data, size, written, archive->write_result);
 }
 
 void compress_finalize_archive(struct zip_archive *archive)
@@ -179,9 +179,19 @@ void compress_finalize_archive(struct zip_archive *archive)
     IStream_Release(archive->output);
 
     for (i = 0; i < archive->file_count; i++)
-        heap_free(archive->files[i]);
-    heap_free(archive->files);
-    heap_free(archive);
+        free(archive->files[i]);
+    free(archive->files);
+    free(archive);
+}
+
+static void *zalloc(void *opaque, unsigned int items, unsigned int size)
+{
+    return malloc(items * size);
+}
+
+static void zfree(void *opaque, void *ptr)
+{
+    free(ptr);
 }
 
 static void compress_write_content(struct zip_archive *archive, IStream *content,
@@ -192,6 +202,7 @@ static void compress_write_content(struct zip_archive *archive, IStream *content
     LARGE_INTEGER move;
     ULONG num_read;
     HRESULT hr;
+    int init_ret;
 
     data_desc->crc32 = RtlComputeCrc32(0, NULL, 0);
     move.QuadPart = 0;
@@ -220,7 +231,10 @@ static void compress_write_content(struct zip_archive *archive, IStream *content
     }
 
     memset(&z_str, 0, sizeof(z_str));
-    deflateInit2(&z_str, level, Z_DEFLATED, -MAX_WBITS, MAX_MEM_LEVEL, Z_DEFAULT_STRATEGY);
+    z_str.zalloc = zalloc;
+    z_str.zfree = zfree;
+    if ((init_ret = deflateInit2(&z_str, level, Z_DEFLATED, -MAX_WBITS, MAX_MEM_LEVEL, Z_DEFAULT_STRATEGY)) != Z_OK)
+        WARN("Failed to allocate memory in deflateInit2, ret %d.\n", init_ret);
 
     do
     {
@@ -245,7 +259,7 @@ static void compress_write_content(struct zip_archive *archive, IStream *content
             z_str.avail_out = sizeof(archive->output_buffer);
             z_str.next_out = archive->output_buffer;
 
-            if ((ret = deflate(&z_str, flush)))
+            if ((ret = deflate(&z_str, flush)) < 0)
                 WARN("Failed to deflate, ret %d.\n", ret);
             have = sizeof(archive->output_buffer) - z_str.avail_out;
             compress_write(archive, archive->output_buffer, have);
@@ -269,7 +283,7 @@ HRESULT compress_add_file(struct zip_archive *archive, const WCHAR *path,
     DWORD len;
 
     len = WideCharToMultiByte(CP_ACP, 0, path, -1, NULL, 0, NULL, NULL);
-    if (!(name = heap_alloc(len)))
+    if (!(name = malloc(len)))
         return E_OUTOFMEMORY;
     WideCharToMultiByte(CP_ACP, 0, path, -1, name, len, NULL, NULL);
 
@@ -301,9 +315,9 @@ HRESULT compress_add_file(struct zip_archive *archive, const WCHAR *path,
         return archive->write_result;
 
     /* Set directory entry */
-    if (!(entry = heap_alloc_zero(sizeof(*entry) + local_header.name_length)))
+    if (!(entry = calloc(1, sizeof(*entry) + local_header.name_length)))
     {
-        heap_free(name);
+        free(name);
         return E_OUTOFMEMORY;
     }
 
@@ -319,12 +333,12 @@ HRESULT compress_add_file(struct zip_archive *archive, const WCHAR *path,
     entry->name_length = local_header.name_length;
     entry->local_file_offset = local_header_pos;
     memcpy(entry + 1, name, entry->name_length);
-    heap_free(name);
+    free(name);
 
     if (!opc_array_reserve((void **)&archive->files, &archive->file_size, archive->file_count + 1,
             sizeof(*archive->files)))
     {
-        heap_free(entry);
+        free(entry);
         return E_OUTOFMEMORY;
     }
 

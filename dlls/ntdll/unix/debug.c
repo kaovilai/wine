@@ -129,7 +129,7 @@ static void add_option( const char *name, unsigned char set, unsigned char clear
 }
 
 /* parse a set of debugging option specifications and add them to the option list */
-static void parse_options( const char *str )
+static void parse_options( const char *str, const char *app_name )
 {
     char *opt, *next, *options;
     unsigned int i;
@@ -137,10 +137,17 @@ static void parse_options( const char *str )
     if (!(options = strdup(str))) return;
     for (opt = options; opt; opt = next)
     {
-        const char *p;
+        char *p;
         unsigned char set = 0, clear = 0;
 
         if ((next = strchr( opt, ',' ))) *next++ = 0;
+
+        if ((p = strchr( opt, ':' )))
+        {
+            *p = 0;
+            if (strcasecmp( opt, app_name )) continue;
+            opt = p + 1;
+        }
 
         p = opt + strcspn( opt, "+-" );
         if (!p[0]) p = opt;  /* assume it's a debug channel name */
@@ -182,7 +189,7 @@ static void debug_usage(void)
 {
     static const char usage[] =
         "Syntax of the WINEDEBUG variable:\n"
-        "  WINEDEBUG=[class]+xxx,[class]-yyy,...\n\n"
+        "  WINEDEBUG=[[process:]class]+xxx,[[process:]class]-yyy,...\n\n"
         "Example: WINEDEBUG=+relay,warn-heap\n"
         "    turns on relay traces, disable heap warnings\n"
         "Available message classes: err, warn, fixme, trace\n";
@@ -194,6 +201,7 @@ static void debug_usage(void)
 static void init_options(void)
 {
     char *wine_debug = getenv("WINEDEBUG");
+    const char *app_name, *p;
     struct stat st1, st2;
 
     nb_debug_options = 0;
@@ -208,7 +216,11 @@ static void init_options(void)
     }
     if (!wine_debug) return;
     if (!strcmp( wine_debug, "help" )) debug_usage();
-    parse_options( wine_debug );
+
+    app_name = main_argv[1];
+    while ((p = strpbrk( app_name, "/\\" ))) app_name = p + 1;
+
+    parse_options( wine_debug, app_name );
 }
 
 /***********************************************************************
@@ -219,22 +231,30 @@ static void init_options(void)
 unsigned char __cdecl __wine_dbg_get_channel_flags( struct __wine_debug_channel *channel )
 {
     int min, max, pos, res;
+    unsigned char flags;
+
+    if (!(channel->flags & (1 << __WINE_DBCL_INIT))) return channel->flags;
 
     if (nb_debug_options == -1) init_options();
 
+    flags = default_flags;
     min = 0;
     max = nb_debug_options - 1;
     while (min <= max)
     {
         pos = (min + max) / 2;
         res = strcmp( channel->name, debug_options[pos].name );
-        if (!res) return debug_options[pos].flags;
+        if (!res)
+        {
+            flags = debug_options[pos].flags;
+            break;
+        }
         if (res < 0) max = pos - 1;
         else min = pos + 1;
     }
-    /* no option for this channel */
-    if (channel->flags & (1 << __WINE_DBCL_INIT)) channel->flags = default_flags;
-    return default_flags;
+
+    if (!(flags & (1 << __WINE_DBCL_INIT))) channel->flags = flags; /* not dynamically changeable */
+    return flags;
 }
 
 /***********************************************************************
@@ -253,12 +273,30 @@ const char * __cdecl __wine_dbg_strdup( const char *str )
 }
 
 /***********************************************************************
- *		__wine_dbg_write  (NTDLL.@)
+ *		unixcall_wine_dbg_write
  */
-int WINAPI __wine_dbg_write( const char *str, unsigned int len )
+NTSTATUS unixcall_wine_dbg_write( void *args )
 {
-    return write( 2, str, len );
+    struct wine_dbg_write_params *params = args;
+
+    return write( 2, params->str, params->len );
 }
+
+#ifdef _WIN64
+/***********************************************************************
+ *		wow64_wine_dbg_write
+ */
+NTSTATUS wow64_wine_dbg_write( void *args )
+{
+    struct
+    {
+        ULONG        str;
+        unsigned int len;
+    } const *params32 = args;
+
+    return write( 2, ULongToPtr(params32->str), params32->len );
+}
+#endif
 
 /***********************************************************************
  *		__wine_dbg_output  (NTDLL.@)
@@ -272,7 +310,7 @@ int __cdecl __wine_dbg_output( const char *str )
     if (end)
     {
         ret += append_output( info, str, end + 1 - str );
-        __wine_dbg_write( info->output, info->out_pos );
+        write( 2, info->output, info->out_pos );
         info->out_pos = 0;
         str = end + 1;
     }
@@ -299,11 +337,11 @@ int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_
     {
         if (TRACE_ON(timestamp))
         {
-            ULONG ticks = NtGetTickCount();
-            pos += sprintf( pos, "%3u.%03u:", ticks / 1000, ticks % 1000 );
+            UINT ticks = NtGetTickCount();
+            pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%3u.%03u:", ticks / 1000, ticks % 1000 );
         }
-        if (TRACE_ON(pid)) pos += sprintf( pos, "%04x:", GetCurrentProcessId() );
-        pos += sprintf( pos, "%04x:", GetCurrentThreadId() );
+        if (TRACE_ON(pid)) pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%04x:", (UINT)GetCurrentProcessId() );
+        pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%04x:", (UINT)GetCurrentThreadId() );
     }
     if (function && cls < ARRAY_SIZE( classes ))
         pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%s:%s:%s ",
@@ -339,8 +377,8 @@ void dbg_init(void)
 NTSTATUS WINAPI NtTraceControl( ULONG code, void *inbuf, ULONG inbuf_len,
                                 void *outbuf, ULONG outbuf_len, ULONG *size )
 {
-    FIXME( "code %u, inbuf %p, inbuf_len %u, outbuf %p, outbuf_len %u, size %p\n", code, inbuf, inbuf_len,
-           outbuf, outbuf_len, size );
+    FIXME( "code %u, inbuf %p, inbuf_len %u, outbuf %p, outbuf_len %u, size %p\n",
+           (int)code, inbuf, (int)inbuf_len, outbuf, (int)outbuf_len, size );
     return STATUS_SUCCESS;
 }
 
@@ -350,7 +388,7 @@ NTSTATUS WINAPI NtTraceControl( ULONG code, void *inbuf, ULONG inbuf_len,
  */
 NTSTATUS WINAPI NtSetDebugFilterState( ULONG component_id, ULONG level, BOOLEAN state )
 {
-    FIXME( "component_id %#x, level %u, state %#x stub.\n", component_id, level, state );
+    FIXME( "component_id %#x, level %u, state %#x stub.\n", (int)component_id, (int)level, state );
 
     return STATUS_SUCCESS;
 }

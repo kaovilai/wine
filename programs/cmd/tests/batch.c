@@ -74,17 +74,21 @@ static const char* convert_input_data(const char *data, DWORD size, DWORD *new_s
     return new_data;
 }
 
-static BOOL run_cmd(const char *cmd_data, DWORD cmd_size)
+static BOOL run_cmd(const char *res_name, const char *cmd_data, DWORD cmd_size)
 {
     SECURITY_ATTRIBUTES sa = {sizeof(sa), 0, TRUE};
-    char command[] = "test.cmd";
+    char command_cmd[] = "test.cmd", command_bat[] = "test.bat";
+    char *command;
     STARTUPINFOA si = {sizeof(si)};
     PROCESS_INFORMATION pi;
     HANDLE file,fileerr;
     DWORD size;
     BOOL bres;
 
-    file = CreateFileA("test.cmd", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+    command = (strlen(res_name) >= 4 && !stricmp(res_name + strlen(res_name) - 4, ".cmd")) ?
+        command_cmd : command_bat;
+
+    file = CreateFileA(command, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL, NULL);
     ok(file != INVALID_HANDLE_VALUE, "CreateFile failed\n");
     if(file == INVALID_HANDLE_VALUE)
@@ -92,7 +96,7 @@ static BOOL run_cmd(const char *cmd_data, DWORD cmd_size)
 
     bres = WriteFile(file, cmd_data, cmd_size, &size, NULL);
     CloseHandle(file);
-    ok(bres, "Could not write to file: %u\n", GetLastError());
+    ok(bres, "Could not write to file: %lu\n", GetLastError());
     if(!bres)
         return FALSE;
 
@@ -112,7 +116,7 @@ static BOOL run_cmd(const char *cmd_data, DWORD cmd_size)
     si.hStdOutput = file;
     si.hStdError = fileerr;
     bres = CreateProcessA(NULL, command, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
-    ok(bres, "CreateProcess failed: %u\n", GetLastError());
+    ok(bres, "CreateProcess failed: %lu\n", GetLastError());
     if(!bres) {
         DeleteFileA("test.out");
         return FALSE;
@@ -123,7 +127,7 @@ static BOOL run_cmd(const char *cmd_data, DWORD cmd_size)
     CloseHandle(pi.hProcess);
     CloseHandle(file);
     CloseHandle(fileerr);
-    DeleteFileA("test.cmd");
+    DeleteFileA(command);
     return TRUE;
 }
 
@@ -131,9 +135,22 @@ static DWORD map_file(const char *file_name, const char **ret)
 {
     HANDLE file, map;
     DWORD size;
+    unsigned retries;
 
-    file = CreateFileA(file_name, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
-    ok(file != INVALID_HANDLE_VALUE, "CreateFile failed: %08x\n", GetLastError());
+    /* Even if .cmd/.bat wait on child process succeeded, there are cases where the
+     * output file is not closed yet (on Windows) (seems to only happen with .bat input files).
+     * So retry a couple of times before failing.
+     * Note: using file share option works at once, but we cannot be sure all
+     * output has been flushed.
+     */
+    for (retries = 0; retries < 50; retries++)
+    {
+        file = CreateFileA(file_name, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
+        if (file != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION)
+            break;
+        Sleep(1);
+    }
+    ok(file != INVALID_HANDLE_VALUE, "CreateFile failed: %08lx\n", GetLastError());
     if(file == INVALID_HANDLE_VALUE)
         return 0;
 
@@ -141,12 +158,12 @@ static DWORD map_file(const char *file_name, const char **ret)
 
     map = CreateFileMappingA(file, NULL, PAGE_READONLY, 0, 0, NULL);
     CloseHandle(file);
-    ok(map != NULL, "CreateFileMappingA(%s) failed: %u\n", file_name, GetLastError());
+    ok(map != NULL, "CreateFileMappingA(%s) failed: %lu\n", file_name, GetLastError());
     if(!map)
         return 0;
 
     *ret = MapViewOfFile(map, FILE_MAP_READ, 0, 0, 0);
-    ok(*ret != NULL, "MapViewOfFile failed: %u\n", GetLastError());
+    ok(*ret != NULL, "MapViewOfFile failed: %lu\n", GetLastError());
     CloseHandle(map);
     if(!*ret)
         return 0;
@@ -167,6 +184,7 @@ static const char *compare_line(const char *out_line, const char *out_end, const
     static const char space_cmd[] = {'@','s','p','a','c','e','@'};
     static const char spaces_cmd[] = {'@','s','p','a','c','e','s','@'};
     static const char tab_cmd[]   = {'@','t','a','b','@'};
+    static const char formfeed_cmd[]   = {'@','f','o','r','m', 'f', 'e', 'e', 'd', '@'};
     static const char or_broken_cmd[] = {'@','o','r','_','b','r','o','k','e','n','@'};
 
     while(exp_ptr < exp_end) {
@@ -242,6 +260,15 @@ static const char *compare_line(const char *out_line, const char *out_end, const
                 } else {
                     err = out_end;
                 }
+            }else if(exp_ptr+sizeof(formfeed_cmd) <= exp_end
+                    && !memcmp(exp_ptr, formfeed_cmd, sizeof(formfeed_cmd))) {
+                exp_ptr += sizeof(formfeed_cmd);
+                if(out_ptr < out_end && *out_ptr == '\f') {
+                    out_ptr++;
+                    continue;
+                } else {
+                    err = out_end;
+                }
             }else if(exp_ptr+sizeof(or_broken_cmd) <= exp_end
                      && !memcmp(exp_ptr, or_broken_cmd, sizeof(or_broken_cmd))) {
                 if(out_ptr == out_end)
@@ -307,10 +334,10 @@ static void test_output(const char *out_data, DWORD out_size, const char *exp_da
 
             err = compare_line(out_ptr, out_nl, exp_ptr, exp_nl);
             if(err == out_nl)
-                ok(0, "unexpected end of line %d (got '%.*s', wanted '%.*s')\n",
+                ok(0, "unexpected end of line %ld (got '%.*s', wanted '%.*s')\n",
                    line, (int)(out_nl-out_ptr), out_ptr, (int)(exp_nl-exp_ptr), exp_ptr);
             else if(err == exp_nl)
-                ok(0, "excess characters on line %d (got '%.*s', wanted '%.*s')\n",
+                ok(0, "excess characters on line %ld (got '%.*s', wanted '%.*s')\n",
                    line, (int)(out_nl-out_ptr), out_ptr, (int)(exp_nl-exp_ptr), exp_ptr);
             else if (!err && is_todo_wine && is_out_resync && is_exp_resync)
                 /* Consider that the todo_wine was to deal with extra lines,
@@ -318,7 +345,7 @@ static void test_output(const char *out_data, DWORD out_size, const char *exp_da
                  */
                 err = NULL;
             else
-                ok(!err, "unexpected char 0x%x position %d in line %d (got '%.*s', wanted '%.*s')\n",
+                ok(!err, "unexpected char 0x%x position %d in line %ld (got '%.*s', wanted '%.*s')\n",
                    (err ? *err : 0), (err ? (int)(err-out_ptr) : -1), line, (int)(out_nl-out_ptr), out_ptr, (int)(exp_nl-exp_ptr), exp_ptr);
         }
 
@@ -344,11 +371,11 @@ static void test_output(const char *out_data, DWORD out_size, const char *exp_da
         }
     }
 
-    ok(exp_ptr >= exp_data+exp_size, "unexpected end of output in line %d, missing %s\n", line, exp_ptr);
+    ok(exp_ptr >= exp_data+exp_size, "unexpected end of output in line %ld, missing %s\n", line, exp_ptr);
     ok(out_ptr >= out_data+out_size, "too long output, got additional %s\n", out_ptr);
 }
 
-static void run_test(const char *cmd_data, DWORD cmd_size, const char *exp_data, DWORD exp_size)
+static void run_test(const char *res_name, const char *cmd_data, DWORD cmd_size, const char *exp_data, DWORD exp_size)
 {
     const char *out_data, *actual_cmd_data;
     DWORD out_size, actual_cmd_size;
@@ -357,7 +384,7 @@ static void run_test(const char *cmd_data, DWORD cmd_size, const char *exp_data,
     if(!actual_cmd_size || !actual_cmd_data)
         goto cleanup;
 
-    if(!run_cmd(actual_cmd_data, actual_cmd_size))
+    if(!run_cmd(res_name, actual_cmd_data, actual_cmd_size))
         goto cleanup;
 
     out_size = map_file("test.out", &out_data);
@@ -380,19 +407,19 @@ static void run_from_file(const char *file_name)
 
     test_size = map_file(file_name, &test_data);
     if(!test_size) {
-        ok(0, "Could not map file %s: %u\n", file_name, GetLastError());
+        ok(0, "Could not map file %s: %lu\n", file_name, GetLastError());
         return;
     }
 
     sprintf(out_name, "%s.exp", file_name);
     out_size = map_file(out_name, &out_data);
     if(!out_size) {
-        ok(0, "Could not map file %s: %u\n", out_name, GetLastError());
+        ok(0, "Could not map file %s: %lu\n", out_name, GetLastError());
         UnmapViewOfFile(test_data);
         return;
     }
 
-    run_test(test_data, test_size, out_data, out_size);
+    run_test(file_name, test_data, test_size, out_data, out_size);
 
     UnmapViewOfFile(test_data);
     UnmapViewOfFile(out_data);
@@ -405,7 +432,7 @@ static DWORD load_resource(const char *name, const char *type, const char **ret)
     DWORD size;
 
     src = FindResourceA(NULL, name, type);
-    ok(src != NULL, "Could not find resource %s: %u\n", name, GetLastError());
+    ok(src != NULL, "Could not find resource %s: %lu\n", name, GetLastError());
     if(!src)
         return 0;
 
@@ -435,7 +462,7 @@ static BOOL WINAPI test_enum_proc(HMODULE module, LPCSTR type, LPSTR name, LONG_
     if(!out_size)
         return TRUE;
 
-    run_test(cmd_data, cmd_size, out_data, out_size);
+    run_test(name, cmd_data, cmd_size, out_data, out_size);
     return TRUE;
 }
 
@@ -453,6 +480,24 @@ static int cmd_available(void)
         return TRUE;
     }
     return FALSE;
+}
+
+void create_nul_test_file(void)
+{
+    HANDLE file;
+    DWORD size;
+    BOOL bres;
+    char contents[] = "a b c\nd e\0f\ng h i";
+
+    file = CreateFileA("nul_test_file", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL, NULL);
+    ok(file != INVALID_HANDLE_VALUE, "CreateFile failed\n");
+    if(file == INVALID_HANDLE_VALUE)
+        return;
+
+    bres = WriteFile(file, contents, ARRAYSIZE(contents), &size, NULL);
+    ok(bres, "Could not write to file: %lu\n", GetLastError());
+    CloseHandle(file);
 }
 
 START_TEST(batch)
@@ -479,9 +524,13 @@ START_TEST(batch)
     }
     shortpath_len = GetShortPathNameA(path, shortpath, ARRAY_SIZE(shortpath));
 
+    create_nul_test_file();
+
     argc = winetest_get_mainargs(&argv);
     if(argc > 2)
         run_from_file(argv[2]);
     else
         EnumResourceNamesA(NULL, "TESTCMD", test_enum_proc, 0);
+
+    DeleteFileA("nul_test_file");
 }

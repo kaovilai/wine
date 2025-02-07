@@ -46,7 +46,6 @@
 #include "shtypes.h"
 #include "shresdef.h"
 #include "shell32_main.h"
-#include "undocshell.h"
 #include "pidl.h"
 #include "shlwapi.h"
 #include "sddl.h"
@@ -496,7 +495,7 @@ static BOOL PathMakeUniqueNameA(
 	LPCSTR lpszLongName,
 	LPCSTR lpszPathName)
 {
-	FIXME("%p %u %s %s %s stub\n",
+	FIXME("%p %lu %s %s %s stub\n",
 	 lpszBuffer, dwBuffSize, debugstr_a(lpszShortName),
 	 debugstr_a(lpszLongName), debugstr_a(lpszPathName));
 	return TRUE;
@@ -512,7 +511,7 @@ static BOOL PathMakeUniqueNameW(
 	LPCWSTR lpszLongName,
 	LPCWSTR lpszPathName)
 {
-	FIXME("%p %u %s %s %s stub\n",
+	FIXME("%p %lu %s %s %s stub\n",
 	 lpszBuffer, dwBuffSize, debugstr_w(lpszShortName),
 	 debugstr_w(lpszLongName), debugstr_w(lpszPathName));
 	return TRUE;
@@ -680,25 +679,26 @@ BOOL WINAPI PathQualifyAW(LPCVOID pszPath)
 	return PathQualifyA(pszPath);
 }
 
-BOOL WINAPI PathFindOnPathExA(LPSTR,LPCSTR *,DWORD);
-BOOL WINAPI PathFindOnPathExW(LPWSTR,LPCWSTR *,DWORD);
-BOOL WINAPI PathFileExistsDefExtA(LPSTR,DWORD);
-BOOL WINAPI PathFileExistsDefExtW(LPWSTR,DWORD);
-
 static BOOL PathResolveA(char *path, const char **dirs, DWORD flags)
 {
     BOOL is_file_spec = PathIsFileSpecA(path);
-    DWORD dwWhich = flags & PRF_DONTFINDLNK ? 0xf : 0xff;
+    DWORD dwWhich = flags & PRF_DONTFINDLNK ? 0xf : 0xbf;
 
-    TRACE("(%s,%p,0x%08x)\n", debugstr_a(path), dirs, flags);
+    TRACE("(%s,%p,0x%08lx)\n", debugstr_a(path), dirs, flags);
 
-    if (flags & PRF_VERIFYEXISTS && !PathFileExistsA(path))
+    if (flags & PRF_VERIFYEXISTS)
     {
         if (PathFindOnPathExA(path, dirs, dwWhich))
+        {
+            if (!PathIsFileSpecA(path)) GetFullPathNameA(path, MAX_PATH, path, NULL);
             return TRUE;
-        if (PathFileExistsDefExtA(path, dwWhich))
-            return TRUE;
-        if (!is_file_spec) GetFullPathNameA(path, MAX_PATH, path, NULL);
+        }
+        if (!is_file_spec)
+        {
+            GetFullPathNameA(path, MAX_PATH, path, NULL);
+            if (PathFileExistsDefExtA(path, dwWhich))
+                return TRUE;
+        }
         SetLastError(ERROR_FILE_NOT_FOUND);
         return FALSE;
     }
@@ -714,20 +714,26 @@ static BOOL PathResolveA(char *path, const char **dirs, DWORD flags)
     return TRUE;
 }
 
-static BOOL PathResolveW(WCHAR *path, const WCHAR **dirs, DWORD flags)
+BOOL WINAPI PathResolveW(WCHAR *path, const WCHAR **dirs, DWORD flags)
 {
     BOOL is_file_spec = PathIsFileSpecW(path);
-    DWORD dwWhich = flags & PRF_DONTFINDLNK ? 0xf : 0xff;
+    DWORD dwWhich = flags & PRF_DONTFINDLNK ? 0xf : 0xbf;
 
-    TRACE("(%s,%p,0x%08x)\n", debugstr_w(path), dirs, flags);
+    TRACE("(%s,%p,0x%08lx)\n", debugstr_w(path), dirs, flags);
 
-    if (flags & PRF_VERIFYEXISTS && !PathFileExistsW(path))
+    if (flags & PRF_VERIFYEXISTS)
     {
         if (PathFindOnPathExW(path, dirs, dwWhich))
+        {
+            if (!PathIsFileSpecW(path)) GetFullPathNameW(path, MAX_PATH, path, NULL);
             return TRUE;
-        if (PathFileExistsDefExtW(path, dwWhich))
-            return TRUE;
-        if (!is_file_spec) GetFullPathNameW(path, MAX_PATH, path, NULL);
+        }
+        if (!is_file_spec)
+        {
+            GetFullPathNameW(path, MAX_PATH, path, NULL);
+            if (PathFileExistsDefExtW(path, dwWhich))
+                return TRUE;
+        }
         SetLastError(ERROR_FILE_NOT_FOUND);
         return FALSE;
     }
@@ -763,7 +769,7 @@ static LONG PathProcessCommandA (
 	DWORD dwBuffSize,
 	DWORD dwFlags)
 {
-	FIXME("%s %p 0x%04x 0x%04x stub\n",
+	FIXME("%s %p 0x%04lx 0x%04lx stub\n",
 	lpszPath, lpszBuff, dwBuffSize, dwFlags);
 	if(!lpszPath) return -1;
 	if(lpszBuff) strcpy(lpszBuff, lpszPath);
@@ -779,7 +785,7 @@ static LONG PathProcessCommandW (
 	DWORD dwBuffSize,
 	DWORD dwFlags)
 {
-	FIXME("(%s, %p, 0x%04x, 0x%04x) stub\n",
+	FIXME("(%s, %p, 0x%04lx, 0x%04lx) stub\n",
 	debugstr_w(lpszPath), lpszBuff, dwBuffSize, dwFlags);
 	if(!lpszPath) return -1;
 	if(lpszBuff) lstrcpyW(lpszBuff, lpszPath);
@@ -875,7 +881,7 @@ static ULONG WINAPI ApplicationDestinations_AddRef(IApplicationDestinations *ifa
     IApplicationDestinationsImpl *This = impl_from_IApplicationDestinations(iface);
     ULONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p), new refcount=%i\n", This, ref);
+    TRACE("(%p), new refcount=%li\n", This, ref);
 
     return ref;
 }
@@ -885,10 +891,10 @@ static ULONG WINAPI ApplicationDestinations_Release(IApplicationDestinations *if
     IApplicationDestinationsImpl *This = impl_from_IApplicationDestinations(iface);
     ULONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p), new refcount=%i\n", This, ref);
+    TRACE("(%p), new refcount=%li\n", This, ref);
 
     if (ref == 0)
-        heap_free(This);
+        free(This);
 
     return ref;
 }
@@ -994,7 +1000,7 @@ static ULONG WINAPI ApplicationDocumentLists_AddRef(IApplicationDocumentLists *i
     IApplicationDocumentListsImpl *This = impl_from_IApplicationDocumentLists(iface);
     ULONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p), new refcount=%i\n", This, ref);
+    TRACE("(%p), new refcount=%li\n", This, ref);
 
     return ref;
 }
@@ -1004,10 +1010,10 @@ static ULONG WINAPI ApplicationDocumentLists_Release(IApplicationDocumentLists *
     IApplicationDocumentListsImpl *This = impl_from_IApplicationDocumentLists(iface);
     ULONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p), new refcount=%i\n", This, ref);
+    TRACE("(%p), new refcount=%li\n", This, ref);
 
     if (ref == 0)
-        heap_free(This);
+        free(This);
 
     return ref;
 }
@@ -1711,7 +1717,7 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x4b */
         .id         = &FOLDERID_ImplicitAppShortcuts,
-        .type       = CSIDL_Type_Disallowed, /* FIXME */
+        .type       = CSIDL_Type_User,
         .category   = KF_CATEGORY_PERUSER,
         .name       = L"ImplicitAppShortcuts",
         .parent     = &FOLDERID_UserPinned,
@@ -1867,7 +1873,7 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x5b */
         .id         = &FOLDERID_QuickLaunch,
-        .type       = CSIDL_Type_Disallowed, /* FIXME */
+        .type       = CSIDL_Type_User,
         .category   = KF_CATEGORY_PERUSER,
         .name       = L"Quick Launch",
         .parent     = &FOLDERID_RoamingAppData,
@@ -2013,7 +2019,7 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x6c */
         .id         = &FOLDERID_UserPinned,
-        .type       = CSIDL_Type_Disallowed, /* FIXME */
+        .type       = CSIDL_Type_User,
         .category   = KF_CATEGORY_PERUSER,
         .name       = L"User Pinned",
         .parent     = &FOLDERID_QuickLaunch,
@@ -2157,7 +2163,7 @@ static HRESULT _SHGetUserShellFolderPath(HKEY rootKey, LPCWSTR userPrefix,
         hr = E_FAIL;
     RegCloseKey(shellFolderKey);
     RegCloseKey(userShellFolderKey);
-    TRACE("returning 0x%08x\n", hr);
+    TRACE("returning 0x%08lx\n", hr);
     return hr;
 }
 
@@ -2246,7 +2252,7 @@ static HRESULT _SHGetDefaultValue(BYTE folder, LPWSTR pszPath)
     if (SUCCEEDED(hr))
         append_relative_path(folder, pszPath);
 
-    TRACE("returning 0x%08x\n", hr);
+    TRACE("returning 0x%08lx\n", hr);
     return hr;
 }
 
@@ -2261,7 +2267,7 @@ static HRESULT _SHGetCurrentVersionPath(DWORD dwFlags, BYTE folder,
 {
     HRESULT hr;
 
-    TRACE("0x%08x,0x%02x,%p\n", dwFlags, folder, pszPath);
+    TRACE("0x%08lx,0x%02x,%p\n", dwFlags, folder, pszPath);
 
     if (folder >= ARRAY_SIZE(CSIDL_Data))
         return E_INVALIDARG;
@@ -2313,7 +2319,7 @@ static HRESULT _SHGetCurrentVersionPath(DWORD dwFlags, BYTE folder,
             RegCloseKey(hKey);
         }
     }
-    TRACE("returning 0x%08x (output path is %s)\n", hr, debugstr_w(pszPath));
+    TRACE("returning 0x%08lx (output path is %s)\n", hr, debugstr_w(pszPath));
     return hr;
 }
 
@@ -2330,13 +2336,13 @@ static LPWSTR _GetUserSidStringFromToken(HANDLE Token)
     {
         if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
             return NULL;
-        UserInfo = heap_alloc(InfoSize);
+        UserInfo = malloc(InfoSize);
         if (UserInfo == NULL)
             return NULL;
         if (! GetTokenInformation(Token, TokenUser, UserInfo, InfoSize,
                                   &InfoSize))
         {
-            heap_free(UserInfo);
+            free(UserInfo);
             return NULL;
         }
     }
@@ -2345,7 +2351,7 @@ static LPWSTR _GetUserSidStringFromToken(HANDLE Token)
         SidStr = NULL;
 
     if (UserInfo != (PTOKEN_USER) InfoBuffer)
-        heap_free(UserInfo);
+        free(UserInfo);
 
     return SidStr;
 }
@@ -2365,7 +2371,7 @@ static HRESULT _SHGetUserProfilePath(HANDLE hToken, DWORD dwFlags, BYTE folder,
     WCHAR buffer[40];
     HRESULT hr;
 
-    TRACE("%p,0x%08x,0x%02x,%p\n", hToken, dwFlags, folder, pszPath);
+    TRACE("%p,0x%08lx,0x%02x,%p\n", hToken, dwFlags, folder, pszPath);
 
     if (folder >= ARRAY_SIZE(CSIDL_Data))
         return E_INVALIDARG;
@@ -2424,7 +2430,7 @@ static HRESULT _SHGetUserProfilePath(HANDLE hToken, DWORD dwFlags, BYTE folder,
             LocalFree((HLOCAL) userPrefix);
     }
 error:
-    TRACE("returning 0x%08x (output path is %s)\n", hr, debugstr_w(pszPath));
+    TRACE("returning 0x%08lx (output path is %s)\n", hr, debugstr_w(pszPath));
     return hr;
 }
 
@@ -2438,7 +2444,7 @@ static HRESULT _SHGetAllUsersProfilePath(DWORD dwFlags, BYTE folder,
 {
     HRESULT hr;
 
-    TRACE("0x%08x,0x%02x,%p\n", dwFlags, folder, pszPath);
+    TRACE("0x%08lx,0x%02x,%p\n", dwFlags, folder, pszPath);
 
     if (folder >= ARRAY_SIZE(CSIDL_Data))
         return E_INVALIDARG;
@@ -2456,7 +2462,7 @@ static HRESULT _SHGetAllUsersProfilePath(DWORD dwFlags, BYTE folder,
         if (FAILED(hr))
             hr = _SHGetDefaultValue(folder, pszPath);
     }
-    TRACE("returning 0x%08x (output path is %s)\n", hr, debugstr_w(pszPath));
+    TRACE("returning 0x%08lx (output path is %s)\n", hr, debugstr_w(pszPath));
     return hr;
 }
 
@@ -2507,7 +2513,7 @@ static HRESULT _SHGetProfilesValue(HKEY profilesKey, LPCWSTR szValueName,
         else
             hr = S_OK;
     }
-    TRACE("returning 0x%08x (output value is %s)\n", hr, debugstr_w(szValue));
+    TRACE("returning 0x%08lx (output value is %s)\n", hr, debugstr_w(szValue));
     return hr;
 }
 
@@ -2635,7 +2641,7 @@ static HRESULT _SHExpandEnvironmentStrings(LPCWSTR szSrc, LPWSTR szDest)
 end:
     if (key)
         RegCloseKey(key);
-    TRACE("returning 0x%08x (input was %s, output is %s)\n", hr,
+    TRACE("returning 0x%08lx (input was %s, output is %s)\n", hr,
      debugstr_w(szSrc), debugstr_w(szDest));
     return hr;
 }
@@ -2657,20 +2663,20 @@ static BOOL WINAPI init_xdg_dirs( INIT_ONCE *once, void *param, void **context )
         fmt = L"%s/.config/user-dirs.dirs";
     }
     len = lstrlenW(var) + lstrlenW(fmt);
-    name = heap_alloc( len * sizeof(WCHAR) );
+    name = malloc( len * sizeof(WCHAR) );
     swprintf( name, len, fmt, var );
     name[1] = '\\';  /* change \??\ to \\?\ */
     for (ptr = name; *ptr; ptr++) if (*ptr == '/') *ptr = '\\';
 
     file = CreateFileW( name, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, 0 );
-    heap_free( name );
+    free( name );
     if (file != INVALID_HANDLE_VALUE)
     {
         len = GetFileSize( file, NULL );
-        if (!(xdg_config = heap_alloc( len + 1 ))) return TRUE;
+        if (!(xdg_config = malloc( len + 1 ))) return TRUE;
         if (!ReadFile( file, xdg_config, len, &xdg_config_len, NULL ))
         {
-            heap_free( xdg_config );
+            free( xdg_config );
             xdg_config = NULL;
         }
         else
@@ -2705,7 +2711,7 @@ static char *get_xdg_path( const char *var )
         p++;
         if (*p != '/' && strncmp( p, "$HOME/", 6 )) continue;
 
-        if (!(ret = heap_alloc( strlen(p) + 1 ))) break;
+        if (!(ret = malloc( strlen(p) + 1 ))) break;
         for (i = 0; *p && *p != '"'; i++, p++)
         {
             if (*p == '\\' && p[1]) p++;
@@ -2714,7 +2720,7 @@ static char *get_xdg_path( const char *var )
         ret[i] = 0;
         if (*p != '"')
         {
-            heap_free( ret );
+            free( ret );
             ret = NULL;
         }
         break;
@@ -2728,7 +2734,7 @@ static BOOL link_folder( HANDLE mgr, const UNICODE_STRING *path, const char *lin
     DWORD len = sizeof(*ioctl) + path->Length + strlen(link) + 1;
     BOOL ret;
 
-    if (!(ioctl = heap_alloc( len ))) return FALSE;
+    if (!(ioctl = malloc( len ))) return FALSE;
     ioctl->create_backup = FALSE;
     ioctl->folder_offset = sizeof(*ioctl);
     ioctl->folder_size = path->Length;
@@ -2737,7 +2743,7 @@ static BOOL link_folder( HANDLE mgr, const UNICODE_STRING *path, const char *lin
     strcpy( (char *)ioctl + ioctl->symlink_offset, link );
 
     ret = DeviceIoControl( mgr, IOCTL_MOUNTMGR_DEFINE_SHELL_FOLDER, ioctl, len, NULL, 0, NULL, NULL );
-    heap_free( ioctl );
+    free( ioctl );
     return ret;
 }
 
@@ -2768,14 +2774,11 @@ static void create_link( const WCHAR *path, const char *xdg_name, const char *de
     {
         if (link_folder( mgr, &nt_name, target )) goto done;
     }
-    if (link_folder( mgr, &nt_name, default_name )) goto done;
-
-    /* fall back to HOME */
-    link_folder( mgr, &nt_name, "$HOME" );
+    link_folder( mgr, &nt_name, default_name );
 
 done:
     RtlFreeUnicodeString( &nt_name );
-    heap_free( target );
+    free( target );
     CloseHandle( mgr );
 }
 
@@ -2863,16 +2866,16 @@ HRESULT WINAPI SHGetFolderPathAndSubDirA(
     LPWSTR pszSubPathW = NULL;
     LPWSTR pszPathW = NULL;
 
-    TRACE("%p,%#x,%p,%#x,%s,%p\n", hwndOwner, nFolder, hToken, dwFlags, debugstr_a(pszSubPath), pszPath);
+    TRACE("%p,%#x,%p,%#lx,%s,%p\n", hwndOwner, nFolder, hToken, dwFlags, debugstr_a(pszSubPath), pszPath);
 
     if(pszPath) {
-        pszPathW = heap_alloc(MAX_PATH * sizeof(WCHAR));
+        pszPathW = malloc(MAX_PATH * sizeof(WCHAR));
         if(!pszPathW) {
             hr = HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY);
             goto cleanup;
         }
     }
-    TRACE("%08x,%08x,%s\n",nFolder, dwFlags, debugstr_w(pszSubPathW));
+    TRACE("%08x,%08lx,%s\n",nFolder, dwFlags, debugstr_w(pszSubPathW));
 
     /* SHGetFolderPathAndSubDirW does not distinguish if pszSubPath isn't
      * set (null), or an empty string.therefore call it without the parameter set
@@ -2880,7 +2883,7 @@ HRESULT WINAPI SHGetFolderPathAndSubDirA(
      */
     if (pszSubPath && pszSubPath[0]) {
         length = MultiByteToWideChar(CP_ACP, 0, pszSubPath, -1, NULL, 0);
-        pszSubPathW = heap_alloc(length * sizeof(WCHAR));
+        pszSubPathW = malloc(length * sizeof(WCHAR));
         if(!pszSubPathW) {
             hr = HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY);
             goto cleanup;
@@ -2894,8 +2897,8 @@ HRESULT WINAPI SHGetFolderPathAndSubDirA(
         WideCharToMultiByte(CP_ACP, 0, pszPathW, -1, pszPath, MAX_PATH, NULL, NULL);
 
 cleanup:
-    heap_free(pszPathW);
-    heap_free(pszSubPathW);
+    free(pszPathW);
+    free(pszSubPathW);
     return hr;
 }
 
@@ -2916,7 +2919,7 @@ HRESULT WINAPI SHGetFolderPathAndSubDirW(
     CSIDL_Type type;
     int        ret;
 
-    TRACE("%p,%#x,%p,%#x,%s,%p\n", hwndOwner, nFolder, hToken, dwFlags, debugstr_w(pszSubPath), pszPath);
+    TRACE("%p,%#x,%p,%#lx,%s,%p\n", hwndOwner, nFolder, hToken, dwFlags, debugstr_w(pszSubPath), pszPath);
 
     /* Windows always NULL-terminates the resulting path regardless of success
      * or failure, so do so first
@@ -3020,7 +3023,7 @@ HRESULT WINAPI SHGetFolderPathAndSubDirW(
 
     TRACE("Created missing system directory %s\n", debugstr_w(szBuildPath));
 end:
-    TRACE("returning 0x%08x (final path is %s)\n", hr, debugstr_w(szBuildPath));
+    TRACE("returning 0x%08lx (final path is %s)\n", hr, debugstr_w(szBuildPath));
     return hr;
 }
 
@@ -3039,7 +3042,7 @@ HRESULT WINAPI SHGetFolderPathA(
     WCHAR szTemp[MAX_PATH];
     HRESULT hr;
 
-    TRACE("%p,%d,%p,%#x,%p\n", hwndOwner, nFolder, hToken, dwFlags, pszPath);
+    TRACE("%p,%d,%p,%#lx,%p\n", hwndOwner, nFolder, hToken, dwFlags, pszPath);
 
     if (pszPath)
         *pszPath = '\0';
@@ -3144,7 +3147,7 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
     if (hKey)
         RegCloseKey(hKey);
 
-    TRACE("returning 0x%08x\n", hr);
+    TRACE("returning 0x%08lx\n", hr);
     return hr;
 }
 
@@ -3209,7 +3212,7 @@ static HRESULT _SHRegisterUserShellFolders(BOOL bDefault)
 
     hr = _SHRegisterFolders(hRootKey, hToken, pUserShellFolderPath,
      pShellFolderPath, folders, ARRAY_SIZE(folders));
-    TRACE("returning 0x%08x\n", hr);
+    TRACE("returning 0x%08lx\n", hr);
     return hr;
 }
 
@@ -3236,7 +3239,7 @@ static HRESULT _SHRegisterCommonShellFolders(void)
                             L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
                             L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
                             folders, ARRAY_SIZE(folders));
-    TRACE("returning 0x%08x\n", hr);
+    TRACE("returning 0x%08lx\n", hr);
     return hr;
 }
 
@@ -3255,8 +3258,7 @@ static HRESULT create_extra_folders(void)
     ret = RegCreateKeyW( HKEY_CURRENT_USER, L"Environment", &hkey );
     if (ret) return HRESULT_FROM_WIN32( ret );
 
-    /* FIXME: should be under AppData, but we don't want spaces in the temp path */
-    hr = SHGetFolderPathAndSubDirW( 0, CSIDL_PROFILE | CSIDL_FLAG_CREATE, NULL,
+    hr = SHGetFolderPathAndSubDirW( 0, CSIDL_LOCAL_APPDATA | CSIDL_FLAG_CREATE, NULL,
                                     SHGFP_TYPE_DEFAULT, L"Temp", path );
     if (SUCCEEDED(hr))
     {
@@ -3293,9 +3295,9 @@ static HRESULT set_folder_attributes(void)
     static const struct
     {
         const CLSID *clsid;
-        BOOL wfparsing : 1;
-        BOOL wfdisplay : 1;
-        BOOL hideasdel : 1;
+        unsigned int wfparsing : 1;
+        unsigned int wfdisplay : 1;
+        unsigned int hideasdel : 1;
         DWORD attr;
         DWORD call_for_attr;
     } folders[] =
@@ -3416,7 +3418,7 @@ HRESULT WINAPI SHGetFolderLocation(
 {
     HRESULT hr = E_INVALIDARG;
 
-    TRACE("%p 0x%08x %p 0x%08x %p\n",
+    TRACE("%p 0x%08x %p 0x%08lx %p\n",
      hwndOwner, nFolder, hToken, dwReserved, ppidl);
     
     if (!ppidl)
@@ -3521,7 +3523,7 @@ HRESULT WINAPI SHGetKnownFolderPath(REFKNOWNFOLDERID rfid, DWORD flags, HANDLE t
     HRESULT    hr;
     int folder = csidl_from_id(rfid), shgfp_flags;
 
-    TRACE("%s, 0x%08x, %p, %p\n", debugstr_guid(rfid), flags, token, ret_path);
+    TRACE("%s, 0x%08lx, %p, %p\n", debugstr_guid(rfid), flags, token, ret_path);
 
     *ret_path = NULL;
 
@@ -3531,13 +3533,13 @@ HRESULT WINAPI SHGetKnownFolderPath(REFKNOWNFOLDERID rfid, DWORD flags, HANDLE t
     if (flags & ~(KF_FLAG_CREATE|KF_FLAG_SIMPLE_IDLIST|KF_FLAG_DONT_UNEXPAND|
         KF_FLAG_DONT_VERIFY|KF_FLAG_NO_ALIAS|KF_FLAG_INIT|KF_FLAG_DEFAULT_PATH|KF_FLAG_NOT_PARENT_RELATIVE))
     {
-        FIXME("flags 0x%08x not supported\n", flags);
+        FIXME("flags 0x%08lx not supported\n", flags);
         return E_INVALIDARG;
     }
 
     if ((flags & (KF_FLAG_DEFAULT_PATH | KF_FLAG_NOT_PARENT_RELATIVE)) == KF_FLAG_NOT_PARENT_RELATIVE)
     {
-        WARN("Invalid flags mask %#x.\n", flags);
+        WARN("Invalid flags mask %#lx.\n", flags);
         return E_INVALIDARG;
     }
 
@@ -3553,11 +3555,11 @@ HRESULT WINAPI SHGetKnownFolderPath(REFKNOWNFOLDERID rfid, DWORD flags, HANDLE t
     hr = SHGetFolderPathAndSubDirW( 0, folder, token, shgfp_flags, NULL, pathW );
     if (FAILED( hr ))
     {
-        TRACE("Failed to get folder path, %#x.\n", hr);
+        TRACE("Failed to get folder path, %#lx.\n", hr);
         return hr;
     }
 
-    TRACE("Final path is %s, %#x\n", debugstr_w(pathW), hr);
+    TRACE("Final path is %s, %#lx\n", debugstr_w(pathW), hr);
 
     *ret_path = CoTaskMemAlloc((lstrlenW(pathW) + 1) * sizeof(WCHAR));
     if (!*ret_path)
@@ -3575,7 +3577,7 @@ HRESULT WINAPI SHGetFolderPathEx(REFKNOWNFOLDERID rfid, DWORD flags, HANDLE toke
     HRESULT hr;
     WCHAR *buffer;
 
-    TRACE("%s, 0x%08x, %p, %p, %u\n", debugstr_guid(rfid), flags, token, path, len);
+    TRACE("%s, 0x%08lx, %p, %p, %lu\n", debugstr_guid(rfid), flags, token, path, len);
 
     if (!path || !len) return E_INVALIDARG;
 
@@ -3620,7 +3622,7 @@ static HRESULT get_known_folder_registry_path(
         lstrcpyW(sGuid, lpStringGuid);
 
     length = lstrlenW(L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FolderDescriptions")+51;
-    *lpPath = heap_alloc(length*sizeof(WCHAR));
+    *lpPath = malloc(length * sizeof(WCHAR));
     if(!(*lpPath))
         hr = E_OUTOFMEMORY;
 
@@ -3701,7 +3703,7 @@ static HRESULT get_known_folder_redirection_place(
             hr = E_FAIL;
     }
 
-    heap_free(lpRegistryPath);
+    free(lpRegistryPath);
     return hr;
 }
 
@@ -3729,7 +3731,7 @@ static HRESULT redirect_known_folder(
     if(SUCCEEDED(hr))
         hr = get_known_folder_path_by_id(rfid, lpRegistryPath, 0, &lpSrcPath);
 
-    heap_free(lpRegistryPath);
+    free(lpRegistryPath);
 
     /* get path to redirection storage */
     if(SUCCEEDED(hr))
@@ -3825,8 +3827,8 @@ static ULONG WINAPI knownfolder_Release(
     if (!refs)
     {
         TRACE("destroying %p\n", knownfolder);
-        heap_free( knownfolder->registryPath );
-        heap_free( knownfolder );
+        free( knownfolder->registryPath );
+        free( knownfolder );
     }
     return refs;
 }
@@ -3884,7 +3886,7 @@ static HRESULT knownfolder_set_id(
     else
     {
         /* This known folder is not registered. To mark it, we set registryPath to NULL */
-        heap_free(knownfolder->registryPath);
+        free(knownfolder->registryPath);
         knownfolder->registryPath = NULL;
         hr = S_OK;
     }
@@ -3930,7 +3932,7 @@ static HRESULT WINAPI knownfolder_GetShellItem(
     void **ppv)
 {
     struct knownfolder *knownfolder = impl_from_IKnownFolder(iface);
-    TRACE("(%p, 0x%08x, %s, %p)\n", knownfolder, flags, debugstr_guid(riid), ppv);
+    TRACE("(%p, 0x%08lx, %s, %p)\n", knownfolder, flags, debugstr_guid(riid), ppv);
     return SHGetKnownFolderItem(&knownfolder->id, flags, NULL, riid, ppv);
 }
 
@@ -3963,15 +3965,15 @@ static HRESULT get_known_folder_path(
 
         hr = get_known_folder_path(parentGuid, parentRegistryPath, &parentPath);
         if(FAILED(hr)) {
-            heap_free(parentRegistryPath);
+            free(parentRegistryPath);
             return hr;
         }
 
         lstrcatW(path, parentPath);
         lstrcatW(path, L"\\");
 
-        heap_free(parentRegistryPath);
-        heap_free(parentPath);
+        free(parentRegistryPath);
+        free(parentPath);
     }
 
     /* check, if folder was redirected */
@@ -4035,7 +4037,7 @@ static HRESULT get_known_folder_path_by_id(
     WCHAR sGuid[39];
     DWORD dwAttributes;
 
-    TRACE("(%s, %s, 0x%08x, %p)\n", debugstr_guid(folderId), debugstr_w(lpRegistryPath), dwFlags, ppszPath);
+    TRACE("(%s, %s, 0x%08lx, %p)\n", debugstr_guid(folderId), debugstr_w(lpRegistryPath), dwFlags, ppszPath);
 
     /* if this is registry-registered known folder, get path from registry */
     if(lpRegistryPath)
@@ -4070,7 +4072,7 @@ static HRESULT WINAPI knownfolder_GetPath(
     LPWSTR *ppszPath)
 {
     struct knownfolder *knownfolder = impl_from_IKnownFolder( iface );
-    TRACE("(%p, 0x%08x, %p)\n", knownfolder, dwFlags, ppszPath);
+    TRACE("(%p, 0x%08lx, %p)\n", knownfolder, dwFlags, ppszPath);
 
     return get_known_folder_path_by_id(&knownfolder->id, knownfolder->registryPath, dwFlags, ppszPath);
 }
@@ -4083,7 +4085,7 @@ static HRESULT WINAPI knownfolder_SetPath(
     struct knownfolder *knownfolder = impl_from_IKnownFolder( iface );
     HRESULT hr = S_OK;
 
-    TRACE("(%p, 0x%08x, %s)\n", knownfolder, dwFlags, debugstr_w(pszPath));
+    TRACE("(%p, 0x%08lx, %s)\n", knownfolder, dwFlags, debugstr_w(pszPath));
 
     /* check if the known folder is registered */
     if(!knownfolder->registryPath)
@@ -4101,7 +4103,7 @@ static HRESULT WINAPI knownfolder_GetIDList(
     PIDLIST_ABSOLUTE *ppidl)
 {
     struct knownfolder *knownfolder = impl_from_IKnownFolder( iface );
-    TRACE("(%p, 0x%08x, %p)\n", knownfolder, flags, ppidl);
+    TRACE("(%p, 0x%08lx, %p)\n", knownfolder, flags, ppidl);
     return SHGetKnownFolderIDList(&knownfolder->id, flags, NULL, ppidl);
 }
 
@@ -4186,7 +4188,7 @@ static HRESULT knownfolder_create( struct knownfolder **knownfolder )
 {
     struct knownfolder *kf;
 
-    kf = heap_alloc( sizeof(*kf) );
+    kf = malloc( sizeof(*kf) );
     if (!kf) return E_OUTOFMEMORY;
 
     kf->IKnownFolder_iface.lpVtbl = &knownfolder_vtbl;
@@ -4228,8 +4230,8 @@ static ULONG WINAPI foldermanager_Release(
     if (!refs)
     {
         TRACE("destroying %p\n", foldermanager);
-        heap_free( foldermanager->ids );
-        heap_free( foldermanager );
+        free( foldermanager->ids );
+        free( foldermanager );
     }
     return refs;
 }
@@ -4321,7 +4323,7 @@ static BOOL is_knownfolder( struct foldermanager *fm, const KNOWNFOLDERID *id )
     if(SUCCEEDED(hr))
     {
         hr = HRESULT_FROM_WIN32(RegOpenKeyExW(HKEY_LOCAL_MACHINE, registryPath, 0, 0, &hKey));
-        heap_free(registryPath);
+        free(registryPath);
     }
 
     if(SUCCEEDED(hr))
@@ -4381,7 +4383,7 @@ static HRESULT WINAPI foldermanager_GetFolderByName(
         if (FAILED( hr )) return hr;
 
         hr = get_known_folder_wstr( path, L"Name", &name );
-        heap_free( path );
+        free( path );
         if (FAILED( hr )) return hr;
 
         found = !wcsicmp( pszCanonicalName, name );
@@ -4455,7 +4457,7 @@ static HRESULT register_folder(const KNOWNFOLDERID *rfid, const KNOWNFOLDER_DEFI
             SHDeleteKeyW(HKEY_LOCAL_MACHINE, registryPath);
     }
 
-    heap_free(registryPath);
+    free(registryPath);
     return hr;
 }
 
@@ -4481,7 +4483,7 @@ static HRESULT WINAPI foldermanager_UnregisterFolder(
     if(SUCCEEDED(hr))
         hr = HRESULT_FROM_WIN32(SHDeleteKeyW(HKEY_LOCAL_MACHINE, registryPath));
 
-    heap_free(registryPath);
+    free(registryPath);
     return hr;
 }
 
@@ -4539,7 +4541,7 @@ static HRESULT foldermanager_create( void **ppv )
     UINT i, j;
     struct foldermanager *fm;
 
-    fm = heap_alloc( sizeof(*fm) );
+    fm = malloc( sizeof(*fm) );
     if (!fm) return E_OUTOFMEMORY;
 
     fm->IKnownFolderManager_iface.lpVtbl = &foldermanager_vtbl;
@@ -4550,10 +4552,10 @@ static HRESULT foldermanager_create( void **ppv )
     {
         if (!IsEqualGUID( CSIDL_Data[i].id, &GUID_NULL )) fm->num_ids++;
     }
-    fm->ids = heap_alloc( fm->num_ids * sizeof(KNOWNFOLDERID) );
+    fm->ids = malloc( fm->num_ids * sizeof(KNOWNFOLDERID) );
     if (!fm->ids)
     {
-        heap_free( fm );
+        free( fm );
         return E_OUTOFMEMORY;
     }
     for (i = j = 0; i < ARRAY_SIZE(CSIDL_Data); i++)
@@ -4585,13 +4587,13 @@ HRESULT WINAPI KnownFolderManager_Constructor( IUnknown *punk, REFIID riid, void
 
 HRESULT WINAPI SHGetKnownFolderIDList(REFKNOWNFOLDERID rfid, DWORD flags, HANDLE token, PIDLIST_ABSOLUTE *pidl)
 {
-    TRACE("%s, 0x%08x, %p, %p\n", debugstr_guid(rfid), flags, token, pidl);
+    TRACE("%s, 0x%08lx, %p, %p\n", debugstr_guid(rfid), flags, token, pidl);
 
     if (!pidl)
         return E_INVALIDARG;
 
     if (flags)
-        FIXME("unsupported flags: 0x%08x\n", flags);
+        FIXME("unsupported flags: 0x%08lx\n", flags);
 
     if (token)
         FIXME("user token is not used.\n");

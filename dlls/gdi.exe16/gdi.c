@@ -23,11 +23,10 @@
 
 #include "windef.h"
 #include "winbase.h"
-#include "wingdi.h"
+#include "ntgdi.h"
 #include "wownt32.h"
 #include "wine/wingdi16.h"
 #include "wine/list.h"
-#include "wine/gdi_driver.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(gdi);
@@ -43,6 +42,15 @@ struct saved_visrgn
 };
 
 static struct list saved_regions = LIST_INIT( saved_regions );
+
+struct saved_bitmap
+{
+    struct list entry;
+    HDC         hdc;
+    HBITMAP     hbitmap;
+};
+
+static struct list saved_bitmaps = LIST_INIT( saved_bitmaps );
 
 static HPALETTE16 hPrimaryPalette;
 
@@ -428,129 +436,6 @@ static void free_segptr_bits( HBITMAP16 bmp )
         HeapFree( GetProcessHeap(), 0, bits );
         return;
     }
-}
-
-/* window surface used to implement the DIB.DRV driver */
-
-struct dib_window_surface
-{
-    struct window_surface header;
-    RECT                  bounds;
-    void                 *bits;
-    UINT                  info_size;
-    BITMAPINFO            info;   /* variable size, must be last */
-};
-
-static struct dib_window_surface *get_dib_surface( struct window_surface *surface )
-{
-    return (struct dib_window_surface *)surface;
-}
-
-/***********************************************************************
- *           dib_surface_lock
- */
-static void CDECL dib_surface_lock( struct window_surface *window_surface )
-{
-    /* nothing to do */
-}
-
-/***********************************************************************
- *           dib_surface_unlock
- */
-static void CDECL dib_surface_unlock( struct window_surface *window_surface )
-{
-    /* nothing to do */
-}
-
-/***********************************************************************
- *           dib_surface_get_bitmap_info
- */
-static void *CDECL dib_surface_get_bitmap_info( struct window_surface *window_surface, BITMAPINFO *info )
-{
-    struct dib_window_surface *surface = get_dib_surface( window_surface );
-
-    memcpy( info, &surface->info, surface->info_size );
-    return surface->bits;
-}
-
-/***********************************************************************
- *           dib_surface_get_bounds
- */
-static RECT *CDECL dib_surface_get_bounds( struct window_surface *window_surface )
-{
-    struct dib_window_surface *surface = get_dib_surface( window_surface );
-
-    return &surface->bounds;
-}
-
-/***********************************************************************
- *           dib_surface_set_region
- */
-static void CDECL dib_surface_set_region( struct window_surface *window_surface, HRGN region )
-{
-    /* nothing to do */
-}
-
-/***********************************************************************
- *           dib_surface_flush
- */
-static void CDECL dib_surface_flush( struct window_surface *window_surface )
-{
-    /* nothing to do */
-}
-
-/***********************************************************************
- *           dib_surface_destroy
- */
-static void CDECL dib_surface_destroy( struct window_surface *window_surface )
-{
-    struct dib_window_surface *surface = get_dib_surface( window_surface );
-
-    TRACE( "freeing %p\n", surface );
-    HeapFree( GetProcessHeap(), 0, surface );
-}
-
-static const struct window_surface_funcs dib_surface_funcs =
-{
-    dib_surface_lock,
-    dib_surface_unlock,
-    dib_surface_get_bitmap_info,
-    dib_surface_get_bounds,
-    dib_surface_set_region,
-    dib_surface_flush,
-    dib_surface_destroy
-};
-
-/***********************************************************************
- *           create_surface
- */
-static struct window_surface *create_surface( const BITMAPINFO *info )
-{
-    struct dib_window_surface *surface;
-    int color = 0;
-
-    if (info->bmiHeader.biBitCount <= 8)
-        color = info->bmiHeader.biClrUsed ? info->bmiHeader.biClrUsed : (1 << info->bmiHeader.biBitCount);
-    else if (info->bmiHeader.biCompression == BI_BITFIELDS)
-        color = 3;
-
-    surface = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY,
-                         offsetof( struct dib_window_surface, info.bmiColors[color] ));
-    if (!surface) return NULL;
-
-    surface->header.funcs       = &dib_surface_funcs;
-    surface->header.rect.left   = 0;
-    surface->header.rect.top    = 0;
-    surface->header.rect.right  = info->bmiHeader.biWidth;
-    surface->header.rect.bottom = abs(info->bmiHeader.biHeight);
-    surface->header.ref         = 1;
-    surface->info_size          = offsetof( BITMAPINFO, bmiColors[color] );
-    surface->bits               = (char *)info + surface->info_size;
-    memcpy( &surface->info, info, surface->info_size );
-
-    TRACE( "created %p %ux%u for info %p bits %p\n",
-           surface, surface->header.rect.right, surface->header.rect.bottom, info, surface->bits );
-    return &surface->header;
 }
 
 
@@ -1299,19 +1184,70 @@ HDC16 WINAPI CreateDC16( LPCSTR driver, LPCSTR device, LPCSTR output,
 {
     if (!lstrcmpiA( driver, "dib" ) || !lstrcmpiA( driver, "dirdib" ))
     {
-        struct window_surface *surface;
-        HDC hdc;
-
-        if (!(surface = create_surface( (const BITMAPINFO *)initData ))) return 0;
-
-        if ((hdc = CreateDCA( "DISPLAY", NULL, NULL, NULL )))
+        PALETTEENTRY palette[256];
+        BITMAPINFO *info = (BITMAPINFO *)initData;
+        D3DKMT_CREATEDCFROMMEMORY desc =
         {
-            __wine_set_visible_region( hdc, CreateRectRgnIndirect( &surface->rect ),
-                                       &surface->rect, &surface->rect, surface );
-            TRACE( "returning hdc %p surface %p\n", hdc, surface );
+            .Width = info->bmiHeader.biWidth,
+            .Height = abs( info->bmiHeader.biHeight ),
+            .Pitch = info->bmiHeader.biSizeImage / abs( info->bmiHeader.biHeight ),
+        };
+        struct saved_bitmap *bitmap;
+        UINT status;
+        int color;
+
+        if (info->bmiHeader.biBitCount <= 8)
+        {
+            if (info->bmiHeader.biClrUsed)
+            {
+                for (color = 0; color < info->bmiHeader.biClrUsed; color++)
+                {
+                    palette[color].peBlue = info->bmiColors[color].rgbBlue;
+                    palette[color].peGreen = info->bmiColors[color].rgbGreen;
+                    palette[color].peRed = info->bmiColors[color].rgbRed;
+                }
+            }
+            else
+            {
+                for (color = 0; color < (1 << info->bmiHeader.biBitCount); color++)
+                {
+                    palette[color].peBlue = color;
+                    palette[color].peGreen = color;
+                    palette[color].peRed = color;
+                }
+            }
+            desc.pColorTable = palette;
+            desc.Format = D3DDDIFMT_P8;
+            desc.pMemory = &info->bmiColors[color];
         }
-        window_surface_release( surface );
-        return HDC_16( hdc );
+        else if (info->bmiHeader.biCompression == BI_BITFIELDS)
+        {
+            desc.Format = D3DDDIFMT_R5G6B5;
+            desc.pMemory = &info->bmiColors[3];
+        }
+        else
+        {
+            desc.Format = info->bmiHeader.biBitCount == 24 ? D3DDDIFMT_R8G8B8 : D3DDDIFMT_X8R8G8B8;
+            desc.pMemory = &info->bmiColors[0];
+        }
+
+        if (!(desc.hDeviceDc = NtGdiCreateCompatibleDC( 0 ))) return 0;
+        if ((status = NtGdiDdDDICreateDCFromMemory( &desc )))
+        {
+            NtGdiDeleteObjectApp( desc.hDeviceDc );
+            ERR( "Failed to create HBITMAP over memory, status %#x\n", status );
+            return 0;
+        }
+        NtGdiDeleteObjectApp( desc.hDeviceDc );
+
+        if ((bitmap = HeapAlloc( GetProcessHeap(), 0, sizeof(*bitmap) )))
+        {
+            bitmap->hdc = desc.hDc;
+            bitmap->hbitmap = desc.hBitmap;
+            list_add_tail( &saved_bitmaps, &bitmap->entry );
+        }
+
+        return HDC_16( desc.hDc );
     }
     return HDC_16( CreateDCA( driver, device, output, initData ) );
 }
@@ -1464,8 +1400,10 @@ BOOL16 WINAPI DeleteDC16( HDC16 hdc )
 {
     if (DeleteDC( HDC_32(hdc) ))
     {
-        struct saved_visrgn *saved, *next;
+        struct saved_visrgn *saved;
+        struct saved_bitmap *bitmap;
         struct gdi_thunk* thunk;
+        void *next;
 
         if ((thunk = GDI_FindThunk(hdc))) GDI_DeleteThunk(thunk);
 
@@ -1476,6 +1414,15 @@ BOOL16 WINAPI DeleteDC16( HDC16 hdc )
             DeleteObject( saved->hrgn );
             HeapFree( GetProcessHeap(), 0, saved );
         }
+
+        LIST_FOR_EACH_ENTRY_SAFE( bitmap, next, &saved_bitmaps, struct saved_bitmap, entry )
+        {
+            if (bitmap->hdc != HDC_32(hdc)) continue;
+            list_remove( &bitmap->entry );
+            DeleteObject( bitmap->hbitmap );
+            HeapFree( GetProcessHeap(), 0, bitmap );
+        }
+
         return TRUE;
     }
     return FALSE;
@@ -2138,7 +2085,7 @@ void WINAPI PlayMetaFileRecord16( HDC16 hdc, HANDLETABLE16 *ht, METARECORD *mr, 
  */
 BOOL16 WINAPI SetDCHook16( HDC16 hdc16, FARPROC16 hookProc, DWORD dwHookData )
 {
-    FIXME( "%04x %p %x: not supported\n", hdc16, hookProc, dwHookData );
+    FIXME( "%04x %p %lx: not supported\n", hdc16, hookProc, dwHookData );
     return FALSE;
 }
 
@@ -2204,7 +2151,7 @@ UINT16 WINAPI GetBoundsRect16( HDC16 hdc, LPRECT16 rect, UINT16 flags)
  */
 WORD WINAPI EngineEnumerateFont16(LPSTR fontname, FARPROC16 proc, DWORD data )
 {
-    FIXME("(%s,%p,%x),stub\n",fontname,proc,data);
+    FIXME("(%s,%p,%lx),stub\n",fontname,proc,data);
     return 0;
 }
 
@@ -2251,7 +2198,7 @@ WORD WINAPI EngineRealizeFont16(LPLOGFONT16 lplogFont, LPTEXTXFORM16 lptextxform
  */
 WORD WINAPI EngineRealizeFontExt16(LONG l1, LONG l2, LONG l3, LONG l4)
 {
-    FIXME("(%08x,%08x,%08x,%08x),stub\n",l1,l2,l3,l4);
+    FIXME("(%08lx,%08lx,%08lx,%08lx),stub\n",l1,l2,l3,l4);
 
     return 0;
 }
@@ -3668,7 +3615,7 @@ BOOL16 WINAPI SetLayout16( HDC16 hdc, DWORD layout )
  */
 BOOL16 WINAPI SetSolidBrush16(HBRUSH16 hBrush, COLORREF newColor )
 {
-    FIXME( "%04x %08x no longer supported\n", hBrush, newColor );
+    FIXME( "%04x %08lx no longer supported\n", hBrush, newColor );
     return FALSE;
 }
 

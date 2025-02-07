@@ -173,7 +173,7 @@ HRESULT read_png_chunk(IStream *stream, BYTE *type, BYTE **data, ULONG *data_siz
 
     if (data)
     {
-        *data = RtlAllocateHeap(GetProcessHeap(), 0, *data_size);
+        *data = malloc(*data_size);
         if (!*data)
             return E_OUTOFMEMORY;
 
@@ -183,7 +183,7 @@ HRESULT read_png_chunk(IStream *stream, BYTE *type, BYTE **data, ULONG *data_siz
         {
             if (SUCCEEDED(hr))
                 hr = E_FAIL;
-            RtlFreeHeap(GetProcessHeap(), 0, *data);
+            free(*data);
             *data = NULL;
             return hr;
         }
@@ -201,7 +201,7 @@ void reverse_bgr8(UINT bytesperpixel, LPBYTE bits, UINT width, UINT height, INT 
 
     for (y=0; y<height; y++)
     {
-        pixel = bits + stride * y;
+        pixel = bits + stride * (INT)y;
 
         for (x=0; x<width; x++)
         {

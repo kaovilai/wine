@@ -64,7 +64,7 @@ EnumServicesStatusA( SC_HANDLE hmngr, DWORD type, DWORD state, LPENUM_SERVICE_ST
     DWORD sz, n;
     char *p;
 
-    TRACE("%p 0x%x 0x%x %p %u %p %p %p\n", hmngr, type, state, services, size, needed,
+    TRACE("%p 0x%lx 0x%lx %p %lu %p %p %p\n", hmngr, type, state, services, size, needed,
           returned, resume_handle);
 
     if (!hmngr)
@@ -79,7 +79,7 @@ EnumServicesStatusA( SC_HANDLE hmngr, DWORD type, DWORD state, LPENUM_SERVICE_ST
     }
 
     sz = max( 2 * size, sizeof(*servicesW) );
-    if (!(servicesW = heap_alloc( sz )))
+    if (!(servicesW = malloc( sz )))
     {
         SetLastError( ERROR_NOT_ENOUGH_MEMORY );
         return FALSE;
@@ -113,7 +113,7 @@ EnumServicesStatusA( SC_HANDLE hmngr, DWORD type, DWORD state, LPENUM_SERVICE_ST
     ret = TRUE;
 
 done:
-    heap_free( servicesW );
+    free( servicesW );
     return ret;
 }
 
@@ -128,7 +128,7 @@ EnumServicesStatusW( SC_HANDLE manager, DWORD type, DWORD state, ENUM_SERVICE_ST
     DWORD alloc_size, count, i;
     WCHAR *p;
 
-    TRACE("%p 0x%x 0x%x %p %u %p %p %p\n", manager, type, state, status, size,
+    TRACE("%p 0x%lx 0x%lx %p %lu %p %p %p\n", manager, type, state, status, size,
           ret_size, ret_count, resume_handle);
 
     if (!manager)
@@ -150,7 +150,7 @@ EnumServicesStatusW( SC_HANDLE manager, DWORD type, DWORD state, ENUM_SERVICE_ST
             && GetLastError() != ERROR_MORE_DATA)
         return FALSE;
 
-    if (!(status_ex = heap_alloc( alloc_size )))
+    if (!(status_ex = malloc( alloc_size )))
     {
         SetLastError( ERROR_NOT_ENOUGH_MEMORY );
         return FALSE;
@@ -160,7 +160,7 @@ EnumServicesStatusW( SC_HANDLE manager, DWORD type, DWORD state, ENUM_SERVICE_ST
                                 alloc_size, &alloc_size, &count, resume_handle, NULL )
             && GetLastError() != ERROR_MORE_DATA)
     {
-        heap_free( status_ex );
+        free( status_ex );
         return FALSE;
     }
 
@@ -198,7 +198,7 @@ EnumServicesStatusW( SC_HANDLE manager, DWORD type, DWORD state, ENUM_SERVICE_ST
         status[i].ServiceStatus.dwWaitHint                = status_ex[i].ServiceStatusProcess.dwWaitHint;
     }
 
-    heap_free( status_ex );
+    free( status_ex );
     if (*ret_size > size)
     {
         SetLastError( ERROR_MORE_DATA );
@@ -225,11 +225,11 @@ EnumServicesStatusExA( SC_HANDLE hmngr, SC_ENUM_TYPE level, DWORD type, DWORD st
     DWORD sz, n;
     char *p;
 
-    TRACE("%p %u 0x%x 0x%x %p %u %p %p %p %s\n", hmngr, level, type, state, buffer,
+    TRACE("%p %u 0x%lx 0x%lx %p %lu %p %p %p %s\n", hmngr, level, type, state, buffer,
           size, needed, returned, resume_handle, debugstr_a(group));
 
     sz = max( 2 * size, sizeof(*servicesW) );
-    if (!(servicesW = heap_alloc( sz )))
+    if (!(servicesW = malloc( sz )))
     {
         SetLastError( ERROR_NOT_ENOUGH_MEMORY );
         return FALSE;
@@ -237,10 +237,10 @@ EnumServicesStatusExA( SC_HANDLE hmngr, SC_ENUM_TYPE level, DWORD type, DWORD st
     if (group)
     {
         int len = MultiByteToWideChar( CP_ACP, 0, group, -1, NULL, 0 );
-        if (!(groupW = heap_alloc( len * sizeof(WCHAR) )))
+        if (!(groupW = malloc( len * sizeof(WCHAR) )))
         {
             SetLastError( ERROR_NOT_ENOUGH_MEMORY );
-            heap_free( servicesW );
+            free( servicesW );
             return FALSE;
         }
         MultiByteToWideChar( CP_ACP, 0, group, -1, groupW, len * sizeof(WCHAR) );
@@ -275,8 +275,8 @@ EnumServicesStatusExA( SC_HANDLE hmngr, SC_ENUM_TYPE level, DWORD type, DWORD st
     ret = TRUE;
 
 done:
-    heap_free( servicesW );
-    heap_free( groupW );
+    free( servicesW );
+    free( groupW );
     return ret;
 }
 
@@ -295,7 +295,7 @@ BOOL WINAPI GetServiceKeyNameA( SC_HANDLE hSCManager, LPCSTR lpDisplayName,
 
     lpDisplayNameW = strdupAW(lpDisplayName);
     if (lpServiceName)
-        lpServiceNameW = heap_alloc(*lpcchBuffer * sizeof(WCHAR));
+        lpServiceNameW = malloc(*lpcchBuffer * sizeof(WCHAR));
     else
         lpServiceNameW = NULL;
 
@@ -321,8 +321,8 @@ BOOL WINAPI GetServiceKeyNameA( SC_HANDLE hSCManager, LPCSTR lpDisplayName,
     ret = TRUE;
 
 cleanup:
-    heap_free(lpServiceNameW);
-    heap_free(lpDisplayNameW);
+    free(lpServiceNameW);
+    free(lpDisplayNameW);
     return ret;
 }
 
@@ -333,7 +333,7 @@ BOOL WINAPI QueryServiceLockStatusA( SC_HANDLE hSCManager,
                                      LPQUERY_SERVICE_LOCK_STATUSA lpLockStatus,
                                      DWORD cbBufSize, LPDWORD pcbBytesNeeded)
 {
-    FIXME("%p %p %08x %p\n", hSCManager, lpLockStatus, cbBufSize, pcbBytesNeeded);
+    FIXME("%p %p %08lx %p\n", hSCManager, lpLockStatus, cbBufSize, pcbBytesNeeded);
 
     return FALSE;
 }
@@ -345,7 +345,7 @@ BOOL WINAPI QueryServiceLockStatusW( SC_HANDLE hSCManager,
                                      LPQUERY_SERVICE_LOCK_STATUSW lpLockStatus,
                                      DWORD cbBufSize, LPDWORD pcbBytesNeeded)
 {
-    FIXME("%p %p %08x %p\n", hSCManager, lpLockStatus, cbBufSize, pcbBytesNeeded);
+    FIXME("%p %p %08lx %p\n", hSCManager, lpLockStatus, cbBufSize, pcbBytesNeeded);
 
     return FALSE;
 }
@@ -365,7 +365,7 @@ BOOL WINAPI GetServiceDisplayNameA( SC_HANDLE hSCManager, LPCSTR lpServiceName,
 
     lpServiceNameW = strdupAW(lpServiceName);
     if (lpDisplayName)
-        lpDisplayNameW = heap_alloc(*lpcchBuffer * sizeof(WCHAR));
+        lpDisplayNameW = malloc(*lpcchBuffer * sizeof(WCHAR));
     else
         lpDisplayNameW = NULL;
 
@@ -392,8 +392,8 @@ BOOL WINAPI GetServiceDisplayNameA( SC_HANDLE hSCManager, LPCSTR lpServiceName,
     ret = TRUE;
 
 cleanup:
-    heap_free(lpDisplayNameW);
-    heap_free(lpServiceNameW);
+    free(lpDisplayNameW);
+    free(lpServiceNameW);
     return ret;
 }
 
@@ -405,7 +405,7 @@ BOOL WINAPI SetServiceBits( SERVICE_STATUS_HANDLE hServiceStatus,
         BOOL bSetBitsOn,
         BOOL bUpdateImmediately)
 {
-    FIXME("%p %08x %x %x\n", hServiceStatus, dwServiceBits,
+    FIXME("%p %08lx %x %x\n", hServiceStatus, dwServiceBits,
           bSetBitsOn, bUpdateImmediately);
     return TRUE;
 }
@@ -417,7 +417,7 @@ BOOL WINAPI EnumDependentServicesA( SC_HANDLE hService, DWORD dwServiceState,
                                     LPENUM_SERVICE_STATUSA lpServices, DWORD cbBufSize,
         LPDWORD pcbBytesNeeded, LPDWORD lpServicesReturned )
 {
-    FIXME("%p 0x%08x %p 0x%08x %p %p - stub\n", hService, dwServiceState,
+    FIXME("%p 0x%08lx %p 0x%08lx %p %p - stub\n", hService, dwServiceState,
           lpServices, cbBufSize, pcbBytesNeeded, lpServicesReturned);
 
     *lpServicesReturned = 0;

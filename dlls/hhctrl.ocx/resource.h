@@ -29,6 +29,7 @@
 #define IDS_FAVORITES   4
 #define IDS_HIDETABS    5
 #define IDS_SHOWTABS    6
+#define IDS_SELECT_TOPIC    7
 
 #define MENU_POPUP      1
 #define MENU_WEBBROWSER 2
@@ -39,9 +40,9 @@
 #define HHTB_REFRESH    1
 #define HHTB_HOME       2
 #define HHTB_SYNC       3
-#define HHTB_CONTRACT   4
-#define HHTB_EXPAND     5
-#define HHTB_NUMBITMAPS HHTB_EXPAND
+#define HHTB_EXPAND     4
+#define HHTB_CONTRACT   5
+#define HHTB_NUMBITMAPS HHTB_CONTRACT
 
 #define MIID_SELECTALL  10
 #define MIID_VIEWSOURCE 11

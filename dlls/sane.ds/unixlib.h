@@ -39,6 +39,7 @@ struct option_descriptor
     int optno;
     int size;
     int is_active;
+    int is_settable;
     enum { TYPE_BOOL, TYPE_INT, TYPE_FIXED, TYPE_STRING, TYPE_BUTTON, TYPE_GROUP } type;
     enum { UNIT_NONE, UNIT_PIXEL, UNIT_BIT, UNIT_MM, UNIT_DPI, UNIT_PERCENT, UNIT_MICROSECOND } unit;
     enum { CONSTRAINT_NONE, CONSTRAINT_RANGE, CONSTRAINT_WORD_LIST, CONSTRAINT_STRING_LIST } constraint_type;
@@ -97,6 +98,4 @@ enum sane_funcs
     unix_option_find_descriptor,
 };
 
-extern unixlib_handle_t sane_handle DECLSPEC_HIDDEN;
-
-#define SANE_CALL( func, params ) __wine_unix_call( sane_handle, unix_ ## func, params )
+#define SANE_CALL( func, params ) WINE_UNIX_CALL( unix_ ## func, params )

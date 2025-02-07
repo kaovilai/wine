@@ -1,13 +1,9 @@
-EXTRADEFS = -DWINE_NO_LONG_TYPES
 MODULE    = dsdmo.dll
 IMPORTS   = dmoguids strmiids uuid
 
 EXTRADLLFLAGS = -Wb,--prefer-native
 
-C_SRCS = \
-	main.c
-
-IDL_SRCS = \
-	dsdmo.idl
-
-RC_SRCS = version.rc
+SOURCES = \
+	dsdmo.idl \
+	main.c \
+	version.rc

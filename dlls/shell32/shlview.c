@@ -42,7 +42,6 @@
 
 #define CINTERFACE
 #define COBJMACROS
-#define NONAMELESSUNION
 
 #include "windef.h"
 #include "winerror.h"
@@ -55,7 +54,6 @@
 #include "winuser.h"
 #include "shlobj.h"
 #include "shobjidl.h"
-#include "undocshell.h"
 #include "shresdef.h"
 #include "wine/debug.h"
 
@@ -249,7 +247,7 @@ static HRESULT IncludeObject(IShellViewImpl * This, LPCITEMIDLIST pidl)
     {
         TRACE("ICommDlgBrowser::IncludeObject pidl=%p\n", pidl);
         ret = ICommDlgBrowser_IncludeObject(This->pCommDlgBrowser, (IShellView *)&This->IShellView3_iface, pidl);
-        TRACE("-- returns 0x%08x\n", ret);
+        TRACE("-- returns 0x%08lx\n", ret);
     }
 
     return ret;
@@ -263,7 +261,7 @@ static HRESULT OnDefaultCommand(IShellViewImpl * This)
     {
         TRACE("ICommDlgBrowser::OnDefaultCommand\n");
         ret = ICommDlgBrowser_OnDefaultCommand(This->pCommDlgBrowser, (IShellView *)&This->IShellView3_iface);
-        TRACE("-- returns 0x%08x\n", ret);
+        TRACE("-- returns 0x%08lx\n", ret);
     }
 
     return ret;
@@ -277,7 +275,7 @@ static HRESULT OnStateChange(IShellViewImpl * This, UINT change)
     {
         TRACE("ICommDlgBrowser::OnStateChange change=%d\n", change);
         ret = ICommDlgBrowser_OnStateChange(This->pCommDlgBrowser, (IShellView *)&This->IShellView3_iface, change);
-        TRACE("-- returns 0x%08x\n", ret);
+        TRACE("-- returns 0x%08lx\n", ret);
     }
 
     return ret;
@@ -359,7 +357,7 @@ static BOOL ShellView_CreateList (IShellViewImpl * This)
 	TRACE("%p\n",This);
 
 	dwStyle = WS_TABSTOP | WS_VISIBLE | WS_CHILDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN |
-		  LVS_SHAREIMAGELISTS | LVS_EDITLABELS | LVS_ALIGNLEFT | LVS_AUTOARRANGE;
+		  LVS_SHAREIMAGELISTS | LVS_EDITLABELS | LVS_ALIGNLEFT | LVS_AUTOARRANGE | LVS_SHOWSELALWAYS;
         dwExStyle = WS_EX_CLIENTEDGE;
 
         dwStyle |= ViewModeToListStyle(This->FolderSettings.ViewMode);
@@ -460,7 +458,7 @@ static void ShellView_InitList(IShellViewImpl *This)
 
         lvColumn.fmt = sd.fmt;
         lvColumn.cx = MulDiv(sd.cxChar, tm.tmAveCharWidth * 3, 2); /* chars->pixel */
-        StrRetToStrNW(nameW, ARRAY_SIZE(nameW), &sd.str, NULL);
+        StrRetToBufW(&sd.str, NULL, nameW, ARRAY_SIZE(nameW));
         SendMessageW(This->hWndList, LVM_INSERTCOLUMNW, This->columns, (LPARAM)&lvColumn);
     }
 
@@ -954,7 +952,7 @@ static HRESULT ShellView_OpenSelectedItems(IShellViewImpl * This)
 	if (FAILED(hr))
 	  return hr;
 
-	pIDList = GlobalLock(stgm.u.hGlobal);
+	pIDList = GlobalLock(stgm.hGlobal);
 
 	parent_pidl = (LPCITEMIDLIST) ((LPBYTE)pIDList+pIDList->aoffset[0]);
 	hr = IShellFolder_GetAttributesOf(This->pSFParent, 1, &parent_pidl, &attribs);
@@ -993,7 +991,7 @@ static HRESULT ShellView_OpenSelectedItems(IShellViewImpl * This)
 	  }
 	}
 
-	GlobalUnlock(stgm.u.hGlobal);
+	GlobalUnlock(stgm.hGlobal);
 	ReleaseStgMedium(&stgm);
 
 	IDataObject_Release(selection);
@@ -1041,9 +1039,6 @@ static void ShellView_DoContextMenu(IShellViewImpl * This, WORD x, WORD y, BOOL 
 	      /* let the ContextMenu merge its items in */
 	      if (SUCCEEDED(IContextMenu_QueryContextMenu( pContextMenu, hMenu, 0, FCIDM_SHVIEWFIRST, FCIDM_SHVIEWLAST, wFlags )))
 	      {
-	        if (This->FolderSettings.fFlags & FWF_DESKTOP)
-		  SetMenuDefaultItem(hMenu, FCIDM_SHVIEW_OPEN, MF_BYCOMMAND);
-
 		if( bDefault )
 		{
 		  TRACE("-- get menu default command\n");
@@ -1057,24 +1052,11 @@ static void ShellView_DoContextMenu(IShellViewImpl * This, WORD x, WORD y, BOOL 
 
 		if(uCommand > 0)
 		{
-		  TRACE("-- uCommand=%u\n", uCommand);
-		  if (uCommand==FCIDM_SHVIEW_OPEN && IsInCommDlg(This))
-		  {
-		    TRACE("-- dlg: OnDefaultCommand\n");
-		    if (OnDefaultCommand(This) != S_OK)
-		    {
-		      ShellView_OpenSelectedItems(This);
-		    }
-		  }
-		  else
-		  {
-		    TRACE("-- explore -- invoke command\n");
 		    ZeroMemory(&cmi, sizeof(cmi));
 		    cmi.cbSize = sizeof(cmi);
 		    cmi.hwnd = This->hWndParent; /* this window has to answer CWM_GETISHELLBROWSER */
                     cmi.lpVerb = MAKEINTRESOURCEA(uCommand);
 		    IContextMenu_InvokeCommand(pContextMenu, &cmi);
-		  }
 		}
 		DestroyMenu(hMenu);
 	      }
@@ -1269,7 +1251,7 @@ static LRESULT ShellView_OnKillFocus(IShellViewImpl * This)
 */
 static LRESULT ShellView_OnCommand(IShellViewImpl * This,DWORD dwCmdID, DWORD dwCmd, HWND hwndCmd)
 {
-	TRACE("(%p)->(0x%08x 0x%08x %p) stub\n",This, dwCmdID, dwCmd, hwndCmd);
+	TRACE("(%p)->(0x%08lx 0x%08lx %p) stub\n",This, dwCmdID, dwCmd, hwndCmd);
 
 	switch(dwCmdID)
 	{
@@ -1309,7 +1291,7 @@ static LRESULT ShellView_OnCommand(IShellViewImpl * This,DWORD dwCmdID, DWORD dw
 	    break;
 
 	  default:
-	    TRACE("-- COMMAND 0x%04x unhandled\n", dwCmdID);
+	    TRACE("-- COMMAND 0x%04lx unhandled\n", dwCmdID);
 	}
 	return 0;
 }
@@ -1437,19 +1419,19 @@ static LRESULT ShellView_OnNotify(IShellViewImpl * This, UINT CtlID, LPNMHDR lpn
 	      {
 	          /* set to empty on failure */
 	          sd.str.uType = STRRET_WSTR;
-	          sd.str.u.pOleStr = emptyW;
+	          sd.str.pOleStr = emptyW;
 	      }
 
               if (lpnmh->code == LVN_GETDISPINFOW)
               {
-                  StrRetToStrNW( lpdi->item.pszText, lpdi->item.cchTextMax, &sd.str, NULL);
+                  StrRetToBufW(&sd.str, NULL, lpdi->item.pszText, lpdi->item.cchTextMax);
                   TRACE("-- text=%s\n", debugstr_w(lpdi->item.pszText));
               }
               else
               {
                   /* LVN_GETDISPINFOA - shouldn't happen */
                   NMLVDISPINFOA *lpdiA = (NMLVDISPINFOA *)lpnmh;
-                  StrRetToStrNA( lpdiA->item.pszText, lpdiA->item.cchTextMax, &sd.str, NULL);
+                  StrRetToBufA(&sd.str, NULL, lpdiA->item.pszText, lpdiA->item.cchTextMax);
                   TRACE("-- text=%s\n", lpdiA->item.pszText);
               }
 	    }
@@ -1579,7 +1561,7 @@ static LRESULT ShellView_OnNotify(IShellViewImpl * This, UINT CtlID, LPNMHDR lpn
 		  }
 
 		  /* allocate memory for the pidl array */
-		  pItems = heap_alloc(sizeof(LPITEMIDLIST) * count);
+		  pItems = malloc(sizeof(ITEMIDLIST*) * count);
 
 		  /* retrieve all selected items */
 		  i = 0;
@@ -1605,7 +1587,7 @@ static LRESULT ShellView_OnNotify(IShellViewImpl * This, UINT CtlID, LPNMHDR lpn
 		  ISFHelper_Release(psfhlp);
 
 		  /* free pidl array memory */
-		  heap_free(pItems);
+		  free(pItems);
                 }
 		break;
 
@@ -1646,7 +1628,7 @@ static LRESULT ShellView_OnChange(IShellViewImpl * This, const LPCITEMIDLIST *pi
     LPCITEMIDLIST pidl;
     BOOL ret = TRUE;
 
-    TRACE("(%p)->(%p, %p, 0x%08x)\n", This, pidls[0], pidls[1], event);
+    TRACE("(%p)->(%p, %p, 0x%08lx)\n", This, pidls[0], pidls[1], event);
 
     switch (event)
     {
@@ -1680,7 +1662,7 @@ static LRESULT CALLBACK ShellView_WndProc(HWND hWnd, UINT uMessage, WPARAM wPara
 	IShellViewImpl * pThis = (IShellViewImpl*)GetWindowLongPtrW(hWnd, GWLP_USERDATA);
 	LPCREATESTRUCTW lpcs;
 
-	TRACE("(hwnd=%p msg=%x wparm=%lx lparm=%lx)\n",hWnd, uMessage, wParam, lParam);
+	TRACE("(hwnd=%p msg=%x wparm=%Ix lparm=%Ix)\n",hWnd, uMessage, wParam, lParam);
 
 	switch (uMessage)
 	{
@@ -1796,7 +1778,7 @@ static ULONG WINAPI IShellView_fnAddRef(IShellView3 *iface)
     IShellViewImpl *This = impl_from_IShellView3(iface);
     ULONG refCount = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p)->(count=%u)\n", This, refCount - 1);
+    TRACE("(%p)->(count=%lu)\n", This, refCount - 1);
 
     return refCount;
 }
@@ -1808,7 +1790,7 @@ static ULONG WINAPI IShellView_fnRelease(IShellView3 *iface)
 	IShellViewImpl *This = impl_from_IShellView3(iface);
 	ULONG refCount = InterlockedDecrement(&This->ref);
 
-	TRACE("(%p)->(count=%i)\n", This, refCount + 1);
+	TRACE("(%p)->(count=%li)\n", This, refCount + 1);
 
 	if (!refCount)
 	{
@@ -1827,7 +1809,7 @@ static ULONG WINAPI IShellView_fnRelease(IShellView3 *iface)
 	  if(This->pAdvSink)
 	    IAdviseSink_Release(This->pAdvSink);
 
-	  heap_free(This);
+	  free(This);
 	}
 	return refCount;
 }
@@ -1868,7 +1850,7 @@ static HRESULT WINAPI IShellView_fnTranslateAccelerator(IShellView3 *iface, MSG 
 
 	if ((lpmsg->message>=WM_KEYFIRST) && (lpmsg->message<=WM_KEYLAST))
 	{
-	  TRACE("-- key=0x04%lx\n",lpmsg->wParam) ;
+	  TRACE("-- key=0x04%Ix\n",lpmsg->wParam) ;
 	}
 	return S_FALSE; /* not handled */
 }
@@ -2054,7 +2036,7 @@ static HRESULT WINAPI IShellView_fnGetItemObject(IShellView3 *iface, UINT uItem,
 
 static HRESULT WINAPI IShellView2_fnGetView(IShellView3 *iface, SHELLVIEWID *view_guid, ULONG view_type)
 {
-    FIXME("(%p)->(%s, %#x) stub!\n", iface, debugstr_guid(view_guid), view_type);
+    FIXME("(%p)->(%s, %#lx) stub!\n", iface, debugstr_guid(view_guid), view_type);
     return E_NOTIMPL;
 }
 
@@ -2091,7 +2073,7 @@ static HRESULT WINAPI IShellView3_fnCreateViewWindow3(IShellView3 *iface, IShell
     HRESULT hr;
     HWND wnd;
 
-    TRACE("(%p)->(%p %p 0x%08x 0x%08x 0x%08x %d %s %s %p)\n", This, owner, prev_view, view_flags,
+    TRACE("(%p)->(%p %p 0x%08lx 0x%08x 0x%08x %d %s %s %p)\n", This, owner, prev_view, view_flags,
         mask, flags, mode, debugstr_guid(view_id), wine_dbgstr_rect(rect), hwnd);
 
     icex.dwSize = sizeof(icex);
@@ -2104,7 +2086,7 @@ static HRESULT WINAPI IShellView3_fnCreateViewWindow3(IShellView3 *iface, IShell
         return E_UNEXPECTED;
 
     if (view_flags != SV3CVW3_DEFAULT)
-        FIXME("unsupported view flags 0x%08x\n", view_flags);
+        FIXME("unsupported view flags 0x%08lx\n", view_flags);
 
     /* Set up the member variables */
     This->pShellBrowser = owner;
@@ -2246,14 +2228,14 @@ static HRESULT WINAPI ISVOleCmdTarget_QueryStatus(
     IShellViewImpl *This = impl_from_IOleCommandTarget(iface);
     UINT i;
 
-    FIXME("(%p)->(%s %d %p %p)\n",
+    FIXME("(%p)->(%s %ld %p %p)\n",
               This, debugstr_guid(pguidCmdGroup), cCmds, prgCmds, pCmdText);
 
     if (!prgCmds)
         return E_INVALIDARG;
     for (i = 0; i < cCmds; i++)
     {
-        FIXME("\tprgCmds[%d].cmdID = %d\n", i, prgCmds[i].cmdID);
+        FIXME("\tprgCmds[%d].cmdID = %ld\n", i, prgCmds[i].cmdID);
         prgCmds[i].cmdf = 0;
     }
     return OLECMDERR_E_UNKNOWNGROUP;
@@ -2274,7 +2256,7 @@ static HRESULT WINAPI ISVOleCmdTarget_Exec(
 {
 	IShellViewImpl *This = impl_from_IOleCommandTarget(iface);
 
-	FIXME("(%p)->(%s %d 0x%08x %s %p)\n",
+	FIXME("(%p)->(%s %ld 0x%08lx %s %p)\n",
               This, debugstr_guid(pguidCmdGroup), nCmdID, nCmdexecopt, debugstr_variant(pvaIn), pvaOut);
 
 	if (!pguidCmdGroup)
@@ -2627,7 +2609,7 @@ static HRESULT WINAPI ISVViewObject_SetAdvise(
 
 	IShellViewImpl *This = impl_from_IViewObject(iface);
 
-	FIXME("partial stub: %p %08x %08x %p\n",
+	FIXME("partial stub: %p %08lx %08lx %p\n",
               This, aspects, advf, pAdvSink);
 
 	/* FIXME: we set the AdviseSink, but never use it to send any advice */
@@ -2710,25 +2692,20 @@ static HRESULT WINAPI FolderView_GetCurrentViewMode(IFolderView2 *iface, UINT *m
 
 static HRESULT WINAPI FolderView_SetCurrentViewMode(IFolderView2 *iface, UINT mode)
 {
-    IShellViewImpl *This = impl_from_IFolderView2(iface);
-    DWORD dwStyle;
+    IShellViewImpl *shellview = impl_from_IFolderView2(iface);
+    DWORD style;
 
-    TRACE("%p, %u.\n", This, mode);
+    TRACE("folder view %p, mode %u.\n", iface, mode);
 
-    if((mode < FVM_FIRST || mode > FVM_LAST) &&
-       (mode != FVM_AUTO))
-        return E_INVALIDARG;
+    if (mode == FVM_AUTO)
+        mode = FVM_ICON;
 
-    /* Windows before Vista uses LVM_SETVIEW and possibly
-       LVM_SETEXTENDEDLISTVIEWSTYLE to set the style of the listview,
-       while later versions seem to accomplish this through other
-       means. */
-    dwStyle = ViewModeToListStyle(mode);
-    SetStyle(This, dwStyle, LVS_TYPEMASK);
-
-    /* This will not necessarily be the actual mode set above.
-       This mimics the behavior of Windows XP. */
-    This->FolderSettings.ViewMode = mode;
+    if (mode >= FVM_FIRST && mode <= FVM_LAST)
+    {
+        style = ViewModeToListStyle(mode);
+        SetStyle(shellview, style, LVS_TYPEMASK);
+        shellview->FolderSettings.ViewMode = mode;
+    }
 
     return S_OK;
 }
@@ -2781,8 +2758,49 @@ static HRESULT WINAPI FolderView_ItemCount(IFolderView2 *iface, UINT flags, int 
 static HRESULT WINAPI FolderView_Items(IFolderView2 *iface, UINT flags, REFIID riid, void **ppv)
 {
     IShellViewImpl *This = impl_from_IFolderView2(iface);
-    FIXME("(%p)->(%u %s %p), stub\n", This, flags, debugstr_guid(riid), ppv);
-    return E_NOTIMPL;
+    int count, i;
+    ITEMIDLIST **pidl;
+    LVITEMW item;
+    HRESULT hr;
+
+    if (!IsEqualIID(riid, &IID_IShellItemArray))
+    {
+        FIXME("%s is not supported\n", debugstr_guid(riid));
+        return E_NOINTERFACE;
+    }
+
+    if (flags != SVGIO_ALLVIEW)
+        FIXME("some flags unsupported, %x\n", flags & ~SVGIO_ALLVIEW);
+
+    count = SendMessageW(This->hWndList, LVM_GETITEMCOUNT, 0, 0);
+    if (!count)
+    {
+        FIXME("Folder is empty\n");
+        return E_FAIL;
+    }
+
+    pidl = HeapAlloc(GetProcessHeap(), 0, count * sizeof(*pidl));
+    if (!pidl) return E_OUTOFMEMORY;
+
+    for (i = 0; i < count; i++)
+    {
+        item.mask = LVIF_PARAM;
+        item.iItem = i;
+        if (!SendMessageW(This->hWndList, LVM_GETITEMW, 0, (LPARAM)&item))
+        {
+            FIXME("LVM_GETITEMW(%d) failed\n" ,i);
+            HeapFree(GetProcessHeap(), 0, pidl);
+            return E_FAIL;
+        }
+
+        pidl[i] = (ITEMIDLIST *)item.lParam;
+    }
+
+    hr = SHCreateShellItemArray(NULL, This->pSFParent, count, (LPCITEMIDLIST *)pidl, (IShellItemArray **)ppv);
+
+    HeapFree(GetProcessHeap(), 0, pidl);
+
+    return hr;
 }
 
 static HRESULT WINAPI FolderView_GetSelectionMarkedItem(IFolderView2 *iface, int *item)
@@ -2853,7 +2871,7 @@ static HRESULT WINAPI FolderView_SelectItem(IFolderView2 *iface, int item, DWORD
     IShellViewImpl *This = impl_from_IFolderView2(iface);
     LVITEMW lvItem;
 
-    TRACE("(%p)->(%d, %x)\n", This, item, flags);
+    TRACE("(%p)->(%d, %lx)\n", This, item, flags);
 
     lvItem.state = 0;
     lvItem.stateMask = LVIS_SELECTED;
@@ -2870,11 +2888,14 @@ static HRESULT WINAPI FolderView_SelectItem(IFolderView2 *iface, int item, DWORD
         lvItem.state |= LVIS_SELECTED;
 
     if (flags & SVSI_FOCUSED)
+    {
         lvItem.stateMask |= LVIS_FOCUSED;
+        lvItem.state |= LVIS_FOCUSED;
+    }
 
     SendMessageW(This->hWndList, LVM_SETITEMSTATE, item, (LPARAM)&lvItem);
 
-    if (flags & SVSI_EDIT)
+    if ((flags & SVSI_EDIT) == SVSI_EDIT)
         SendMessageW(This->hWndList, LVM_EDITLABELW, item, 0);
 
     return S_OK;
@@ -2884,7 +2905,7 @@ static HRESULT WINAPI FolderView_SelectAndPositionItems(IFolderView2 *iface, UIN
                                      PCUITEMID_CHILD_ARRAY apidl, POINT *apt, DWORD flags)
 {
     IShellViewImpl *This = impl_from_IFolderView2(iface);
-    FIXME("(%p)->(%u %p %p %x), stub\n", This, cidl, apidl, apt, flags);
+    FIXME("(%p)->(%u %p %p %lx), stub\n", This, cidl, apidl, apt, flags);
     return E_NOTIMPL;
 }
 
@@ -2943,16 +2964,23 @@ static HRESULT WINAPI FolderView2_SetText(IFolderView2 *iface, FVTEXTTYPE type, 
 
 static HRESULT WINAPI FolderView2_SetCurrentFolderFlags(IFolderView2 *iface, DWORD mask, DWORD flags)
 {
-    IShellViewImpl *This = impl_from_IFolderView2(iface);
-    FIXME("(%p)->(0x%08x 0x%08x), stub\n", This, mask, flags);
-    return E_NOTIMPL;
+    IShellViewImpl *shellview = impl_from_IFolderView2(iface);
+
+    TRACE("folder view %p, mask %#lx, flags %#lx.\n", iface, mask, flags);
+
+    shellview->FolderSettings.fFlags = (shellview->FolderSettings.fFlags & ~mask) | (flags & mask);
+    return S_OK;
 }
 
 static HRESULT WINAPI FolderView2_GetCurrentFolderFlags(IFolderView2 *iface, DWORD *flags)
 {
-    IShellViewImpl *This = impl_from_IFolderView2(iface);
-    FIXME("(%p)->(%p), stub\n", This, flags);
-    return E_NOTIMPL;
+    IShellViewImpl *shellview = impl_from_IFolderView2(iface);
+
+    TRACE("folder view %p, flags %p.\n", iface, flags);
+
+    if (flags)
+        *flags = shellview->FolderSettings.fFlags;
+    return S_OK;
 }
 
 static HRESULT WINAPI FolderView2_GetSortColumnCount(IFolderView2 *iface, int *columns)
@@ -3028,15 +3056,20 @@ static HRESULT WINAPI FolderView2_SetViewModeAndIconSize(IFolderView2 *iface, FO
 {
     IShellViewImpl *This = impl_from_IFolderView2(iface);
     FIXME("(%p)->(%d %d), stub\n", This, mode, size);
-    return E_NOTIMPL;
+    return S_OK;
 }
 
 static HRESULT WINAPI FolderView2_GetViewModeAndIconSize(IFolderView2 *iface, FOLDERVIEWMODE *mode,
     int *size)
 {
     IShellViewImpl *This = impl_from_IFolderView2(iface);
+
     FIXME("(%p)->(%p %p), stub\n", This, mode, size);
-    return E_NOTIMPL;
+
+    *size = 16; /* FIXME */
+    *mode = This->FolderSettings.ViewMode;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI FolderView2_SetGroupSubsetCount(IFolderView2 *iface, UINT visible_rows)
@@ -3143,7 +3176,7 @@ static ULONG WINAPI IShellFolderView_fnRelease(IShellFolderView *iface)
 static HRESULT WINAPI IShellFolderView_fnRearrange(IShellFolderView *iface, LPARAM sort)
 {
     IShellViewImpl *This = impl_from_IShellFolderView(iface);
-    FIXME("(%p)->(%ld) stub\n", This, sort);
+    FIXME("(%p)->(%Id) stub\n", This, sort);
     return E_NOTIMPL;
 }
 
@@ -3512,7 +3545,7 @@ static HRESULT WINAPI shellfolderviewdual_GetTypeInfo(IShellFolderViewDual3 *ifa
     IShellViewImpl *This = impl_from_IShellFolderViewDual3(iface);
     HRESULT hr;
 
-    TRACE("(%p,%u,%d,%p)\n", This, iTInfo, lcid, ppTInfo);
+    TRACE("(%p,%u,%ld,%p)\n", This, iTInfo, lcid, ppTInfo);
 
     hr = get_typeinfo(IShellFolderViewDual3_tid, ppTInfo);
     if (SUCCEEDED(hr))
@@ -3528,7 +3561,7 @@ static HRESULT WINAPI shellfolderviewdual_GetIDsOfNames(
     ITypeInfo *ti;
     HRESULT hr;
 
-    TRACE("(%p, %s, %p, %u, %d, %p)\n", This, debugstr_guid(riid), rgszNames,
+    TRACE("(%p, %s, %p, %u, %ld, %p)\n", This, debugstr_guid(riid), rgszNames,
             cNames, lcid, rgDispId);
 
     hr = get_typeinfo(IShellFolderViewDual3_tid, &ti);
@@ -3546,7 +3579,7 @@ static HRESULT WINAPI shellfolderviewdual_Invoke(IShellFolderViewDual3 *iface,
     ITypeInfo *ti;
     HRESULT hr;
 
-    TRACE("(%p, %d, %s, %d, %u, %p, %p, %p, %p)\n", This, dispIdMember,
+    TRACE("(%p, %ld, %s, %ld, %u, %p, %p, %p, %p)\n", This, dispIdMember,
             debugstr_guid(riid), lcid, wFlags, pDispParams, pVarResult,
             pExcepInfo, puArgErr);
 
@@ -3675,7 +3708,7 @@ static HRESULT WINAPI shellfolderviewdual_get_FolderFlags(IShellFolderViewDual3 
 static HRESULT WINAPI shellfolderviewdual_put_FolderFlags(IShellFolderViewDual3 *iface, DWORD flags)
 {
     IShellViewImpl *This = impl_from_IShellFolderViewDual3(iface);
-    FIXME("%p 0x%08x\n", This, flags);
+    FIXME("%p 0x%08lx\n", This, flags);
     return E_NOTIMPL;
 }
 
@@ -3753,7 +3786,7 @@ IShellView *IShellView_Constructor(IShellFolder *folder)
 {
     IShellViewImpl *sv;
 
-    sv = heap_alloc_zero(sizeof(*sv));
+    sv = calloc(1, sizeof(*sv));
     if (!sv)
         return NULL;
 
@@ -3777,6 +3810,8 @@ IShellView *IShellView_Constructor(IShellFolder *folder)
     sv->cScrollDelay = 0;
     sv->ptLastMousePos.x = 0;
     sv->ptLastMousePos.y = 0;
+    sv->FolderSettings.ViewMode = FVM_TILE;
+    sv->FolderSettings.fFlags = FWF_USESEARCHFOLDER;
 
     TRACE("(%p)->(%p)\n", sv, folder);
     return (IShellView*)&sv->IShellView3_iface;

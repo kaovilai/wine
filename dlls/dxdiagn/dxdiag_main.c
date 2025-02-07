@@ -23,13 +23,13 @@
 
 #include <stdarg.h>
 
+#include "initguid.h"
 #include "windef.h"
 #include "winbase.h"
 #include "objbase.h"
 #include "oleauto.h"
 #include "oleidl.h"
 #include "rpcproxy.h"
-#include "initguid.h"
 #include "dxdiag_private.h"
 #include "wine/debug.h"
 
@@ -42,7 +42,7 @@ LONG DXDIAGN_refCount = 0;
 /* At process attach */
 BOOL WINAPI DllMain(HINSTANCE hInstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
-  TRACE("%p,%x,%p\n", hInstDLL, fdwReason, lpvReserved);
+  TRACE("%p,%lx,%p\n", hInstDLL, fdwReason, lpvReserved);
   if (fdwReason == DLL_PROCESS_ATTACH) {
       dxdiagn_instance = hInstDLL;
       DisableThreadLibraryCalls(hInstDLL);

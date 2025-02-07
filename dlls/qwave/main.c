@@ -39,7 +39,13 @@ BOOL WINAPI QOSCreateHandle(PQOS_VERSION version, PHANDLE handle)
 BOOL WINAPI QOSAddSocketToFlow(HANDLE handle, SOCKET socket, PSOCKADDR addr,
                                QOS_TRAFFIC_TYPE traffictype, DWORD flags, PQOS_FLOWID flowid)
 {
-    FIXME("%p, %lx, %p, %d, 0x%08x, %p stub!\n", handle, socket, addr, traffictype, flags, flowid);
+    FIXME("%p, %Ix, %p, %d, 0x%08lx, %p stub!\n", handle, socket, addr, traffictype, flags, flowid);
     SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+}
+
+BOOL WINAPI QOSCloseHandle(HANDLE handle)
+{
+    FIXME("%p stub!\n", handle);
     return FALSE;
 }

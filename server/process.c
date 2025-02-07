@@ -141,7 +141,7 @@ struct startup_info
     struct process     *process;      /* created process */
     data_size_t         info_size;    /* size of startup info */
     data_size_t         data_size;    /* size of whole startup data */
-    startup_info_t     *data;         /* data for startup info */
+    struct startup_info_data *data;   /* data for startup info */
 };
 
 static void startup_info_dump( struct object *obj, int verbose );
@@ -638,7 +638,8 @@ static void start_sigkill_timer( struct process *process )
 
 /* create a new process */
 /* if the function fails the fd is closed */
-struct process *create_process( int fd, struct process *parent, unsigned int flags, const startup_info_t *info,
+struct process *create_process( int fd, struct process *parent, unsigned int flags,
+                                const struct startup_info_data *info,
                                 const struct security_descriptor *sd, const obj_handle_t *handles,
                                 unsigned int handle_count, struct token *token )
 {
@@ -656,6 +657,7 @@ struct process *create_process( int fd, struct process *parent, unsigned int fla
     process->msg_fd          = NULL;
     process->sigkill_timeout = NULL;
     process->sigkill_delay   = TICKS_PER_SEC / 64;
+    process->machine         = native_machine;
     process->unix_pid        = -1;
     process->exit_code       = STILL_ACTIVE;
     process->running_threads = 0;
@@ -678,16 +680,18 @@ struct process *create_process( int fd, struct process *parent, unsigned int fla
     process->desktop         = 0;
     process->token           = NULL;
     process->trace_data      = 0;
+    process->rawinput_devices = NULL;
+    process->rawinput_device_count = 0;
     process->rawinput_mouse  = NULL;
     process->rawinput_kbd    = NULL;
     memset( &process->image_info, 0, sizeof(process->image_info) );
+    list_init( &process->rawinput_entry );
     list_init( &process->kernel_object );
     list_init( &process->thread_list );
     list_init( &process->locks );
     list_init( &process->asyncs );
     list_init( &process->classes );
     list_init( &process->views );
-    list_init( &process->rawinput_devices );
 
     process->end_time = 0;
 
@@ -708,7 +712,7 @@ struct process *create_process( int fd, struct process *parent, unsigned int fla
     if (!parent)
     {
         process->handles = alloc_handle_table( process, 0 );
-        process->token = token_create_admin( TRUE, -1, TokenElevationTypeFull, default_session_id );
+        process->token = token_create_admin( TRUE, -1, TokenElevationTypeLimited, default_session_id );
         process->affinity = ~0;
     }
     else
@@ -731,12 +735,6 @@ struct process *create_process( int fd, struct process *parent, unsigned int fla
     }
     if (!process->handles || !process->token) goto error;
     process->session_id = token_get_session_id( process->token );
-
-    /* Assign a high security label to the token. The default would be medium
-     * but Wine provides admin access to all applications right now so high
-     * makes more sense for the time being. */
-    if (!token_assign_label( process->token, &high_label_sid ))
-        goto error;
 
     set_fd_events( process->msg_fd, POLLIN );  /* start listening to events */
     return process;
@@ -782,6 +780,8 @@ static void process_destroy( struct object *obj )
     if (process->idle_event) release_object( process->idle_event );
     if (process->id) free_ptid( process->id );
     if (process->token) release_object( process->token );
+    list_remove( &process->rawinput_entry );
+    free( process->rawinput_devices );
     free( process->dir_cache );
     free( process->image );
 }
@@ -806,6 +806,8 @@ static unsigned int process_map_access( struct object *obj, unsigned int access 
     access = default_map_access( obj, access );
     if (access & PROCESS_QUERY_INFORMATION) access |= PROCESS_QUERY_LIMITED_INFORMATION;
     if (access & PROCESS_SET_INFORMATION) access |= PROCESS_SET_LIMITED_INFORMATION;
+    if ((access & (PROCESS_VM_OPERATION | PROCESS_VM_WRITE)) == (PROCESS_VM_OPERATION | PROCESS_VM_WRITE))
+        access |= PROCESS_QUERY_LIMITED_INFORMATION;
     return access;
 }
 
@@ -839,7 +841,7 @@ static struct security_descriptor *process_get_sd( struct object *obj )
         process_default_sd->dacl_len  = dacl_len;
         sid = (struct sid *)(process_default_sd + 1);
         sid = copy_sid( sid, &builtin_admins_sid );
-        sid = copy_sid( sid, &domain_users_sid );
+        copy_sid( sid, &domain_users_sid );
 
         dacl = (struct acl *)((char *)(process_default_sd + 1) + admins_sid_len + users_sid_len);
         dacl->revision = ACL_REVISION;
@@ -859,7 +861,7 @@ static void process_poll_event( struct fd *fd, int event )
     struct process *process = get_fd_user( fd );
     assert( process->obj.ops == &process_ops );
 
-    if (event & (POLLERR | POLLHUP)) kill_process( process, 0 );
+    if (event & (POLLERR | POLLHUP)) kill_process( process, !process->is_terminating );
     else if (event & POLLIN) receive_fd( process );
 }
 
@@ -959,8 +961,6 @@ void kill_console_processes( struct thread *renderer, int exit_code )
 /* a process has been killed (i.e. its last thread died) */
 static void process_killed( struct process *process )
 {
-    struct list *ptr;
-
     assert( list_empty( &process->thread_list ));
     process->end_time = current_time;
     close_process_desktop( process );
@@ -972,12 +972,6 @@ static void process_killed( struct process *process )
     process->idle_event = NULL;
     assert( !process->console );
 
-    while ((ptr = list_head( &process->rawinput_devices )))
-    {
-        struct rawinput_device_entry *entry = LIST_ENTRY( ptr, struct rawinput_device_entry, entry );
-        list_remove( &entry->entry );
-        free( entry );
-    }
     destroy_process_classes( process );
     free_mapped_views( process );
     free_process_user_handles( process );
@@ -1138,7 +1132,7 @@ DECL_HANDLER(new_process)
 {
     struct startup_info *info;
     const void *info_ptr;
-    struct unicode_str name;
+    struct unicode_str name, desktop_path = {0};
     const struct security_descriptor *sd;
     const struct object_attributes *objattr = get_req_object_attributes( &sd, &name, NULL );
     struct process *process = NULL;
@@ -1251,9 +1245,9 @@ DECL_HANDLER(new_process)
 
     if (req->info_size < sizeof(*info->data))
     {
-        /* make sure we have a full startup_info_t structure */
+        /* make sure we have a full startup_info_data structure */
         data_size_t env_size = info->data_size - info->info_size;
-        data_size_t info_size = min( req->info_size, FIELD_OFFSET( startup_info_t, curdir_len ));
+        data_size_t info_size = min( req->info_size, offsetof( struct startup_info_data, curdir_len ));
 
         if (!(info->data = mem_alloc( sizeof(*info->data) + env_size )))
         {
@@ -1263,7 +1257,7 @@ DECL_HANDLER(new_process)
         memcpy( info->data, info_ptr, info_size );
         memset( (char *)info->data + info_size, 0, sizeof(*info->data) - info_size );
         memcpy( info->data + 1, (const char *)info_ptr + req->info_size, env_size );
-        info->info_size = sizeof(startup_info_t);
+        info->info_size = sizeof(struct startup_info_data);
         info->data_size = info->info_size + env_size;
     }
     else
@@ -1281,7 +1275,9 @@ DECL_HANDLER(new_process)
         FIXUP_LEN( info->data->imagepath_len );
         FIXUP_LEN( info->data->cmdline_len );
         FIXUP_LEN( info->data->title_len );
+        desktop_path.str = (WCHAR *)((char *)info->data + pos);
         FIXUP_LEN( info->data->desktop_len );
+        desktop_path.len = info->data->desktop_len;
         FIXUP_LEN( info->data->shellinfo_len );
         FIXUP_LEN( info->data->runtime_len );
 #undef FIXUP_LEN
@@ -1302,6 +1298,7 @@ DECL_HANDLER(new_process)
                                     handles, req->handles_size / sizeof(*handles), token )))
         goto done;
 
+    process->machine = req->machine;
     process->startup_info = (struct startup_info *)grab_object( info );
 
     job = parent->job;
@@ -1331,21 +1328,21 @@ DECL_HANDLER(new_process)
     }
 
     /* connect to the window station */
-    connect_process_winstation( process, parent_thread, parent );
+    connect_process_winstation( process, &desktop_path, parent_thread, parent );
 
-    /* set the process console */
-    if (info->data->console > 3)
+    /* inherit the process console, but keep pseudo handles (< 0), and 0 (= not attached to a console) as is */
+    if ((int)info->data->console > 0)
         info->data->console = duplicate_handle( parent, info->data->console, process,
                                                 0, 0, DUPLICATE_SAME_ACCESS );
 
     if (!(req->flags & PROCESS_CREATE_FLAGS_INHERIT_HANDLES) && info->data->console != 1)
     {
         info->data->hstdin  = duplicate_handle( parent, info->data->hstdin, process,
-                                                0, OBJ_INHERIT, DUPLICATE_SAME_ACCESS );
+                                                0, 0, DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES );
         info->data->hstdout = duplicate_handle( parent, info->data->hstdout, process,
-                                                0, OBJ_INHERIT, DUPLICATE_SAME_ACCESS );
+                                                0, 0, DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES );
         info->data->hstderr = duplicate_handle( parent, info->data->hstderr, process,
-                                                0, OBJ_INHERIT, DUPLICATE_SAME_ACCESS );
+                                                0, 0, DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES );
         /* some handles above may have been invalid; this is not an error */
         if (get_error() == STATUS_INVALID_HANDLE ||
             get_error() == STATUS_OBJECT_TYPE_MISMATCH) clear_error();
@@ -1363,7 +1360,10 @@ DECL_HANDLER(new_process)
         /* debug_children is set to 1 by default */
     }
 
-    if (!info->data->console_flags) process->group_id = parent->group_id;
+    if (info->data->process_group_id == parent->group_id)
+        process->group_id = parent->group_id;
+    else
+        info->data->process_group_id = process->group_id;
 
     info->process = (struct process *)grab_object( process );
     reply->info = alloc_handle( current->process, info, SYNCHRONIZE, 0 );
@@ -1402,6 +1402,7 @@ DECL_HANDLER(get_startup_info)
     if (!info) return;
 
     /* we return the data directly without making a copy so this can only be called once */
+    reply->machine = process->machine;
     reply->info_size = info->info_size;
     size = info->data_size;
     if (size > get_reply_max_size()) size = get_reply_max_size();
@@ -1414,37 +1415,26 @@ DECL_HANDLER(get_startup_info)
 DECL_HANDLER(init_process_done)
 {
     struct process *process = current->process;
-    struct memory_view *view;
-    client_ptr_t base;
-    const pe_image_info_t *image_info;
 
     if (is_process_init_done(process))
     {
         set_error( STATUS_INVALID_PARAMETER );
         return;
     }
-    if (!(view = get_exe_view( process )))
-    {
-        set_error( STATUS_DLL_NOT_FOUND );
-        return;
-    }
-    if (!(image_info = get_view_image_info( view, &base ))) return;
 
     current->teb      = req->teb;
     process->peb      = req->peb;
     process->ldt_copy = req->ldt_copy;
 
     process->start_time = current_time;
-    current->entry_point = base + image_info->entry_point;
 
     init_process_tracing( process );
     generate_startup_debug_events( process );
     set_process_startup_state( process, STARTUP_DONE );
 
-    if (image_info->subsystem != IMAGE_SUBSYSTEM_WINDOWS_CUI)
+    if (process->image_info.subsystem != IMAGE_SUBSYSTEM_WINDOWS_CUI)
         process->idle_event = create_event( NULL, NULL, 0, 1, 0, NULL );
     if (process->debug_obj) set_process_debug_flag( process, 1 );
-    reply->entry = current->entry_point;
     reply->suspend = (current->suspend || process->suspend);
 }
 
@@ -1519,7 +1509,10 @@ DECL_HANDLER(get_process_debug_info)
 /* fetch the name of the process image */
 DECL_HANDLER(get_process_image_name)
 {
-    struct process *process = get_process_from_handle( req->handle, PROCESS_QUERY_LIMITED_INFORMATION );
+    struct process *process;
+
+    if (req->pid) process = get_process_from_id( req->pid );
+    else          process = get_process_from_handle( req->handle, PROCESS_QUERY_LIMITED_INFORMATION );
 
     if (!process) return;
     if (process->image)
@@ -1542,6 +1535,7 @@ DECL_HANDLER(get_process_image_name)
         }
         else set_error( STATUS_BUFFER_TOO_SMALL );
     }
+    else set_error( STATUS_INVALID_HANDLE );
     release_object( process );
 }
 
@@ -1558,7 +1552,7 @@ DECL_HANDLER(get_process_vm_counters)
         char proc_path[32], line[256];
         unsigned long value;
 
-        sprintf( proc_path, "/proc/%u/status", process->unix_pid );
+        snprintf( proc_path, sizeof(proc_path), "/proc/%u/status", process->unix_pid );
         if ((f = fopen( proc_path, "r" )))
         {
             while (fgets( line, sizeof(line), f ))
@@ -1632,6 +1626,16 @@ DECL_HANDLER(set_process_info)
     {
         if (req->mask & SET_PROCESS_INFO_PRIORITY) process->priority = req->priority;
         if (req->mask & SET_PROCESS_INFO_AFFINITY) set_process_affinity( process, req->affinity );
+        if (req->mask & SET_PROCESS_INFO_TOKEN)
+        {
+            struct token *token;
+
+            if ((token = get_token_obj( current->process, req->token, TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY )))
+            {
+                release_object( process->token );
+                process->token = token;
+            }
+        }
         release_object( process );
     }
 }
@@ -1667,7 +1671,6 @@ DECL_HANDLER(write_process_memory)
     {
         data_size_t len = get_req_data_size();
         if (len) write_process_memory( process, req->addr, len, get_req_data() );
-        else set_error( STATUS_INVALID_PARAMETER );
         release_object( process );
     }
 }
@@ -1680,7 +1683,7 @@ DECL_HANDLER(get_process_idle_event)
     reply->event = 0;
     if ((process = get_process_from_handle( req->handle, PROCESS_QUERY_INFORMATION )))
     {
-        if (process->idle_event && process != current->process)
+        if (process->idle_event)
             reply->event = alloc_handle( current->process, process->idle_event,
                                          EVENT_ALL_ACCESS, 0 );
         release_object( process );
@@ -1714,6 +1717,24 @@ DECL_HANDLER(make_process_system)
         process->is_system = 1;
         if (!--user_processes && !shutdown_stage && master_socket_timeout != TIMEOUT_INFINITE)
             shutdown_timeout = add_timeout_user( master_socket_timeout, server_shutdown_timeout, NULL );
+    }
+    release_object( process );
+}
+
+/* grant a process a primary admin token with Default elevation */
+DECL_HANDLER(grant_process_admin_token)
+{
+    struct process *process;
+    struct token *token;
+
+    if (!(process = get_process_from_handle( req->handle, PROCESS_SET_INFORMATION )))
+        return;
+
+    if ((token = token_create_admin( TRUE, SecurityIdentification,
+                                     TokenElevationTypeDefault, default_session_id )))
+    {
+        release_object( process->token );
+        process->token = token;
     }
     release_object( process );
 }

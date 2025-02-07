@@ -21,7 +21,6 @@
 #include "explorerframe_main.h"
 
 #include "wine/debug.h"
-#include "wine/heap.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(explorerframe);
 
@@ -67,7 +66,7 @@ static ULONG STDMETHODCALLTYPE taskbar_list_AddRef(ITaskbarList4 *iface)
     struct taskbar_list *This = impl_from_ITaskbarList4(iface);
     ULONG refcount = InterlockedIncrement(&This->refcount);
 
-    TRACE("%p increasing refcount to %u\n", This, refcount);
+    TRACE("%p increasing refcount to %lu\n", This, refcount);
 
     return refcount;
 }
@@ -77,11 +76,11 @@ static ULONG STDMETHODCALLTYPE taskbar_list_Release(ITaskbarList4 *iface)
     struct taskbar_list *This = impl_from_ITaskbarList4(iface);
     ULONG refcount = InterlockedDecrement(&This->refcount);
 
-    TRACE("%p decreasing refcount to %u\n", This, refcount);
+    TRACE("%p decreasing refcount to %lu\n", This, refcount);
 
     if (!refcount)
     {
-        heap_free(This);
+        free(This);
         EFRAME_UnlockModule();
     }
 
@@ -171,18 +170,18 @@ static HRESULT STDMETHODCALLTYPE taskbar_list_RegisterTab(ITaskbarList4 *iface, 
 
 static HRESULT STDMETHODCALLTYPE taskbar_list_UnregisterTab(ITaskbarList4 *iface, HWND hwndTab)
 {
-    FIXME("iface %p, hwndTab %p stub!\n", iface, hwndTab);
+    FIXME("iface %p, hwndTab %p stub, faking success!\n", iface, hwndTab);
 
-    return E_NOTIMPL;
+    return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE taskbar_list_SetTabOrder(ITaskbarList4 *iface,
                                                           HWND hwndTab,
                                                           HWND hwndInsertBefore)
 {
-    FIXME("iface %p, hwndTab %p, hwndInsertBefore %p stub!\n", iface, hwndTab, hwndInsertBefore);
+    FIXME("iface %p, hwndTab %p, hwndInsertBefore %p stub, faking success!\n", iface, hwndTab, hwndInsertBefore);
 
-    return E_NOTIMPL;
+    return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE taskbar_list_SetTabActive(ITaskbarList4 *iface,
@@ -190,9 +189,9 @@ static HRESULT STDMETHODCALLTYPE taskbar_list_SetTabActive(ITaskbarList4 *iface,
                                                           HWND hwndMDI,
                                                           DWORD dwReserved)
 {
-    FIXME("iface %p, hwndTab %p, hwndMDI %p, dwReserved %x stub!\n", iface, hwndTab, hwndMDI, dwReserved);
+    FIXME("iface %p, hwndTab %p, hwndMDI %p, dwReserved %lx stub, faking success!\n", iface, hwndTab, hwndMDI, dwReserved);
 
-    return E_NOTIMPL;
+    return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE taskbar_list_ThumbBarAddButtons(ITaskbarList4 *iface,
@@ -309,7 +308,7 @@ HRESULT TaskbarList_Constructor(IUnknown *outer, REFIID riid, void **taskbar_lis
         return CLASS_E_NOAGGREGATION;
     }
 
-    object = heap_alloc(sizeof(*object));
+    object = malloc(sizeof(*object));
     if (!object)
     {
         ERR("Failed to allocate taskbar list object memory\n");

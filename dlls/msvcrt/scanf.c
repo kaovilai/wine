@@ -211,7 +211,7 @@ int WINAPIV scanf(const char *format, ...)
     int res;
 
     va_start(valist, format);
-    res = vfscanf_l(MSVCRT_stdin, format, NULL, valist);
+    res = vfscanf_l(stdin, format, NULL, valist);
     va_end(valist);
     return res;
 }
@@ -225,7 +225,7 @@ int WINAPIV _scanf_l(const char *format, _locale_t locale, ...)
     int res;
 
     va_start(valist, locale);
-    res = vfscanf_l(MSVCRT_stdin, format, locale, valist);
+    res = vfscanf_l(stdin, format, locale, valist);
     va_end(valist);
     return res;
 }
@@ -239,7 +239,7 @@ int WINAPIV scanf_s(const char *format, ...)
     int res;
 
     va_start(valist, format);
-    res = vfscanf_s_l(MSVCRT_stdin, format, NULL, valist);
+    res = vfscanf_s_l(stdin, format, NULL, valist);
     va_end(valist);
     return res;
 }
@@ -253,7 +253,7 @@ int WINAPIV _scanf_s_l(const char *format, _locale_t locale, ...)
     int res;
 
     va_start(valist, locale);
-    res = vfscanf_s_l(MSVCRT_stdin, format, locale, valist);
+    res = vfscanf_s_l(stdin, format, locale, valist);
     va_end(valist);
     return res;
 }
@@ -325,7 +325,7 @@ int WINAPIV wscanf(const wchar_t *format, ...)
     int res;
 
     va_start(valist, format);
-    res = vfwscanf_l(MSVCRT_stdin, format, NULL, valist);
+    res = vfwscanf_l(stdin, format, NULL, valist);
     va_end(valist);
     return res;
 }
@@ -340,7 +340,7 @@ int WINAPIV _wscanf_l(const wchar_t *format,
     int res;
 
     va_start(valist, locale);
-    res = vfwscanf_l(MSVCRT_stdin, format, locale, valist);
+    res = vfwscanf_l(stdin, format, locale, valist);
     va_end(valist);
     return res;
 }
@@ -354,7 +354,7 @@ int WINAPIV wscanf_s(const wchar_t *format, ...)
     int res;
 
     va_start(valist, format);
-    res = vfwscanf_s_l(MSVCRT_stdin, format, NULL, valist);
+    res = vfwscanf_s_l(stdin, format, NULL, valist);
     va_end(valist);
     return res;
 }
@@ -369,7 +369,7 @@ int WINAPIV _wscanf_s_l(const wchar_t *format,
     int res;
 
     va_start(valist, locale);
-    res = vfwscanf_s_l(MSVCRT_stdin, format, locale, valist);
+    res = vfwscanf_s_l(stdin, format, locale, valist);
     va_end(valist);
     return res;
 }
@@ -674,7 +674,7 @@ int CDECL __stdio_common_vsscanf(unsigned __int64 options,
      * scanf. LEGACY_MSVCRT_COMPATIBILITY affects parsing of nan/inf,
      * but parsing of those isn't implemented at all yet. */
     if (options & ~UCRTBASE_SCANF_MASK)
-        FIXME("options %s not handled\n", wine_dbgstr_longlong(options));
+        FIXME("options %#I64x not handled\n", options);
     if (options & _CRT_INTERNAL_SCANF_SECURECRT)
         return vsnscanf_s_l(input, length, format, locale, valist);
     else
@@ -694,7 +694,7 @@ int CDECL __stdio_common_vswscanf(unsigned __int64 options,
      * scanf. LEGACY_MSVCRT_COMPATIBILITY affects parsing of nan/inf,
      * but parsing of those isn't implemented at all yet. */
     if (options & ~UCRTBASE_SCANF_MASK)
-        FIXME("options %s not handled\n", wine_dbgstr_longlong(options));
+        FIXME("options %#I64x not handled\n", options);
     if (options & _CRT_INTERNAL_SCANF_SECURECRT)
         return vsnwscanf_s_l(input, length, format, locale, valist);
     else
@@ -710,8 +710,8 @@ int CDECL __stdio_common_vfscanf(unsigned __int64 options,
                                        _locale_t locale,
                                        va_list valist)
 {
-    if (options & ~_CRT_INTERNAL_SCANF_SECURECRT)
-        FIXME("options %s not handled\n", wine_dbgstr_longlong(options));
+    if (options & ~(_CRT_INTERNAL_SCANF_SECURECRT | _CRT_INTERNAL_SCANF_LEGACY_WIDE_SPECIFIERS))
+        FIXME("options %#I64x not handled\n", options);
     if (options & _CRT_INTERNAL_SCANF_SECURECRT)
         return vfscanf_s_l(file, format, locale, valist);
     else
@@ -728,7 +728,7 @@ int CDECL __stdio_common_vfwscanf(unsigned __int64 options,
                                         va_list valist)
 {
     if (options & ~_CRT_INTERNAL_SCANF_SECURECRT)
-        FIXME("options %s not handled\n", wine_dbgstr_longlong(options));
+        FIXME("options %#I64x not handled\n", options);
     if (options & _CRT_INTERNAL_SCANF_SECURECRT)
         return vfwscanf_s_l(file, format, locale, valist);
     else

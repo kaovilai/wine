@@ -34,12 +34,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
 extern HINSTANCE shlwapi_hInstance; /* in shlwapi_main.c */
 
-static const WCHAR szDontShowKey[] = { 'S','o','f','t','w','a','r','e','\\',
-  'M','i','c','r','o','s','o','f','t','\\','W','i','n','d','o','w','s','\\',
-  'C','u','r','r','e','n','t','V','e','r','s','i','o','n','\\',
-  'E','x','p','l','o','r','e','r','\\','D','o','n','t','S','h','o','w',
-  'M','e','T','h','i','s','D','i','a','l','o','g','A','g','a','i','n','\0'
-};
+static const WCHAR szDontShowKey[] =
+  L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\DontShowMeThisDialogAgain";
 
 INT_PTR WINAPI SHMessageBoxCheckExW(HWND,HINSTANCE,LPCWSTR,DLGPROC,LPARAM,INT_PTR,LPCWSTR);
 INT_PTR WINAPI SHMessageBoxCheckW(HWND,LPCWSTR,LPCWSTR,DWORD,INT_PTR,LPCWSTR);
@@ -57,7 +53,7 @@ static INT_PTR CALLBACK SHDlgProcEx(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 {
   DLGDATAEX *d = (DLGDATAEX *)GetWindowLongPtrW(hDlg, DWLP_USER);
 
-  TRACE("(%p,%u,%ld,%ld) data %p\n", hDlg, uMsg, wParam, lParam, d);
+  TRACE("(%p,%u,%Id,%Id) data %p\n", hDlg, uMsg, wParam, lParam, d);
 
   switch (uMsg)
   {
@@ -181,14 +177,14 @@ typedef struct tagDLGDATA
 /* Dialogue procedure for shlwapi message boxes */
 static INT_PTR CALLBACK SHDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-  TRACE("(%p,%u,%ld,%ld)\n", hDlg, uMsg, wParam, lParam);
+  TRACE("(%p,%u,%Id,%Id)\n", hDlg, uMsg, wParam, lParam);
 
   switch (uMsg)
   {
   case WM_INITDIALOG:
   {
     DLGDATA *d = (DLGDATA *)lParam;
-    TRACE("WM_INITDIALOG: %p, %s,%s,%d\n", hDlg, debugstr_w(d->lpszTitle),
+    TRACE("WM_INITDIALOG: %p, %s,%s,%ld\n", hDlg, debugstr_w(d->lpszTitle),
           debugstr_w(d->lpszText), d->dwType);
 
     SetWindowTextW(hDlg, d->lpszTitle);
@@ -258,7 +254,7 @@ INT_PTR WINAPI SHMessageBoxCheckA(HWND hWnd, LPCSTR lpszText, LPCSTR lpszTitle,
   if (lpszText)
   {
     iLen = MultiByteToWideChar(CP_ACP, 0, lpszText, -1, NULL, 0);
-    szTextBuff = HeapAlloc(GetProcessHeap(), 0, iLen * sizeof(WCHAR));
+    szTextBuff = malloc(iLen * sizeof(WCHAR));
     MultiByteToWideChar(CP_ACP, 0, lpszText, -1, szTextBuff, iLen);
   }
 
@@ -266,7 +262,7 @@ INT_PTR WINAPI SHMessageBoxCheckA(HWND hWnd, LPCSTR lpszText, LPCSTR lpszTitle,
 
   iRetVal = SHMessageBoxCheckW(hWnd, szTextBuff, lpszTitle ? szTitleBuff : NULL,
                                dwType, iRet, szIdBuff);
-  HeapFree(GetProcessHeap(), 0, szTextBuff);
+  free(szTextBuff);
   return iRetVal;
 }
 

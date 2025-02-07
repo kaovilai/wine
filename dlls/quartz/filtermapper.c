@@ -19,8 +19,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#define NONAMELESSUNION
-#define NONAMELESSSTRUCT
 #include <stdarg.h>
 
 #include "windef.h"
@@ -76,7 +74,7 @@ static ULONG WINAPI enum_reg_filters_AddRef(IEnumRegFilters *iface)
 {
     struct enum_reg_filters *enumerator = impl_from_IEnumRegFilters(iface);
     ULONG refcount = InterlockedIncrement(&enumerator->refcount);
-    TRACE("%p increasing refcount to %u.\n", enumerator, refcount);
+    TRACE("%p increasing refcount to %lu.\n", enumerator, refcount);
     return refcount;
 }
 
@@ -86,7 +84,7 @@ static ULONG WINAPI enum_reg_filters_Release(IEnumRegFilters *iface)
     ULONG refcount = InterlockedDecrement(&enumerator->refcount);
     unsigned int i;
 
-    TRACE("%p decreasing refcount to %u.\n", enumerator, refcount);
+    TRACE("%p decreasing refcount to %lu.\n", enumerator, refcount);
     if (!refcount)
     {
         for (i = 0; i < enumerator->count; ++i)
@@ -103,7 +101,7 @@ static HRESULT WINAPI enum_reg_filters_Next(IEnumRegFilters *iface, ULONG count,
     struct enum_reg_filters *enumerator = impl_from_IEnumRegFilters(iface);
     unsigned int i;
 
-    TRACE("iface %p, count %u, filters %p, ret_count %p.\n", iface, count, filters, ret_count);
+    TRACE("iface %p, count %lu, filters %p, ret_count %p.\n", iface, count, filters, ret_count);
 
     for (i = 0; i < count && enumerator->index + i < enumerator->count; ++i)
     {
@@ -131,7 +129,7 @@ static HRESULT WINAPI enum_reg_filters_Next(IEnumRegFilters *iface, ULONG count,
 
 static HRESULT WINAPI enum_reg_filters_Skip(IEnumRegFilters *iface, ULONG count)
 {
-    TRACE("iface %p, count %u, unimplemented.\n", iface, count);
+    TRACE("iface %p, count %lu, unimplemented.\n", iface, count);
     return E_NOTIMPL;
 }
 
@@ -234,7 +232,7 @@ static ULONG WINAPI enum_moniker_AddRef(IEnumMoniker *iface)
 {
     struct enum_moniker *enumerator = impl_from_IEnumMoniker(iface);
     ULONG refcount = InterlockedIncrement(&enumerator->refcount);
-    TRACE("%p increasing refcount to %u.\n", enumerator, refcount);
+    TRACE("%p increasing refcount to %lu.\n", enumerator, refcount);
     return refcount;
 }
 
@@ -244,7 +242,7 @@ static ULONG WINAPI enum_moniker_Release(IEnumMoniker *iface)
     ULONG refcount = InterlockedDecrement(&enumerator->refcount);
     unsigned int i;
 
-    TRACE("%p decreasing refcount to %u.\n", enumerator, refcount);
+    TRACE("%p decreasing refcount to %lu.\n", enumerator, refcount);
     if (!refcount)
     {
         for (i = 0; i < enumerator->count; ++i)
@@ -261,7 +259,7 @@ static HRESULT WINAPI enum_moniker_Next(IEnumMoniker *iface, ULONG count,
     struct enum_moniker *enumerator = impl_from_IEnumMoniker(iface);
     unsigned int i;
 
-    TRACE("iface %p, count %u, filters %p, ret_count %p.\n", iface, count, filters, ret_count);
+    TRACE("iface %p, count %lu, filters %p, ret_count %p.\n", iface, count, filters, ret_count);
 
     for (i = 0; i < count && enumerator->index + i < enumerator->count; ++i)
         IMoniker_AddRef(filters[i] = enumerator->filters[enumerator->index + i]);
@@ -276,7 +274,7 @@ static HRESULT WINAPI enum_moniker_Skip(IEnumMoniker *iface, ULONG count)
 {
     struct enum_moniker *enumerator = impl_from_IEnumMoniker(iface);
 
-    TRACE("iface %p, count %u.\n", iface, count);
+    TRACE("iface %p, count %lu.\n", iface, count);
 
     enumerator->index += count;
     return S_OK;
@@ -375,7 +373,7 @@ struct REG_RF
 
 struct REG_RFP
 {
-    BYTE signature[4]; /* e.g. "0pi3" */
+    DWORD signature; /* e.g. '0pi3' */
     DWORD dwFlags;
     DWORD dwInstances;
     DWORD dwMediaTypes;
@@ -386,7 +384,7 @@ struct REG_RFP
 
 struct REG_TYPE
 {
-    BYTE signature[4]; /* e.g. "0ty3" */
+    DWORD signature; /* e.g. '0ty3' */
     DWORD dwUnused;
     DWORD dwOffsetMajor;
     DWORD dwOffsetMinor;
@@ -425,7 +423,7 @@ static int add_data(struct Vector *v, const void *pData, int size)
 static int find_data(const struct Vector *v, const void *pData, int size)
 {
     int index;
-    for (index = 0; index < v->current; index++)
+    for (index = 0; index + size <= v->current; index++)
         if (!memcmp(v->pData + index, pData, size))
             return index;
     /* not found */
@@ -469,27 +467,27 @@ static HRESULT WINAPI Inner_QueryInterface(IUnknown *iface, REFIID riid, void **
 
 static ULONG WINAPI Inner_AddRef(IUnknown *iface)
 {
-    FilterMapper3Impl *This = impl_from_IUnknown(iface);
-    ULONG ref = InterlockedIncrement(&This->ref);
+    FilterMapper3Impl *mapper = impl_from_IUnknown(iface);
+    ULONG refcount = InterlockedIncrement(&mapper->ref);
 
-    TRACE("(%p)->(): new ref = %d\n", This, ref);
+    TRACE("%p increasing refcount to %lu.\n", mapper, refcount);
 
-    return ref;
+    return refcount;
 }
 
 static ULONG WINAPI Inner_Release(IUnknown *iface)
 {
-    FilterMapper3Impl *This = impl_from_IUnknown(iface);
-    ULONG ref = InterlockedDecrement(&This->ref);
+    FilterMapper3Impl *mapper = impl_from_IUnknown(iface);
+    ULONG refcount = InterlockedDecrement(&mapper->ref);
 
-    TRACE("(%p)->(): new ref = %d\n", This, ref);
+    TRACE("%p decreasing refcount to %lu.\n", mapper, refcount);
 
-    if (ref == 0)
+    if (!refcount)
     {
-        CoTaskMemFree(This);
+        CoTaskMemFree(mapper);
     }
 
-    return ref;
+    return refcount;
 }
 
 static const IUnknownVtbl IInner_VTable =
@@ -529,7 +527,7 @@ static HRESULT WINAPI FilterMapper3_CreateCategory(IFilterMapper3 *iface,
     HKEY key;
     LONG ret;
 
-    TRACE("iface %p, category %s, merit %#x, description %s.\n", iface,
+    TRACE("iface %p, category %s, merit %#lx, description %s.\n", iface,
             debugstr_guid(category), merit, debugstr_w(description));
 
     StringFromGUID2(category, guidstr, ARRAY_SIZE(guidstr));
@@ -615,11 +613,7 @@ static HRESULT FM2_WriteFilterData(const REGFILTER2 * prf2, BYTE **ppData, ULONG
         REGFILTERPINS2 rgPin2 = prf2->rgPins2[i];
         unsigned int j;
 
-        rrfp.signature[0] = '0';
-        rrfp.signature[1] = 'p';
-        rrfp.signature[2] = 'i';
-        rrfp.signature[3] = '3';
-        rrfp.signature[0] += i;
+        rrfp.signature = MAKEFOURCC('0'+i,'p','i','3');
         rrfp.dwFlags = rgPin2.dwFlags;
         rrfp.dwInstances = rgPin2.cInstances;
         rrfp.dwMediaTypes = rgPin2.nMediaTypes;
@@ -641,11 +635,7 @@ static HRESULT FM2_WriteFilterData(const REGFILTER2 * prf2, BYTE **ppData, ULONG
         {
             struct REG_TYPE rt;
             const CLSID * clsMinorType = rgPin2.lpMediaType[j].clsMinorType ? rgPin2.lpMediaType[j].clsMinorType : &MEDIASUBTYPE_NULL;
-            rt.signature[0] = '0';
-            rt.signature[1] = 't';
-            rt.signature[2] = 'y';
-            rt.signature[3] = '3';
-            rt.signature[0] += j;
+            rt.signature = MAKEFOURCC('0'+j,'t','y','3');
             rt.dwUnused = 0;
             rt.dwOffsetMajor = find_data(&clsidStore, rgPin2.lpMediaType[j].clsMajorType, sizeof(CLSID));
             if (rt.dwOffsetMajor == -1)
@@ -702,14 +692,14 @@ static HRESULT FM2_ReadFilterData(BYTE *pData, REGFILTER2 * prf2)
 
     if (prrf->dwVersion != 2)
     {
-        FIXME("Filter registry version %d not supported\n", prrf->dwVersion);
+        FIXME("Filter registry version %lu is not supported.\n", prrf->dwVersion);
         ZeroMemory(prf2, sizeof(*prf2));
         hr = E_FAIL;
     }
 
     if (SUCCEEDED(hr))
     {
-        TRACE("version = %d, merit = %x, #pins = %d, unused = %x\n",
+        TRACE("dwVersion %lu, dwMerit %#lx, dwPins %lu, dwUnused %#lx.\n",
             prrf->dwVersion, prrf->dwMerit, prrf->dwPins, prrf->dwUnused);
 
         prf2->dwVersion = prrf->dwVersion;
@@ -728,9 +718,9 @@ static HRESULT FM2_ReadFilterData(BYTE *pData, REGFILTER2 * prf2)
 
             /* FIXME: check signature */
 
-            TRACE("\tsignature = %s\n", debugstr_an((const char*)prrfp->signature, 4));
+            TRACE("\tsignature = %s\n", debugstr_fourcc(prrfp->signature));
 
-            TRACE("\tpin[%d]: flags = %x, instances = %d, media types = %d, mediums = %d\n",
+            TRACE("\tPin %lu: dwFlags %#lx, dwInstances %lu, dwMediaTypes %lu, dwMediums %lu.\n",
                 i, prrfp->dwFlags, prrfp->dwInstances, prrfp->dwMediaTypes, prrfp->dwMediums);
 
             rgPins2[i].dwFlags = prrfp->dwFlags;
@@ -762,7 +752,7 @@ static HRESULT FM2_ReadFilterData(BYTE *pData, REGFILTER2 * prf2)
                 CLSID * clsMinor = CoTaskMemAlloc(sizeof(CLSID));
 
                 /* FIXME: check signature */
-                TRACE("\t\tsignature = %s\n", debugstr_an((const char*)prt->signature, 4));
+                TRACE("\t\tsignature = %s\n", debugstr_fourcc(prt->signature));
 
                 memcpy(clsMajor, pData + prt->dwOffsetMajor, sizeof(CLSID));
                 memcpy(clsMinor, pData + prt->dwOffsetMinor, sizeof(CLSID));
@@ -901,7 +891,7 @@ static HRESULT WINAPI FilterMapper3_RegisterFilter(IFilterMapper3 *iface,
 
     if (FAILED(hr = IParseDisplayName_ParseDisplayName(parser, NULL, display_name, &eaten, &moniker)))
     {
-        ERR("Failed to parse display name, hr %#x.\n", hr);
+        ERR("Failed to parse display name, hr %#lx.\n", hr);
         IParseDisplayName_Release(parser);
         free(display_name);
         return hr;
@@ -911,7 +901,7 @@ static HRESULT WINAPI FilterMapper3_RegisterFilter(IFilterMapper3 *iface,
 
     if (FAILED(hr = IMoniker_BindToStorage(moniker, NULL, NULL, &IID_IPropertyBag, (void **)&prop_bag)))
     {
-        ERR("Failed to get property bag, hr %#x.\n", hr);
+        ERR("Failed to get property bag, hr %#lx.\n", hr);
         IMoniker_Release(moniker);
         free(display_name);
         return hr;
@@ -920,13 +910,13 @@ static HRESULT WINAPI FilterMapper3_RegisterFilter(IFilterMapper3 *iface,
     V_VT(&var) = VT_BSTR;
     V_BSTR(&var) = SysAllocString(name);
     if (FAILED(hr = IPropertyBag_Write(prop_bag, L"FriendlyName", &var)))
-        ERR("Failed to write friendly name, hr %#x.\n", hr);
+        ERR("Failed to write friendly name, hr %#lx.\n", hr);
     VariantClear(&var);
 
     V_VT(&var) = VT_BSTR;
     V_BSTR(&var) = SysAllocString(clsid_string);
     if (FAILED(hr = IPropertyBag_Write(prop_bag, L"CLSID", &var)))
-        ERR("Failed to write class ID, hr %#x.\n", hr);
+        ERR("Failed to write class ID, hr %#lx.\n", hr);
     VariantClear(&var);
 
     if (SUCCEEDED(FM2_WriteFilterData(&regfilter2, &filter_data, &filter_data_len)))
@@ -936,7 +926,7 @@ static HRESULT WINAPI FilterMapper3_RegisterFilter(IFilterMapper3 *iface,
         {
             memcpy(V_ARRAY(&var)->pvData, filter_data, filter_data_len);
             if (FAILED(hr = IPropertyBag_Write(prop_bag, L"FilterData", &var)))
-                ERR("Failed to write filter data, hr %#x.\n", hr);
+                ERR("Failed to write filter data, hr %#lx.\n", hr);
             VariantClear(&var);
         }
 
@@ -1030,7 +1020,7 @@ static HRESULT WINAPI FilterMapper3_EnumMatchingFilters(
     HRESULT hr;
     struct Vector monikers = {NULL, 0, 0};
 
-    TRACE("(%p, %x, %s, %x, %s, %d, %p, %p, %p, %s, %s, %p, %p, %p)\n",
+    TRACE("(%p, %#lx, %s, %#lx, %s, %lu, %p, %p, %p, %s, %s, %p, %p, %p)\n",
         ppEnum,
         dwFlags,
         bExactMatch ? "true" : "false",
@@ -1047,9 +1037,7 @@ static HRESULT WINAPI FilterMapper3_EnumMatchingFilters(
         pPinCategoryOut);
 
     if (dwFlags != 0)
-    {
-        FIXME("dwFlags = %x not implemented\n", dwFlags);
-    }
+        FIXME("Ignoring flags %#lx.\n", dwFlags);
 
     *ppEnum = NULL;
 
@@ -1289,7 +1277,7 @@ static HRESULT WINAPI FilterMapper_EnumMatchingFilters(
     REGFILTER* regfilters;
     HRESULT hr;
 
-    TRACE("(%p/%p)->(%p, %x, %s, %s, %s, %s, %s, %s, %s)\n",
+    TRACE("(%p/%p)->(%p, %#lx, %s, %s, %s, %s, %s, %s, %s)\n",
         This,
         iface,
         ppEnum,
@@ -1401,7 +1389,7 @@ static HRESULT WINAPI FilterMapper_RegisterFilter(IFilterMapper * iface,
     HKEY key;
     LONG ret;
 
-    TRACE("iface %p, clsid %s, name %s, merit %#x.\n",
+    TRACE("iface %p, clsid %s, name %s, merit %#lx.\n",
             iface, debugstr_guid(&clsid), debugstr_w(name), merit);
 
     StringFromGUID2(&clsid, guidstr, ARRAY_SIZE(guidstr));
@@ -1412,7 +1400,7 @@ static HRESULT WINAPI FilterMapper_RegisterFilter(IFilterMapper * iface,
         return HRESULT_FROM_WIN32(ret);
 
     if ((ret = RegSetValueExW(key, NULL, 0, REG_SZ, (const BYTE *)name, (wcslen(name) + 1) * sizeof(WCHAR))))
-        ERR("Failed to set filter name, error %u.\n", ret);
+        ERR("Failed to set filter name, error %lu.\n", ret);
     RegCloseKey(key);
 
     wcscpy(keypath, L"CLSID\\");
@@ -1420,11 +1408,11 @@ static HRESULT WINAPI FilterMapper_RegisterFilter(IFilterMapper * iface,
     if (!(ret = RegCreateKeyExW(HKEY_CLASSES_ROOT, keypath, 0, NULL, 0, KEY_WRITE, NULL, &key, NULL)))
     {
         if ((ret = RegSetValueExW(key, L"Merit", 0, REG_DWORD, (const BYTE *)&merit, sizeof(DWORD))))
-            ERR("Failed to set merit, error %u.\n", ret);
+            ERR("Failed to set merit, error %lu.\n", ret);
         RegCloseKey(key);
     }
     else
-        ERR("Failed to create CLSID key, error %u.\n", ret);
+        ERR("Failed to create CLSID key, error %lu.\n", ret);
 
     return S_OK;
 }
@@ -1466,7 +1454,7 @@ static HRESULT WINAPI FilterMapper_RegisterPin(IFilterMapper *iface, CLSID clsid
 
     if ((ret = RegCreateKeyExW(key, pin_keypath, 0, NULL, 0, KEY_WRITE, NULL, &pin_key, NULL)))
     {
-        ERR("Failed to open pin key, error %u.\n", ret);
+        ERR("Failed to open pin key, error %lu.\n", ret);
         free(pin_keypath);
         RegCloseKey(key);
         return HRESULT_FROM_WIN32(ret);
@@ -1474,18 +1462,18 @@ static HRESULT WINAPI FilterMapper_RegisterPin(IFilterMapper *iface, CLSID clsid
     free(pin_keypath);
 
     if ((ret = RegSetValueExW(pin_key, L"AllowedMany", 0, REG_DWORD, (const BYTE *)&many, sizeof(DWORD))))
-        ERR("Failed to set AllowedMany value, error %u.\n", ret);
+        ERR("Failed to set AllowedMany value, error %lu.\n", ret);
     if ((ret = RegSetValueExW(pin_key, L"AllowedZero", 0, REG_DWORD, (const BYTE *)&zero, sizeof(DWORD))))
-        ERR("Failed to set AllowedZero value, error %u.\n", ret);
+        ERR("Failed to set AllowedZero value, error %lu.\n", ret);
     if ((ret = RegSetValueExW(pin_key, L"Direction", 0, REG_DWORD, (const BYTE *)&output, sizeof(DWORD))))
-        ERR("Failed to set Direction value, error %u.\n", ret);
+        ERR("Failed to set Direction value, error %lu.\n", ret);
     if ((ret = RegSetValueExW(pin_key, L"IsRendered", 0, REG_DWORD, (const BYTE *)&rendered, sizeof(DWORD))))
-        ERR("Failed to set IsRendered value, error %u.\n", ret);
+        ERR("Failed to set IsRendered value, error %lu.\n", ret);
 
     if (!(ret = RegCreateKeyExW(pin_key, L"Types", 0, NULL, 0, 0, NULL, &type_key, NULL)))
         RegCloseKey(type_key);
     else
-        ERR("Failed to create Types subkey, error %u.\n", ret);
+        ERR("Failed to create Types subkey, error %lu.\n", ret);
 
     RegCloseKey(pin_key);
     RegCloseKey(key);
@@ -1527,7 +1515,7 @@ static HRESULT WINAPI FilterMapper_RegisterPinType(IFilterMapper *iface,
     if (!(ret = RegCreateKeyExW(key, type_keypath, 0, NULL, 0, 0, NULL, &type_key, NULL)))
         RegCloseKey(type_key);
     else
-        ERR("Failed to create type key, error %u.\n", ret);
+        ERR("Failed to create type key, error %lu.\n", ret);
 
     RegCloseKey(key);
     return HRESULT_FROM_WIN32(ret);
@@ -1546,7 +1534,7 @@ static HRESULT WINAPI FilterMapper_UnregisterFilter(IFilterMapper *iface, CLSID 
     if ((ret = RegOpenKeyExW(HKEY_CLASSES_ROOT, L"Filter", 0, 0, &key)))
         return HRESULT_FROM_WIN32(ret);
     if ((ret = RegDeleteKeyW(key, guidstr)))
-        ERR("Failed to delete filter key, error %u.\n", ret);
+        ERR("Failed to delete filter key, error %lu.\n", ret);
     RegCloseKey(key);
 
     wcscpy(keypath, L"CLSID\\");
@@ -1554,13 +1542,13 @@ static HRESULT WINAPI FilterMapper_UnregisterFilter(IFilterMapper *iface, CLSID 
     if (!(ret = RegOpenKeyExW(HKEY_CLASSES_ROOT, keypath, 0, KEY_WRITE, &key)))
     {
         if ((ret = RegDeleteValueW(key, L"Merit")))
-            ERR("Failed to delete Merit value, error %u.\n", ret);
+            ERR("Failed to delete Merit value, error %lu.\n", ret);
         if ((ret = RegDeleteTreeW(key, L"Pins")))
-            ERR("Failed to delete Pins key, error %u.\n", ret);
+            ERR("Failed to delete Pins key, error %lu.\n", ret);
         RegCloseKey(key);
     }
     else
-        ERR("Failed to open CLSID key, error %u.\n", ret);
+        ERR("Failed to open CLSID key, error %lu.\n", ret);
 
     return S_OK;
 }
@@ -1592,7 +1580,7 @@ static HRESULT WINAPI FilterMapper_UnregisterPin(IFilterMapper * iface, CLSID cl
         return HRESULT_FROM_WIN32(ret);
 
     if ((ret = RegDeleteTreeW(key, name)))
-        ERR("Failed to delete subkey, error %u.\n", ret);
+        ERR("Failed to delete subkey, error %lu.\n", ret);
 
     RegCloseKey(key);
 
@@ -1648,7 +1636,7 @@ static HRESULT WINAPI AMFilterData_ParseFilterData(IAMFilterData* iface,
     HRESULT hr = S_OK;
     static REGFILTER2 *prf2;
 
-    TRACE("(%p/%p)->(%p, %d, %p)\n", This, iface, pData, cb, ppRegFilter2);
+    TRACE("mapper %p, data %p, size %lu, parsed_data %p.\n", This, pData, cb, ppRegFilter2);
 
     prf2 = CoTaskMemAlloc(sizeof(*prf2));
     if (!prf2)

@@ -32,7 +32,6 @@
 #include "inseng.h"
 
 #include "wine/debug.h"
-#include "wine/heap.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(inseng);
 
@@ -74,7 +73,7 @@ static ULONG WINAPI InstallEngine_AddRef(IInstallEngine2 *iface)
     InstallEngine *This = impl_from_IInstallEngine2(iface);
     LONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     return ref;
 }
@@ -84,10 +83,10 @@ static ULONG WINAPI InstallEngine_Release(IInstallEngine2 *iface)
     InstallEngine *This = impl_from_IInstallEngine2(iface);
     LONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     if(!ref)
-        heap_free(This);
+        free(This);
 
     return ref;
 }
@@ -109,14 +108,14 @@ static HRESULT WINAPI InstallEngine_SetCifFile(IInstallEngine2 *iface, const cha
 static HRESULT WINAPI InstallEngine_DownloadComponents(IInstallEngine2 *iface, DWORD flags)
 {
     InstallEngine *This = impl_from_IInstallEngine2(iface);
-    FIXME("(%p)->(%x)\n", This, flags);
+    FIXME("(%p)->(%lx)\n", This, flags);
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI InstallEngine_InstallComponents(IInstallEngine2 *iface, DWORD flags)
 {
     InstallEngine *This = impl_from_IInstallEngine2(iface);
-    FIXME("(%p)->(%x)\n", This, flags);
+    FIXME("(%p)->(%lx)\n", This, flags);
     return E_NOTIMPL;
 }
 
@@ -158,7 +157,7 @@ static HRESULT WINAPI InstallEngine_UnregisterInstallEngineCallback(IInstallEngi
 static HRESULT WINAPI InstallEngine_SetAction(IInstallEngine2 *iface, const char *id, DWORD action, DWORD priority)
 {
     InstallEngine *This = impl_from_IInstallEngine2(iface);
-    FIXME("(%p)->(%s %d %d)\n", This, debugstr_a(id), action, priority);
+    FIXME("(%p)->(%s %ld %ld)\n", This, debugstr_a(id), action, priority);
     return E_NOTIMPL;
 }
 
@@ -207,7 +206,7 @@ static HRESULT WINAPI InstallEngine_SetInstallDrive(IInstallEngine2 *iface, char
 static HRESULT WINAPI InstallEngine_SetInstallOptions(IInstallEngine2 *iface, DWORD flags)
 {
     InstallEngine *This = impl_from_IInstallEngine2(iface);
-    FIXME("(%p)->(%x)\n", This, flags);
+    FIXME("(%p)->(%lx)\n", This, flags);
     return E_NOTIMPL;
 }
 
@@ -228,7 +227,7 @@ static HRESULT WINAPI InstallEngine_SetIStream(IInstallEngine2 *iface, IStream *
 static HRESULT WINAPI InstallEngine_Abort(IInstallEngine2 *iface, DWORD flags)
 {
     InstallEngine *This = impl_from_IInstallEngine2(iface);
-    FIXME("(%p)->(%x)\n", This, flags);
+    FIXME("(%p)->(%lx)\n", This, flags);
     return E_NOTIMPL;
 }
 
@@ -334,7 +333,7 @@ static HRESULT WINAPI InstallEngineCF_CreateInstance(IClassFactory *iface, IUnkn
 
     TRACE("(%p %s %p)\n", outer, debugstr_guid(riid), ppv);
 
-    engine = heap_alloc(sizeof(*engine));
+    engine = malloc(sizeof(*engine));
     if(!engine)
         return E_OUTOFMEMORY;
 

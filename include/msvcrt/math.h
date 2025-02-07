@@ -69,12 +69,16 @@ _ACRTIMP double __cdecl fabs(double);
 _ACRTIMP double __cdecl ldexp(double, int);
 _ACRTIMP double __cdecl frexp(double, int*);
 _ACRTIMP double __cdecl modf(double, double*);
+_ACRTIMP double __cdecl fdim(double, double);
 _ACRTIMP double __cdecl fmod(double, double);
 _ACRTIMP double __cdecl fmin(double, double);
 _ACRTIMP double __cdecl fmax(double, double);
 _ACRTIMP double __cdecl erf(double);
+_ACRTIMP double __cdecl remainder(double, double);
 _ACRTIMP double __cdecl remquo(double, double, int*);
 _ACRTIMP float __cdecl remquof(float, float, int*);
+_ACRTIMP double __cdecl lgamma(double);
+_ACRTIMP double __cdecl tgamma(double);
 
 _ACRTIMP double __cdecl _hypot(double, double);
 _ACRTIMP double __cdecl _j0(double);
@@ -86,18 +90,34 @@ _ACRTIMP double __cdecl _yn(int, double);
 
 _ACRTIMP double __cdecl cbrt(double);
 _ACRTIMP double __cdecl exp2(double);
+_ACRTIMP double __cdecl expm1(double);
+_ACRTIMP double __cdecl log1p(double);
 _ACRTIMP double __cdecl log2(double);
+_ACRTIMP double __cdecl logb(double);
 _ACRTIMP double __cdecl rint(double);
 _ACRTIMP double __cdecl round(double);
 _ACRTIMP double __cdecl trunc(double);
 
 _ACRTIMP float __cdecl cbrtf(float);
 _ACRTIMP float __cdecl exp2f(float);
+_ACRTIMP float __cdecl expm1f(float);
+_ACRTIMP float __cdecl log1pf(float);
 _ACRTIMP float __cdecl log2f(float);
+_ACRTIMP float __cdecl logbf(float);
 _ACRTIMP float __cdecl rintf(float);
 _ACRTIMP float __cdecl roundf(float);
 _ACRTIMP float __cdecl truncf(float);
 
+_ACRTIMP int __cdecl ilogb(double);
+_ACRTIMP int __cdecl ilogbf(float);
+
+_ACRTIMP float __cdecl fmaf(float x, float y, float z);
+_ACRTIMP double __cdecl fma(double x, double y, double z);
+
+_ACRTIMP __int64 __cdecl llrint(double);
+_ACRTIMP __int64 __cdecl llrintf(float);
+_ACRTIMP __int64 __cdecl llround(double);
+_ACRTIMP __int64 __cdecl llroundf(float);
 _ACRTIMP __msvcrt_long __cdecl lrint(double);
 _ACRTIMP __msvcrt_long __cdecl lrintf(float);
 _ACRTIMP __msvcrt_long __cdecl lround(double);
@@ -105,6 +125,8 @@ _ACRTIMP __msvcrt_long __cdecl lroundf(float);
 
 _ACRTIMP double __cdecl scalbn(double,int);
 _ACRTIMP float  __cdecl scalbnf(float,int);
+_ACRTIMP double __cdecl scalbln(double,__msvcrt_long);
+_ACRTIMP float  __cdecl scalblnf(float,__msvcrt_long);
 
 _ACRTIMP double __cdecl _copysign (double, double);
 _ACRTIMP double __cdecl _chgsign (double);
@@ -115,7 +137,9 @@ _ACRTIMP int    __cdecl _finite(double);
 _ACRTIMP int    __cdecl _isnan(double);
 _ACRTIMP int    __cdecl _fpclass(double);
 
-#ifndef __i386__
+_ACRTIMP double __cdecl nextafter(double, double);
+
+#if !defined(__i386__) || defined(_NO_CRT_MATH_INLINE)
 
 _ACRTIMP float __cdecl sinf(float);
 _ACRTIMP float __cdecl cosf(float);
@@ -135,7 +159,6 @@ _ACRTIMP float __cdecl powf(float, float);
 _ACRTIMP float __cdecl sqrtf(float);
 _ACRTIMP float __cdecl ceilf(float);
 _ACRTIMP float __cdecl floorf(float);
-_ACRTIMP float __cdecl frexpf(float, int*);
 _ACRTIMP float __cdecl modff(float, float*);
 _ACRTIMP float __cdecl fmodf(float, float);
 
@@ -162,7 +185,6 @@ static inline float powf(float x, float y) { return pow(x, y); }
 static inline float sqrtf(float x) { return sqrt(x); }
 static inline float ceilf(float x) { return ceil(x); }
 static inline float floorf(float x) { return floor(x); }
-static inline float frexpf(float x, int *y) { return frexp(x, y); }
 static inline float modff(float x, float *y) { double yd, ret = modf(x, &yd); *y = yd; return ret; }
 static inline float fmodf(float x, float y) { return fmod(x, y); }
 
@@ -185,13 +207,19 @@ static inline int   _fpclassf(float x)
 
 #endif
 
-#if !defined(__i386__) && !defined(__x86_64__) && (_MSVCR_VER == 0 || _MSVCR_VER >= 110)
+#if (defined(__x86_64__) && !defined(_UCRT)) || defined(_NO_CRT_MATH_INLINE)
+_ACRTIMP float __cdecl frexpf(float, int*);
+#else
+static inline float frexpf(float x, int *y) { return frexp(x, y); }
+#endif
+
+#if (!defined(__i386__) && !defined(__x86_64__) && (_MSVCR_VER == 0 || _MSVCR_VER >= 110)) || defined(_NO_CRT_MATH_INLINE)
 _ACRTIMP float __cdecl fabsf(float);
 #else
 static inline float fabsf(float x) { return fabs(x); }
 #endif
 
-#if !defined(__i386__) || _MSVCR_VER>=120
+#if !defined(__i386__) || _MSVCR_VER>=120 || defined(_NO_CRT_MATH_INLINE)
 
 _ACRTIMP float __cdecl _chgsignf(float);
 _ACRTIMP float __cdecl _copysignf(float, float);
@@ -199,15 +227,20 @@ _ACRTIMP float __cdecl _logbf(float);
 _ACRTIMP float __cdecl acoshf(float);
 _ACRTIMP float __cdecl asinhf(float);
 _ACRTIMP float __cdecl atanhf(float);
+_ACRTIMP float __cdecl erff(float);
+_ACRTIMP float __cdecl fdimf(float, float);
+_ACRTIMP float __cdecl fmaxf(float, float);
+_ACRTIMP float __cdecl fminf(float, float);
+_ACRTIMP float __cdecl lgammaf(float);
+_ACRTIMP float __cdecl nextafterf(float, float);
+_ACRTIMP float __cdecl remainderf(float, float);
+_ACRTIMP float __cdecl tgammaf(float);
 
 #else
 
 static inline float _chgsignf(float x) { return _chgsign(x); }
 static inline float _copysignf(float x, float y) { return _copysign(x, y); }
 static inline float _logbf(float x) { return _logb(x); }
-static inline float acoshf(float x) { return acosh(x); }
-static inline float asinhf(float x) { return asinh(x); }
-static inline float atanhf(float x) { return atanh(x); }
 
 #endif
 
@@ -251,12 +284,31 @@ static const union {
 #define FP_ILOGB0 (-0x7fffffff - _C2)
 #define FP_ILOGBNAN 0x7fffffff
 
-#if _MSVCR_VER >= 120
+_ACRTIMP short __cdecl _dtest(double*);
+_ACRTIMP short __cdecl _ldtest(long double*);
+_ACRTIMP short __cdecl _fdtest(float*);
+_ACRTIMP int   __cdecl _dsign(double);
+_ACRTIMP int   __cdecl _ldsign(long double);
+_ACRTIMP int   __cdecl _fdsign(float);
+
+#ifdef __cplusplus
+
+extern "C++" {
+inline int fpclassify(float x) throw() { return _fdtest(&x); }
+inline int fpclassify(double x) throw() { return _dtest(&x); }
+inline int fpclassify(long double x) throw() { return _ldtest(&x); }
+inline bool signbit(float x) throw() { return _fdsign(x) != 0; }
+inline bool signbit(double x) throw() { return _dsign(x) != 0; }
+inline bool signbit(long double x) throw() { return _ldsign(x) != 0; }
+template <class T> inline bool isfinite(T x) throw() { return fpclassify(x) <= 0; }
+template <class T> inline bool isinf(T x) throw() { return fpclassify(x) == FP_INFINITE; }
+template <class T> inline bool isnan(T x) throw() { return fpclassify(x) == FP_NAN; }
+} /* extern "C++" */
+
+#elif _MSVCR_VER >= 120
 
 _ACRTIMP short __cdecl _dclass(double);
 _ACRTIMP short __cdecl _fdclass(float);
-_ACRTIMP int   __cdecl _dsign(double);
-_ACRTIMP int   __cdecl _fdsign(float);
 
 #define fpclassify(x) (sizeof(x) == sizeof(float) ? _fdclass(x) : _dclass(x))
 #define signbit(x)    (sizeof(x) == sizeof(float) ? _fdsign(x) : _dsign(x))
@@ -316,6 +368,34 @@ static inline int __signbit(double x)
 
 #endif
 
+#ifdef _UCRT
+
+ _ACRTIMP int __cdecl _dpcomp(double, double);
+ _ACRTIMP int __cdecl _fdpcomp(float, float);
+
+#define _FP_LT  1
+#define _FP_EQ  2
+#define _FP_GT  4
+
+#if defined(__GNUC__) || defined(__clang__)
+# define isgreater(x, y)      __builtin_isgreater(x, y)
+# define isgreaterequal(x, y) __builtin_isgreaterequal(x, y)
+# define isless(x, y)         __builtin_isless(x, y)
+# define islessequal(x, y)    __builtin_islessequal(x, y)
+# define islessgreater(x, y)  __builtin_islessgreater(x, y)
+# define isunordered(x, y)    __builtin_isunordered(x, y)
+#else
+# define __FP_COMPARE(x,y) (sizeof(x) == sizeof(float) && sizeof(y) == sizeof(float) ? _fdpcomp(x,y) : _dpcomp(x,y))
+# define isgreater(x, y)      ((__FP_COMPARE(x, y) & _FP_GT) != 0)
+# define isgreaterequal(x, y) ((__FP_COMPARE(x, y) & (_FP_GT|_FP_EQ)) != 0)
+# define isless(x, y)         ((__FP_COMPARE(x, y) & _FP_LT) != 0)
+# define islessequal(x, y)    ((__FP_COMPARE(x, y) & (_FP_LT|_FP_EQ)) != 0)
+# define islessgreater(x, y)  ((__FP_COMPARE(x, y) & (_FP_LT|_FP_GT)) != 0)
+# define isunordered(x, y)    (!__FP_COMPARE(x, y))
+#endif
+
+#endif /* _UCRT */
+
 #ifdef __cplusplus
 }
 #endif
@@ -350,5 +430,6 @@ static inline double y1( double x ) { return _y1( x ); }
 static inline double yn( int n, double x ) { return _yn( n, x ); }
 
 static inline float hypotf( float x, float y ) { return _hypotf( x, y ); }
+static inline long double atan2l( long double x, long double y ) { return atan2( (double)y, (double)x ); }
 
 #endif /* __WINE_MATH_H */

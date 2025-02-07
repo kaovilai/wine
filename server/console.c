@@ -694,17 +694,40 @@ static void propagate_console_signal( struct console *console,
         set_error( STATUS_INVALID_PARAMETER );
         return;
     }
-    /* FIXME: should support the other events (like CTRL_BREAK) */
-    if (sig != CTRL_C_EVENT)
+    switch (sig)
     {
+    case CTRL_C_EVENT:     csi.signal = SIGINT; break;
+    case CTRL_BREAK_EVENT: csi.signal = SIGQUIT; break;
+    default:
+        /* FIXME: should support the other events */
         set_error( STATUS_NOT_IMPLEMENTED );
         return;
     }
     csi.console = console;
-    csi.signal  = SIGINT;
     csi.group   = group_id;
 
     enum_processes(propagate_console_signal_cb, &csi);
+}
+
+struct console_process_list
+{
+    unsigned int    size;
+    unsigned int    count;
+    process_id_t   *processes;
+    struct console *console;
+};
+
+static int console_process_list_cb(struct process *process, void *user)
+{
+    struct console_process_list *cpl = user;
+
+    if (process->console == cpl->console)
+    {
+        if (cpl->count < cpl->size) cpl->processes[cpl->count] = process->id;
+        cpl->count++;
+    }
+
+    return 0;
 }
 
 /* dumb dump */
@@ -772,6 +795,12 @@ static struct object *console_lookup_name( struct object *obj, struct unicode_st
     struct console *console = (struct console *)obj;
     static const WCHAR connectionW[]    = {'C','o','n','n','e','c','t','i','o','n'};
     assert( obj->ops == &console_ops );
+
+    if (!name)
+    {
+        set_error( STATUS_NOT_FOUND );
+        return NULL;
+    }
 
     if (name->len == sizeof(connectionW) && !memcmp( name->str, connectionW, name->len ))
     {
@@ -858,6 +887,12 @@ static struct object *console_server_lookup_name( struct object *obj, struct uni
     static const WCHAR referenceW[] = {'R','e','f','e','r','e','n','c','e'};
     assert( obj->ops == &console_server_ops );
 
+    if (!name)
+    {
+        set_error( STATUS_NOT_FOUND );
+        return NULL;
+    }
+
     if (name->len == sizeof(referenceW) && !memcmp( name->str, referenceW, name->len ))
     {
         struct screen_buffer *screen_buffer;
@@ -931,6 +966,7 @@ static int is_blocking_read_ioctl( unsigned int code )
     {
     case IOCTL_CONDRV_READ_INPUT:
     case IOCTL_CONDRV_READ_CONSOLE:
+    case IOCTL_CONDRV_READ_CONSOLE_CONTROL:
     case IOCTL_CONDRV_READ_FILE:
         return 1;
     default:
@@ -960,6 +996,33 @@ static void console_ioctl( struct fd *fd, ioctl_code_t code, struct async *async
                 return;
             }
             propagate_console_signal( console, event->event, group );
+            return;
+        }
+
+    case IOCTL_CONDRV_GET_PROCESS_LIST:
+        {
+            struct console_process_list cpl;
+            if (get_reply_max_size() < sizeof(unsigned int))
+            {
+                set_error( STATUS_INVALID_PARAMETER );
+                return;
+            }
+
+            cpl.count = 0;
+            cpl.size = 0;
+            cpl.console = console;
+            enum_processes( console_process_list_cb, &cpl );
+            if (cpl.count * sizeof(process_id_t) > get_reply_max_size())
+            {
+                set_reply_data( &cpl.count, sizeof(cpl.count) );
+                set_error( STATUS_BUFFER_TOO_SMALL );
+                return;
+            }
+
+            cpl.size = cpl.count;
+            cpl.count = 0;
+            if ((cpl.processes = set_reply_data_size( cpl.size * sizeof(process_id_t) )))
+                enum_processes( console_process_list_cb, &cpl );
             return;
         }
 
@@ -1132,7 +1195,7 @@ static void console_server_ioctl( struct fd *fd, ioctl_code_t code, struct async
                 return;
             }
             term = server->termios;
-            term.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN);
+            term.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN | ISIG);
             term.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
             term.c_cflag &= ~(CSIZE | PARENB);
             term.c_cflag |= CS8;

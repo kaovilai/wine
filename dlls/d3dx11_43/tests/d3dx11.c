@@ -21,7 +21,6 @@
 #include "d3d11.h"
 #include "d3dx11.h"
 #include "wine/test.h"
-#include "wine/heap.h"
 
 #ifndef MAKEFOURCC
 #define MAKEFOURCC(ch0, ch1, ch2, ch3)  \
@@ -503,8 +502,8 @@ static HRESULT WINAPI test_d3dinclude_open(ID3DInclude *iface, D3D_INCLUDE_TYPE 
 
     if (!strcmp(filename, "include1.h"))
     {
-        buffer = heap_alloc(strlen(include1));
-        CopyMemory(buffer, include1, strlen(include1));
+        buffer = malloc(strlen(include1));
+        memcpy(buffer, include1, strlen(include1));
         *bytes = strlen(include1);
         ok(include_type == D3D_INCLUDE_LOCAL, "Unexpected include type %d.\n", include_type);
         ok(!strncmp(include2, parent_data, strlen(include2)),
@@ -512,8 +511,8 @@ static HRESULT WINAPI test_d3dinclude_open(ID3DInclude *iface, D3D_INCLUDE_TYPE 
     }
     else if (!strcmp(filename, "include\\include2.h"))
     {
-        buffer = heap_alloc(strlen(include2));
-        CopyMemory(buffer, include2, strlen(include2));
+        buffer = malloc(strlen(include2));
+        memcpy(buffer, include2, strlen(include2));
         *bytes = strlen(include2);
         ok(!parent_data, "Unexpected parent_data value.\n");
         ok(include_type == D3D_INCLUDE_LOCAL, "Unexpected include type %d.\n", include_type);
@@ -530,7 +529,7 @@ static HRESULT WINAPI test_d3dinclude_open(ID3DInclude *iface, D3D_INCLUDE_TYPE 
 
 static HRESULT WINAPI test_d3dinclude_close(ID3DInclude *iface, const void *data)
 {
-    heap_free((void *)data);
+    free((void *)data);
     return S_OK;
 }
 
@@ -576,52 +575,40 @@ static void test_D3DX11CompileFromFile(void)
 
     hr = D3DX11CompileFromFileW(filename, NULL, &include.ID3DInclude_iface,
             "main", "ps_2_0", 0, 0, NULL, &blob, &errors, &result);
-    todo_wine ok(hr == S_OK && hr == result, "Got unexpected hr %#lx, result %#lx.\n", hr, result);
-    todo_wine ok(!!blob, "Got unexpected blob.\n");
+    ok(hr == S_OK && hr == result, "Got unexpected hr %#lx, result %#lx.\n", hr, result);
+    ok(!!blob, "Got unexpected blob.\n");
     ok(!errors, "Got unexpected errors.\n");
-    if (blob)
-    {
-        ID3D10Blob_Release(blob);
-        blob = NULL;
-    }
+    ID3D10Blob_Release(blob);
+    blob = NULL;
 
     /* Windows always seems to resolve includes from the initial file location
      * instead of using the immediate parent, as it would be the case for
      * standard C preprocessor includes. */
     hr = D3DX11CompileFromFileW(filename, NULL, NULL, "main", "ps_2_0", 0, 0, NULL, &blob, &errors, &result);
-    todo_wine ok(hr == S_OK && hr == result, "Got unexpected hr %#lx, result %#lx.\n", hr, result);
-    todo_wine ok(!!blob, "Got unexpected blob.\n");
+    ok(hr == S_OK && hr == result, "Got unexpected hr %#lx, result %#lx.\n", hr, result);
+    ok(!!blob, "Got unexpected blob.\n");
     ok(!errors, "Got unexpected errors.\n");
-    if (blob)
-    {
-        ID3D10Blob_Release(blob);
-        blob = NULL;
-    }
+    ID3D10Blob_Release(blob);
+    blob = NULL;
 
     len = WideCharToMultiByte(CP_ACP, 0, filename, -1, NULL, 0, NULL, NULL);
     WideCharToMultiByte(CP_ACP, 0, filename, -1, filename_a, len, NULL, NULL);
     hr = D3DX11CompileFromFileA(filename_a, NULL, NULL, "main", "ps_2_0", 0, 0, NULL, &blob, &errors, &result);
-    todo_wine ok(hr == S_OK && hr == result, "Got unexpected hr %#lx, result %#lx.\n", hr, result);
-    todo_wine ok(!!blob, "Got unexpected blob.\n");
+    ok(hr == S_OK && hr == result, "Got unexpected hr %#lx, result %#lx.\n", hr, result);
+    ok(!!blob, "Got unexpected blob.\n");
     ok(!errors, "Got unexpected errors.\n");
-    if (blob)
-    {
-        ID3D10Blob_Release(blob);
-        blob = NULL;
-    }
+    ID3D10Blob_Release(blob);
+    blob = NULL;
 
     GetCurrentDirectoryW(MAX_PATH, directory);
     SetCurrentDirectoryW(temp_dir);
 
     hr = D3DX11CompileFromFileW(L"source.ps", NULL, NULL, "main", "ps_2_0", 0, 0, NULL, &blob, &errors, &result);
-    todo_wine ok(hr == S_OK && hr == result, "Got unexpected hr %#lx, result %#lx.\n", hr, result);
-    todo_wine ok(!!blob, "Got unexpected blob.\n");
+    ok(hr == S_OK && hr == result, "Got unexpected hr %#lx, result %#lx.\n", hr, result);
+    ok(!!blob, "Got unexpected blob.\n");
     ok(!errors, "Got unexpected errors.\n");
-    if (blob)
-    {
-        ID3D10Blob_Release(blob);
-        blob = NULL;
-    }
+    ID3D10Blob_Release(blob);
+    blob = NULL;
 
     SetCurrentDirectoryW(directory);
 
@@ -751,50 +738,50 @@ static void test_D3DX11GetImageInfoFromMemory(void)
     }
 
     hr = D3DX11GetImageInfoFromMemory(bmp_1bpp, sizeof(bmp_1bpp), NULL, &info, NULL);
-    ok(hr == S_OK, "Got unexpected hr %#lx.", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(bmp_1bpp, sizeof(bmp_1bpp) + 5, NULL, &info, NULL); /* too large size */
-    ok(hr == S_OK, "Got unexpected hr %#lx.", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(noimage, sizeof(noimage), NULL, NULL, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(noimage, sizeof(noimage), NULL, &info, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(bmp_1bpp, sizeof(bmp_1bpp) - 1, NULL, &info, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(bmp_1bpp + 1, sizeof(bmp_1bpp) - 1, NULL, &info, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(bmp_1bpp, 0, NULL, &info, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(bmp_1bpp, 0, NULL, NULL, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(noimage, 0, NULL, &info, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(noimage, 0, NULL, NULL, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(noimage, 0, NULL, &info, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(NULL, 4, NULL, NULL, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(NULL, 4, NULL, &info, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(NULL, 0, NULL, NULL, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     /* test BMP support */
     hr = D3DX11GetImageInfoFromMemory(bmp_1bpp, sizeof(bmp_1bpp), NULL, &info, NULL);
-    ok(hr == S_OK, "Got unexpected hr %#lx.", hr);
+    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
     ok(info.Width == 1, "Unexpected width %u.\n", info.Width);
     ok(info.Height == 1, "Unexpected height %u.\n", info.Height);
     ok(info.Depth == 1, "Unexpected depth %u.\n", info.Depth);
@@ -806,7 +793,7 @@ static void test_D3DX11GetImageInfoFromMemory(void)
     ok(info.ImageFileFormat == D3DX11_IFF_BMP, "Unexpected image file format %#x.\n", info.ImageFileFormat);
 
     hr = D3DX11GetImageInfoFromMemory(bmp_2bpp, sizeof(bmp_2bpp), NULL, &info, NULL);
-    ok(hr == E_FAIL, "Got unexpected hr %#lx.", hr);
+    ok(hr == E_FAIL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DX11GetImageInfoFromMemory(bmp_4bpp, sizeof(bmp_4bpp), NULL, &info, NULL);
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);

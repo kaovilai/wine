@@ -38,13 +38,13 @@ IDirect3D9 * WINAPI DECLSPEC_HOTPATCH Direct3DCreate9(UINT sdk_version)
 
     TRACE("sdk_version %#x.\n", sdk_version);
 
-    if (!(object = heap_alloc_zero(sizeof(*object))))
+    if (!(object = calloc(1, sizeof(*object))))
         return NULL;
 
-    if (!d3d9_init(object, FALSE))
+    if (!d3d9_init(object, FALSE, FALSE))
     {
         WARN("Failed to initialize d3d9.\n");
-        heap_free(object);
+        free(object);
         return NULL;
     }
 
@@ -59,13 +59,13 @@ HRESULT WINAPI DECLSPEC_HOTPATCH Direct3DCreate9Ex(UINT sdk_version, IDirect3D9E
 
     TRACE("sdk_version %#x, d3d9ex %p.\n", sdk_version, d3d9ex);
 
-    if (!(object = heap_alloc_zero(sizeof(*object))))
+    if (!(object = calloc(1, sizeof(*object))))
         return E_OUTOFMEMORY;
 
-    if (!d3d9_init(object, TRUE))
+    if (!d3d9_init(object, TRUE, FALSE))
     {
         WARN("Failed to initialize d3d9.\n");
-        heap_free(object);
+        free(object);
         return D3DERR_NOTAVAILABLE;
     }
 
@@ -73,6 +73,30 @@ HRESULT WINAPI DECLSPEC_HOTPATCH Direct3DCreate9Ex(UINT sdk_version, IDirect3D9E
     *d3d9ex = &object->IDirect3D9Ex_iface;
 
     return D3D_OK;
+}
+
+IDirect3D9 * WINAPI DECLSPEC_HOTPATCH Direct3DCreate9On12(UINT sdk_version, D3D9ON12_ARGS *d3d9on12_args, UINT d3d9on12_args_count)
+{
+    struct d3d9 *object;
+    BOOL d3d9on12 = TRUE;
+
+    TRACE("sdk_version %#x, d3d9on12_args %p, d3d9on12_args_count %#x.\n", sdk_version, d3d9on12_args, d3d9on12_args_count);
+
+    if (!(object = calloc(1, sizeof(*object))))
+        return NULL;
+
+    if (!d3d9on12_args || !d3d9on12_args->Enable9On12 || !d3d9on12_args_count)
+        d3d9on12 = FALSE;
+
+    if (!d3d9_init(object, TRUE, d3d9on12))
+    {
+        WARN("Failed to initialize d3d9.\n");
+        free(object);
+        return NULL;
+    }
+
+    TRACE("Created d3d9 object %p.\n", object);
+    return (IDirect3D9 *)&object->IDirect3D9Ex_iface;
 }
 
 /* The callback is called on any error encountered during validation, including
@@ -113,7 +137,7 @@ struct IDirect3DShaderValidator9Vtbl
     HRESULT (WINAPI *Begin)(IDirect3DShaderValidator9 *iface,
             shader_validator_cb callback, void *context, DWORD_PTR arg3);
     HRESULT (WINAPI *Instruction)(IDirect3DShaderValidator9 *iface,
-            const char *file, int line, const DWORD *tokens, DWORD token_count);
+            const char *file, int line, const DWORD *tokens, unsigned int token_count);
     HRESULT (WINAPI *End)(IDirect3DShaderValidator9 *iface);
 };
 
@@ -161,7 +185,7 @@ static HRESULT WINAPI shader_validator_Begin(IDirect3DShaderValidator9 *iface,
  *   length.
  * - "token_count" is in DWORDs. */
 static HRESULT WINAPI shader_validator_Instruction(IDirect3DShaderValidator9 *iface,
-        const char *file, int line, const DWORD *tokens, DWORD token_count)
+        const char *file, int line, const DWORD *tokens, unsigned int token_count)
 {
     WARN("iface %p, file %s, line %u, tokens %p, token_count %u, stub!\n",
             iface, debugstr_a(file), line, tokens, token_count);
@@ -200,7 +224,7 @@ IDirect3DShaderValidator9 * WINAPI Direct3DShaderValidatorCreate9(void)
  */
 int WINAPI D3DPERF_BeginEvent(D3DCOLOR color, const WCHAR *name)
 {
-    TRACE("color 0x%08x, name %s.\n", color, debugstr_w(name));
+    TRACE("color 0x%08lx, name %s.\n", color, debugstr_w(name));
 
     return D3DPERF_event_level++;
 }
@@ -229,7 +253,7 @@ DWORD WINAPI D3DPERF_GetStatus(void) {
  */
 void WINAPI D3DPERF_SetOptions(DWORD options)
 {
-  FIXME("(%#x) : stub\n", options);
+    FIXME("options %#lx, stub!\n", options);
 }
 
 /***********************************************************************
@@ -246,7 +270,7 @@ BOOL WINAPI D3DPERF_QueryRepeatFrame(void) {
  */
 void WINAPI D3DPERF_SetMarker(D3DCOLOR color, const WCHAR *name)
 {
-    FIXME("color 0x%08x, name %s stub!\n", color, debugstr_w(name));
+    FIXME("color 0x%08lx, name %s stub!\n", color, debugstr_w(name));
 }
 
 /***********************************************************************
@@ -254,7 +278,7 @@ void WINAPI D3DPERF_SetMarker(D3DCOLOR color, const WCHAR *name)
  */
 void WINAPI D3DPERF_SetRegion(D3DCOLOR color, const WCHAR *name)
 {
-    FIXME("color 0x%08x, name %s stub!\n", color, debugstr_w(name));
+    FIXME("color 0x%08lx, name %s stub!\n", color, debugstr_w(name));
 }
 
 void d3d9_resource_cleanup(struct d3d9_resource *resource)

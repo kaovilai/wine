@@ -54,12 +54,39 @@ static void dumpLsaAttributes(const LSA_OBJECT_ATTRIBUTES *oa)
 {
     if (oa)
     {
-        TRACE("\n\tlength=%u, rootdir=%p, objectname=%s\n\tattr=0x%08x, sid=%s qos=%p\n",
+        TRACE("\n\tlength=%lu, rootdir=%p, objectname=%s\n\tattr=0x%08lx, sid=%s qos=%p\n",
               oa->Length, oa->RootDirectory,
               oa->ObjectName?debugstr_w(oa->ObjectName->Buffer):"null",
               oa->Attributes, debugstr_sid(oa->SecurityDescriptor),
               oa->SecurityQualityOfService);
     }
+}
+
+static const char *debugstr_InformationClass( POLICY_INFORMATION_CLASS class )
+{
+    static const char * const names[] =
+    {
+        NULL,
+        "PolicyAuditLogInformation",
+        "PolicyAuditEventsInformation",
+        "PolicyPrimaryDomainInformation",
+        "PolicyPdAccountInformation",
+        "PolicyAccountDomainInformation",
+        "PolicyLsaServerRoleInformation",
+        "PolicyReplicaSourceInformation",
+        "PolicyDefaultQuotaInformation",
+        "PolicyModificationInformation",
+        "PolicyAuditFullSetInformation",
+        "PolicyAuditFullQueryInformation",
+        "PolicyDnsDomainInformation",
+        "PolicyDnsDomainInformationInt",
+        "PolicyLocalAccountDomainInformation",
+        "PolicyMachineAccountInformation",
+        "PolicyMachineAccountInformation2",
+    };
+
+    if (class < ARRAY_SIZE(names) && names[class]) return names[class];
+    return wine_dbg_sprintf( "%u", class );
 }
 
 static void* ADVAPI_GetDomainName(unsigned sz, unsigned ofs)
@@ -76,7 +103,7 @@ static void* ADVAPI_GetDomainName(unsigned sz, unsigned ofs)
         ret = RegQueryValueExW(key, L"Workgroup", NULL, NULL, NULL, &size);
         if (ret == ERROR_MORE_DATA || ret == ERROR_SUCCESS)
         {
-            ptr = heap_alloc_zero(sz + size);
+            ptr = calloc(1, sz + size);
             if (!ptr) return NULL;
             ustr = (UNICODE_STRING*)(ptr + ofs);
             ustr->MaximumLength = size;
@@ -84,16 +111,16 @@ static void* ADVAPI_GetDomainName(unsigned sz, unsigned ofs)
             ret = RegQueryValueExW(key, L"Workgroup", NULL, NULL, (LPBYTE)ustr->Buffer, &size);
             if (ret != ERROR_SUCCESS)
             {
-                heap_free(ptr);
+                free(ptr);
                 ptr = NULL;
-            }   
+            }
             else ustr->Length = size - sizeof(WCHAR);
         }
         RegCloseKey(key);
     }
     if (!ptr)
     {
-        ptr = heap_alloc_zero(sz + sizeof(L"DOMAIN"));
+        ptr = calloc(1, sz + sizeof(L"DOMAIN"));
         if (!ptr) return NULL;
         ustr = (UNICODE_STRING*)(ptr + ofs);
         ustr->MaximumLength = sizeof(L"DOMAIN");
@@ -117,7 +144,7 @@ NTSTATUS WINAPI LsaGetUserName(PUNICODE_STRING *user_name, PUNICODE_STRING *doma
     if (GetUserNameW(NULL, &user_size) || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
        return STATUS_UNSUCCESSFUL;
 
-    user = heap_alloc(sizeof(*user) + user_size * sizeof(WCHAR));
+    user = malloc(sizeof(*user) + user_size * sizeof(WCHAR));
     if (!user) return STATUS_NO_MEMORY;
 
     user->Buffer = (WCHAR *)(user + 1);
@@ -125,7 +152,7 @@ NTSTATUS WINAPI LsaGetUserName(PUNICODE_STRING *user_name, PUNICODE_STRING *doma
     user->Length = user->MaximumLength - sizeof(WCHAR);
     if (!GetUserNameW(user->Buffer, &user_size))
     {
-        heap_free(user);
+        free(user);
         return STATUS_UNSUCCESSFUL;
     }
 
@@ -138,14 +165,14 @@ NTSTATUS WINAPI LsaGetUserName(PUNICODE_STRING *user_name, PUNICODE_STRING *doma
         domain_size = ARRAY_SIZE(computer);
         if (!GetComputerNameW(computer, &domain_size))
         {
-            heap_free(user);
+            free(user);
             return STATUS_UNSUCCESSFUL;
         }
 
-        domain = heap_alloc(sizeof(*domain) + (domain_size + 1) * sizeof(WCHAR));
+        domain = malloc(sizeof(*domain) + (domain_size + 1) * sizeof(WCHAR));
         if (!domain)
         {
-            heap_free(user);
+            free(user);
             return STATUS_NO_MEMORY;
         }
 
@@ -172,7 +199,7 @@ NTSTATUS WINAPI LsaAddAccountRights(
     PLSA_UNICODE_STRING rights,
     ULONG count)
 {
-    FIXME("(%p,%p,%p,0x%08x) stub\n", policy, sid, rights, count);
+    FIXME("(%p,%p,%p,0x%08lx) stub\n", policy, sid, rights, count);
     return STATUS_SUCCESS;
 }
 
@@ -205,7 +232,7 @@ NTSTATUS WINAPI LsaCreateTrustedDomainEx(
     ACCESS_MASK access,
     PLSA_HANDLE domain)
 {
-    FIXME("(%p,%p,%p,0x%08x,%p) stub\n", policy, domain_info, auth_info,
+    FIXME("(%p,%p,%p,0x%08lx,%p) stub\n", policy, domain_info, auth_info,
           access, domain);
     return STATUS_SUCCESS;
 }
@@ -247,7 +274,7 @@ NTSTATUS WINAPI LsaEnumerateAccounts(
     ULONG maxlen,
     PULONG count)
 {
-    FIXME("(%p,%p,%p,%d,%p) stub\n", policy, context, buffer, maxlen, count);
+    FIXME("(%p,%p,%p,%ld,%p) stub\n", policy, context, buffer, maxlen, count);
     if (count) *count = 0;
     return STATUS_NO_MORE_ENTRIES;
 }
@@ -295,7 +322,7 @@ NTSTATUS WINAPI LsaEnumerateTrustedDomains(
     IN ULONG PreferredMaximumLength,
     OUT PULONG CountReturned)
 {
-    FIXME("(%p,%p,%p,0x%08x,%p) stub\n", PolicyHandle, EnumerationContext,
+    FIXME("(%p,%p,%p,0x%08lx,%p) stub\n", PolicyHandle, EnumerationContext,
           Buffer, PreferredMaximumLength, CountReturned);
 
     if (CountReturned) *CountReturned = 0;
@@ -313,7 +340,7 @@ NTSTATUS WINAPI LsaEnumerateTrustedDomainsEx(
     ULONG length,
     PULONG count)
 {
-    FIXME("(%p,%p,%p,0x%08x,%p) stub\n", policy, context, buffer, length, count);
+    FIXME("(%p,%p,%p,0x%08lx,%p) stub\n", policy, context, buffer, length, count);
 
     if (count) *count = 0;
     return STATUS_SUCCESS;
@@ -335,7 +362,7 @@ NTSTATUS WINAPI LsaFreeMemory(IN PVOID Buffer)
 {
     TRACE("(%p)\n", Buffer);
 
-    heap_free(Buffer);
+    free(Buffer);
     return STATUS_SUCCESS;
 }
 
@@ -363,7 +390,7 @@ NTSTATUS WINAPI LsaLookupNames(
     OUT PLSA_REFERENCED_DOMAIN_LIST* ReferencedDomains,
     OUT PLSA_TRANSLATED_SID* Sids)
 {
-    FIXME("(%p,0x%08x,%p,%p,%p) stub\n", PolicyHandle, Count, Names,
+    FIXME("(%p,0x%08lx,%p,%p,%p) stub\n", PolicyHandle, Count, Names,
           ReferencedDomains, Sids);
 
     return STATUS_NONE_MAPPED;
@@ -447,7 +474,7 @@ NTSTATUS WINAPI LsaLookupNames2( LSA_HANDLE policy, ULONG flags, ULONG count,
     SID_NAME_USE use;
     SID *sid;
 
-    TRACE("(%p,0x%08x,0x%08x,%p,%p,%p)\n", policy, flags, count, names, domains, sids);
+    TRACE("(%p,0x%08lx,0x%08lx,%p,%p,%p)\n", policy, flags, count, names, domains, sids);
 
     mapped = 0;
     for (i = 0; i < count; i++)
@@ -467,25 +494,25 @@ NTSTATUS WINAPI LsaLookupNames2( LSA_HANDLE policy, ULONG flags, ULONG count,
             mapped++;
         }
     }
-    TRACE("mapped %u out of %u\n", mapped, count);
+    TRACE("mapped %lu out of %lu\n", mapped, count);
 
     size = sizeof(LSA_TRANSLATED_SID2) * count + sid_size_total;
-    if (!(*sids = heap_alloc(size))) return STATUS_NO_MEMORY;
+    if (!(*sids = malloc(size))) return STATUS_NO_MEMORY;
 
     sid = (SID *)(*sids + count);
 
     /* use maximum domain count */
-    if (!(*domains = heap_alloc(sizeof(LSA_REFERENCED_DOMAIN_LIST) + sizeof(LSA_TRUST_INFORMATION)*count +
-                                sid_size_total + domainname_size_total*sizeof(WCHAR))))
+    if (!(*domains = malloc(sizeof(LSA_REFERENCED_DOMAIN_LIST) + sizeof(LSA_TRUST_INFORMATION) * count +
+                            sid_size_total + domainname_size_total * sizeof(WCHAR))))
     {
-        heap_free(*sids);
+        free(*sids);
         return STATUS_NO_MEMORY;
     }
     (*domains)->Entries = 0;
     (*domains)->Domains = (LSA_TRUST_INFORMATION*)((char*)*domains + sizeof(LSA_REFERENCED_DOMAIN_LIST));
     domain_data = (char*)(*domains)->Domains + sizeof(LSA_TRUST_INFORMATION)*count;
 
-    domain.Buffer = heap_alloc(domain_size_max*sizeof(WCHAR));
+    domain.Buffer = malloc(domain_size_max * sizeof(WCHAR));
     for (i = 0; i < count; i++)
     {
         domain.Length = domain_size_max*sizeof(WCHAR);
@@ -514,7 +541,7 @@ NTSTATUS WINAPI LsaLookupNames2( LSA_HANDLE policy, ULONG flags, ULONG count,
             }
         }
     }
-    heap_free(domain.Buffer);
+    free(domain.Buffer);
 
     if (mapped == count) return STATUS_SUCCESS;
     if (mapped > 0 && mapped < count) return STATUS_SOME_NOT_MAPPED;
@@ -553,17 +580,17 @@ NTSTATUS WINAPI LsaLookupSids(
     SID_NAME_USE use;
     WCHAR *strsid;
 
-    TRACE("(%p, %u, %p, %p, %p)\n", PolicyHandle, Count, Sids, ReferencedDomains, Names);
+    TRACE("(%p, %lu, %p, %p, %p)\n", PolicyHandle, Count, Sids, ReferencedDomains, Names);
 
     /* this length does not include actual string length yet */
     name_fullsize = sizeof(LSA_TRANSLATED_NAME) * Count;
-    if (!(*Names = heap_alloc(name_fullsize))) return STATUS_NO_MEMORY;
+    if (!(*Names = malloc(name_fullsize))) return STATUS_NO_MEMORY;
     /* maximum count of stored domain infos is Count, allocate it like that cause really needed
        count could only be computed after sid data is retrieved */
     domain_fullsize = sizeof(LSA_REFERENCED_DOMAIN_LIST) + sizeof(LSA_TRUST_INFORMATION)*Count;
-    if (!(*ReferencedDomains = heap_alloc(domain_fullsize)))
+    if (!(*ReferencedDomains = malloc(domain_fullsize)))
     {
-        heap_free(*Names);
+        free(*Names);
         return STATUS_NO_MEMORY;
     }
     (*ReferencedDomains)->Entries = 0;
@@ -606,7 +633,7 @@ NTSTATUS WINAPI LsaLookupSids(
                 domain_fullsize += domain_size * sizeof(WCHAR);
 
                 /* get domain SID size too */
-                name = heap_alloc(domain_size * sizeof(WCHAR));
+                name = malloc(domain_size * sizeof(WCHAR));
                 *name = 0;
                 LookupAccountSidW(NULL, Sids[i], NULL, &name_size, name, &domain_size, &use);
 
@@ -617,7 +644,7 @@ NTSTATUS WINAPI LsaLookupSids(
                 lookup_name(&domain, NULL, &sid_size, NULL, &domain_size, &use, &handled);
                 domain_fullsize += sid_size;
 
-                heap_free(name);
+                free(name);
             }
             else
             {
@@ -638,10 +665,10 @@ NTSTATUS WINAPI LsaLookupSids(
     }
 
     /* now we have full length needed for both */
-    *Names = heap_realloc(*Names, name_fullsize);
+    *Names = realloc(*Names, name_fullsize);
     name_buffer = (WCHAR*)((char*)*Names + sizeof(LSA_TRANSLATED_NAME)*Count);
 
-    *ReferencedDomains = heap_realloc(*ReferencedDomains, domain_fullsize);
+    *ReferencedDomains = realloc(*ReferencedDomains, domain_fullsize);
     /* fix pointer after reallocation */
     (*ReferencedDomains)->Domains = (LSA_TRUST_INFORMATION*)((char*)*ReferencedDomains + sizeof(LSA_REFERENCED_DOMAIN_LIST));
     domain_data = (char*)(*ReferencedDomains)->Domains + sizeof(LSA_TRUST_INFORMATION)*Count;
@@ -670,13 +697,13 @@ NTSTATUS WINAPI LsaLookupSids(
                 domain.MaximumLength = sizeof(WCHAR);
             }
 
-            domain.Buffer = heap_alloc(domain.MaximumLength);
+            domain.Buffer = malloc(domain.MaximumLength);
 
             LookupAccountSidW(NULL, Sids[i], (*Names)[i].Name.Buffer, &name_size, domain.Buffer, &domain_size, &use);
             (*Names)[i].Use = use;
 
             (*Names)[i].DomainIndex = lsa_reflist_add_domain(*ReferencedDomains, &domain, &domain_data);
-            heap_free(domain.Buffer);
+            free(domain.Buffer);
         }
         else if (ConvertSidToStringSidW(Sids[i], &strsid))
         {
@@ -686,7 +713,7 @@ NTSTATUS WINAPI LsaLookupSids(
 
         name_buffer += lstrlenW(name_buffer) + 1;
     }
-    TRACE("mapped %u out of %u\n", mapped, Count);
+    TRACE("mapped %lu out of %lu\n", mapped, Count);
 
     if (mapped == Count) return STATUS_SUCCESS;
     if (mapped) return STATUS_SOME_NOT_MAPPED;
@@ -734,7 +761,7 @@ NTSTATUS WINAPI LsaOpenPolicy(
     IN ACCESS_MASK DesiredAccess,
     IN OUT PLSA_HANDLE PolicyHandle)
 {
-    WARN("(%s,%p,0x%08x,%p) stub\n",
+    WARN("(%s,%p,0x%08lx,%p) stub\n",
           SystemName?debugstr_w(SystemName->Buffer):"(null)",
           ObjectAttributes, DesiredAccess, PolicyHandle);
 
@@ -756,7 +783,7 @@ NTSTATUS WINAPI LsaOpenTrustedDomainByName(
     ACCESS_MASK access,
     PLSA_HANDLE handle)
 {
-    FIXME("(%p,%p,0x%08x,%p) stub\n", policy, name, access, handle);
+    FIXME("(%p,%p,0x%08lx,%p) stub\n", policy, name, access, handle);
     return STATUS_OBJECT_NAME_NOT_FOUND;
 }
 
@@ -779,14 +806,14 @@ NTSTATUS WINAPI LsaQueryInformationPolicy(
     IN POLICY_INFORMATION_CLASS InformationClass,
     OUT PVOID *Buffer)
 {
-    TRACE("(%p,0x%08x,%p)\n", PolicyHandle, InformationClass, Buffer);
+    TRACE("(%p,%s,%p)\n", PolicyHandle, debugstr_InformationClass(InformationClass), Buffer);
 
     if(!Buffer) return STATUS_INVALID_PARAMETER;
     switch (InformationClass)
     {
         case PolicyAuditEventsInformation: /* 2 */
         {
-            PPOLICY_AUDIT_EVENTS_INFO p = heap_alloc_zero(sizeof(POLICY_AUDIT_EVENTS_INFO));
+            PPOLICY_AUDIT_EVENTS_INFO p = calloc(1, sizeof(POLICY_AUDIT_EVENTS_INFO));
             p->AuditingMode = FALSE; /* no auditing */
             *Buffer = p;
         }
@@ -816,7 +843,7 @@ NTSTATUS WINAPI LsaQueryInformationPolicy(
             };
 
             DWORD dwSize = MAX_COMPUTERNAME_LENGTH + 1;
-            struct di * xdi = heap_alloc_zero(sizeof(*xdi));
+            struct di * xdi = calloc(1, sizeof(*xdi));
 
             xdi->info.DomainName.MaximumLength = dwSize * sizeof(WCHAR);
             xdi->info.DomainName.Buffer = xdi->domain;
@@ -829,7 +856,7 @@ NTSTATUS WINAPI LsaQueryInformationPolicy(
 
             if (!ADVAPI_GetComputerSid(&xdi->sid))
             {
-                heap_free(xdi);
+                free(xdi);
 
                 WARN("Computer SID not found\n");
 
@@ -862,7 +889,7 @@ NTSTATUS WINAPI LsaQueryInformationPolicy(
             } computer_sid;
             DWORD dwSize;
 
-            xdi = heap_alloc_zero(sizeof(*xdi));
+            xdi = calloc(1, sizeof(*xdi));
             if (!xdi) return STATUS_NO_MEMORY;
 
             dwSize = 256;
@@ -970,7 +997,7 @@ NTSTATUS WINAPI LsaRemoveAccountRights(
     PLSA_UNICODE_STRING rights,
     ULONG count)
 {
-    FIXME("(%p,%p,%d,%p,0x%08x) stub\n", policy, sid, all, rights, count);
+    FIXME("(%p,%p,%d,%p,0x%08lx) stub\n", policy, sid, all, rights, count);
     return STATUS_SUCCESS;
 }
 
@@ -1016,7 +1043,7 @@ NTSTATUS WINAPI LsaSetInformationPolicy(
     IN POLICY_INFORMATION_CLASS InformationClass,
     IN PVOID Buffer)
 {
-    FIXME("(%p,0x%08x,%p) stub\n", PolicyHandle, InformationClass, Buffer);
+    FIXME("(%p,%s,%p) stub\n", PolicyHandle, debugstr_InformationClass(InformationClass), Buffer);
 
     return STATUS_UNSUCCESSFUL;
 }
@@ -1129,7 +1156,7 @@ NTSTATUS WINAPI LsaLookupPrivilegeName(LSA_HANDLE handle, LUID *luid, LSA_UNICOD
         return STATUS_NO_SUCH_PRIVILEGE;
 
     length = lstrlenW(privnameW);
-    *name = heap_alloc(sizeof(**name) + (length + 1) * sizeof(WCHAR));
+    *name = malloc(sizeof(**name) + (length + 1) * sizeof(WCHAR));
     if (!*name)
         return STATUS_NO_MEMORY;
 
@@ -1160,7 +1187,7 @@ NTSTATUS WINAPI LsaLookupPrivilegeDisplayName(LSA_HANDLE handle, LSA_UNICODE_STR
 BOOLEAN WINAPI AuditQuerySystemPolicy(const GUID* guids, ULONG count, AUDIT_POLICY_INFORMATION** policy)
 {
 
-    FIXME("(%p, %d, %p)\n", guids, count, policy);
+    FIXME("(%p, %ld, %p)\n", guids, count, policy);
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
 }

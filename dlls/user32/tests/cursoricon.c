@@ -321,7 +321,7 @@ static LRESULT CALLBACK callback_child(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 
             memset(&info, 0, sizeof(info));
             ret = GetIconInfo(cursor, &info);
-            todo_wine ok(ret, "GetIconInfoEx failed with error %u\n", GetLastError());
+            todo_wine ok(ret, "GetIconInfoEx failed with error %lu\n", GetLastError());
             todo_wine ok(info.hbmColor != NULL, "info.hmbColor was not set\n");
             todo_wine ok(info.hbmMask != NULL, "info.hmbColor was not set\n");
             DeleteObject(info.hbmColor);
@@ -330,10 +330,10 @@ static LRESULT CALLBACK callback_child(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             SetLastError(0xdeadbeef);
             ret = DestroyCursor(cursor);
             error = GetLastError();
-            ok(!ret || broken(ret) /* win9x */, "DestroyCursor on the active cursor succeeded.\n");
+            ok(!ret, "DestroyCursor on the active cursor succeeded.\n");
             ok(error == ERROR_DESTROY_OBJECT_OF_OTHER_THREAD ||
                error == 0xdeadbeef,  /* vista */
-                "Last error: %u\n", error);
+                "Last error: %lu\n", error);
             return TRUE;
         }
         case WM_DESTROY:
@@ -375,12 +375,12 @@ static void do_child(void)
 
     SetLastError(0xdeadbeef);
     ret = RegisterClassA(&class);
-    ok(ret, "Failed to register window class.  Error: %u\n", GetLastError());
+    ok(ret, "Failed to register window class.  Error: %lu\n", GetLastError());
 
     /* Create a window. */
     child = CreateWindowA("cursor_child", "cursor_child", WS_POPUP | WS_VISIBLE,
         0, 0, 200, 200, 0, 0, 0, NULL);
-    ok(child != 0, "CreateWindowA failed.  Error: %u\n", GetLastError());
+    ok(child != 0, "CreateWindowA failed.  Error: %lu\n", GetLastError());
 
     /* Let the parent know our HWND. */
     PostMessageA(parent, PROC_INIT, (WPARAM) child, 0);
@@ -388,7 +388,7 @@ static void do_child(void)
     /* Receive messages. */
     while ((ret = GetMessageA(&msg, 0, 0, 0)))
     {
-        ok(ret != -1, "GetMessage failed.  Error: %u\n", GetLastError());
+        ok(ret != -1, "GetMessage failed.  Error: %lu\n", GetLastError());
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
@@ -417,12 +417,12 @@ static void do_parent(void)
 
     SetLastError(0xdeadbeef);
     ret = RegisterClassA(&class);
-    ok(ret, "Failed to register window class.  Error: %u\n", GetLastError());
+    ok(ret, "Failed to register window class.  Error: %lu\n", GetLastError());
 
     /* Create a window. */
     parent = CreateWindowA("cursor_parent", "cursor_parent", WS_POPUP | WS_VISIBLE,
         0, 0, 200, 200, 0, 0, 0, NULL);
-    ok(parent != 0, "CreateWindowA failed.  Error: %u\n", GetLastError());
+    ok(parent != 0, "CreateWindowA failed.  Error: %lu\n", GetLastError());
 
     /* Start child process. */
     memset(&startup, 0, sizeof(startup));
@@ -430,14 +430,14 @@ static void do_parent(void)
     startup.dwFlags = STARTF_USESHOWWINDOW;
     startup.wShowWindow = SW_SHOWNORMAL;
 
-    sprintf(path_name, "%s cursoricon %lx", test_argv[0], (INT_PTR)parent);
+    sprintf(path_name, "%s cursoricon %Ix", test_argv[0], (INT_PTR)parent);
     ok(CreateProcessA(NULL, path_name, NULL, NULL, FALSE, 0L, NULL, NULL, &startup, &info), "CreateProcess failed.\n");
     child_process = info.hProcess;
 
     /* Wait for child window handle. */
     while ((child == 0) && (ret = GetMessageA(&msg, parent, 0, 0)))
     {
-        ok(ret != -1, "GetMessage failed.  Error: %u\n", GetLastError());
+        ok(ret != -1, "GetMessage failed.  Error: %lu\n", GetLastError());
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
@@ -513,10 +513,10 @@ static void check_copy_image(HBITMAP bitmap, UINT type, UINT flags, INT copyWidt
             .hbmMask = bitmap,
         };
         HICON icon = CreateIconIndirect(&info);
-        ok(!!icon, "Failed to create icon, error %u\n", GetLastError());
+        ok(!!icon, "Failed to create icon, error %lu\n", GetLastError());
         copy = CopyImage(icon, type, copyWidth, copyHeight, flags);
         ret = DestroyIcon(icon);
-        ok(ret, "Failed to destroy icon, error %u\n", GetLastError());
+        ok(ret, "Failed to destroy icon, error %lu\n", GetLastError());
     }
     ok(copy != NULL, "CopyImage() failed\n");
     if (copy != NULL)
@@ -530,7 +530,7 @@ static void check_copy_image(HBITMAP bitmap, UINT type, UINT flags, INT copyWidt
             ICONINFO info;
 
             ret = GetIconInfo((HICON)copy, &info);
-            ok(ret, "Failed to get icon info, error %u\n", GetLastError());
+            ok(ret, "Failed to get icon info, error %lu\n", GetLastError());
             GetObjectA(info.hbmColor, sizeof(copyBitmap), &copyBitmap);
         }
         copy_is_dib = (copyBitmap.bmBits != NULL);
@@ -576,7 +576,7 @@ static void check_copy_image(HBITMAP bitmap, UINT type, UINT flags, INT copyWidt
             ICONINFO info;
 
             ret = GetIconInfo((HICON)copy, &info);
-            ok(ret, "Failed to get icon info, error %u\n", GetLastError());
+            ok(ret, "Failed to get icon info, error %lu\n", GetLastError());
             GetObjectA(info.hbmMask, sizeof(copyBitmap), &copyBitmap);
 
             ok(!copyBitmap.bmBits, "Expected DDB\n");
@@ -608,7 +608,7 @@ static void do_test_copy_image(UINT type, UINT depth)
     unsigned int i;
 
     /* Create a device-independent bitmap (DIB) */
-    info = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(BITMAPINFOHEADER) + 256 * sizeof(RGBQUAD));
+    info = calloc(1, sizeof(BITMAPINFOHEADER) + 256 * sizeof(RGBQUAD));
     info->bmiHeader.biSize = sizeof(info->bmiHeader);
     info->bmiHeader.biWidth = 2;
     info->bmiHeader.biHeight = 2;
@@ -748,7 +748,7 @@ static void do_test_copy_image(UINT type, UINT depth)
         }
     }
 
-    HeapFree(GetProcessHeap(), 0, info);
+    free(info);
 }
 
 static void test_initial_cursor(void)
@@ -765,7 +765,7 @@ static void test_initial_cursor(void)
         ok(cursor == cursor2, "cursor (%p) is not IDC_WAIT (%p).\n", cursor, cursor2);
     }
     error = GetLastError();
-    ok(error == 0xdeadbeef, "Last error: 0x%08x\n", error);
+    ok(error == 0xdeadbeef, "Last error: 0x%08lx\n", error);
 }
 
 static void test_icon_info_(HICON hIcon, UINT exp_cx, UINT exp_cy,
@@ -780,8 +780,8 @@ static void test_icon_info_(HICON hIcon, UINT exp_cx, UINT exp_cy,
     ok_(__FILE__, line)(ret, "GetIconInfo failed\n");
 
     /* CreateIcon under XP causes info.fIcon to be 0 */
-    ok_(__FILE__, line)(info.xHotspot == exp_cx/2, "info.xHotspot = %u\n", info.xHotspot);
-    ok_(__FILE__, line)(info.yHotspot == exp_cy/2, "info.yHotspot = %u\n", info.yHotspot);
+    ok_(__FILE__, line)(info.xHotspot == exp_cx/2, "info.xHotspot = %lu\n", info.xHotspot);
+    ok_(__FILE__, line)(info.yHotspot == exp_cy/2, "info.yHotspot = %lu\n", info.yHotspot);
     ok_(__FILE__, line)(info.hbmMask != 0, "info.hbmMask is NULL\n");
 
     if (mask_bits)
@@ -789,12 +789,12 @@ static void test_icon_info_(HICON hIcon, UINT exp_cx, UINT exp_cy,
         unsigned int exp_stride = (exp_cx + 7) / 8;
         exp_stride = (exp_stride + 1) & ~1;
         ret = GetBitmapBits(info.hbmMask, sizeof(ret_bits), ret_bits);
-        ok_(__FILE__, line)(ret == exp_stride * exp_mask_cy, "GetBitmapBits returned %u\n", ret);
+        ok_(__FILE__, line)(ret == exp_stride * exp_mask_cy, "GetBitmapBits returned %lu\n", ret);
         ok_(__FILE__, line)(!memcmp(ret_bits, mask_bits, ret), "mask bitmap didn't match\n");
     }
 
     ret = GetObjectA(info.hbmMask, sizeof(bmMask), &bmMask);
-    ok_(__FILE__, line)(ret == sizeof(bmMask), "GetObject(info.hbmMask) failed, ret %u\n", ret);
+    ok_(__FILE__, line)(ret == sizeof(bmMask), "GetObject(info.hbmMask) failed, ret %lu\n", ret);
 
     ok_(__FILE__, line)(!!info.hbmColor == has_color, "got hbmColor %p\n", info.hbmColor);
 
@@ -808,10 +808,9 @@ static void test_icon_info_(HICON hIcon, UINT exp_cx, UINT exp_cy,
         ReleaseDC(0, hdc);
 
         ret = GetObjectA(info.hbmColor, sizeof(bmColor), &bmColor);
-        ok_(__FILE__, line)(ret == sizeof(bmColor), "GetObject(info.hbmColor) failed, ret %u\n", ret);
+        ok_(__FILE__, line)(ret == sizeof(bmColor), "GetObject(info.hbmColor) failed, ret %lu\n", ret);
 
-        ok_(__FILE__, line)(bmColor.bmBitsPixel == display_bpp /* XP */ ||
-           bmColor.bmBitsPixel == exp_bpp /* Win98 */,
+        ok_(__FILE__, line)(bmColor.bmBitsPixel == display_bpp,
            "bmColor.bmBitsPixel = %d\n", bmColor.bmBitsPixel);
         ok_(__FILE__, line)(bmColor.bmWidth == exp_cx, "bmColor.bmWidth = %d\n", bmColor.bmWidth);
         ok_(__FILE__, line)(bmColor.bmHeight == exp_cy, "bmColor.bmHeight = %d\n", bmColor.bmHeight);
@@ -835,24 +834,24 @@ static void test_icon_info_(HICON hIcon, UINT exp_cx, UINT exp_cy,
         infoex.cbSize = sizeof(infoex) - 1;
         ret = pGetIconInfoExA( hIcon, &infoex );
         ok_(__FILE__, line)(!ret, "GetIconInfoEx succeeded\n");
-        ok_(__FILE__, line)(GetLastError() == ERROR_INVALID_PARAMETER, "wrong error %d\n", GetLastError());
+        ok_(__FILE__, line)(GetLastError() == ERROR_INVALID_PARAMETER, "wrong error %ld\n", GetLastError());
 
         SetLastError( 0xdeadbeef );
         infoex.cbSize = sizeof(infoex) + 1;
         ret = pGetIconInfoExA( hIcon, &infoex );
         ok_(__FILE__, line)(!ret, "GetIconInfoEx succeeded\n");
-        ok_(__FILE__, line)(GetLastError() == ERROR_INVALID_PARAMETER, "wrong error %d\n", GetLastError());
+        ok_(__FILE__, line)(GetLastError() == ERROR_INVALID_PARAMETER, "wrong error %ld\n", GetLastError());
 
         SetLastError( 0xdeadbeef );
         infoex.cbSize = sizeof(infoex);
         ret = pGetIconInfoExA( (HICON)0xdeadbabe, &infoex );
         ok_(__FILE__, line)(!ret, "GetIconInfoEx succeeded\n");
         ok_(__FILE__, line)(GetLastError() == ERROR_INVALID_CURSOR_HANDLE,
-                            "wrong error %d\n", GetLastError());
+                            "wrong error %ld\n", GetLastError());
 
         infoex.cbSize = sizeof(infoex);
         ret = pGetIconInfoExA( hIcon, &infoex );
-        ok_(__FILE__, line)(ret, "GetIconInfoEx failed err %d\n", GetLastError());
+        ok_(__FILE__, line)(ret, "GetIconInfoEx failed err %ld\n", GetLastError());
         ok_(__FILE__, line)(infoex.wResID == 0, "GetIconInfoEx wrong resid %x\n", infoex.wResID);
         ok_(__FILE__, line)(infoex.szModName[0] == 0, "GetIconInfoEx wrong module %s\n", infoex.szModName);
         ok_(__FILE__, line)(infoex.szResName[0] == 0, "GetIconInfoEx wrong name %s\n", infoex.szResName);
@@ -912,7 +911,7 @@ static void test_CreateIcon(void)
     SetLastError(0xdeadbeaf);
     hIcon = CreateIconIndirect(&info);
     ok(!hIcon, "CreateIconIndirect should fail\n");
-    ok(GetLastError() == 0xdeadbeaf, "wrong error %u\n", GetLastError());
+    ok(GetLastError() == 0xdeadbeaf, "wrong error %lu\n", GetLastError());
 
     info.fIcon = TRUE;
     info.xHotspot = 8;
@@ -922,7 +921,7 @@ static void test_CreateIcon(void)
     SetLastError(0xdeadbeaf);
     hIcon = CreateIconIndirect(&info);
     ok(!hIcon, "CreateIconIndirect should fail\n");
-    ok(GetLastError() == 0xdeadbeaf, "wrong error %u\n", GetLastError());
+    ok(GetLastError() == 0xdeadbeaf, "wrong error %lu\n", GetLastError());
 
     info.fIcon = TRUE;
     info.xHotspot = 8;
@@ -994,7 +993,7 @@ static void test_CreateIcon(void)
 
     /* test creating an icon from a DIB section */
 
-    bmpinfo = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, FIELD_OFFSET(BITMAPINFO,bmiColors[256]));
+    bmpinfo = calloc( 1, FIELD_OFFSET(BITMAPINFO,bmiColors[256]) );
     bmpinfo->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bmpinfo->bmiHeader.biWidth = 32;
     bmpinfo->bmiHeader.biHeight = 32;
@@ -1060,7 +1059,7 @@ static void test_CreateIcon(void)
 
     DeleteObject(hbmMask);
     DeleteObject(hbmColor);
-    HeapFree( GetProcessHeap(), 0, bmpinfo );
+    free(bmpinfo);
 
     ReleaseDC(0, hdc);
 }
@@ -1116,11 +1115,10 @@ static unsigned char bmpimage[70] = {
 0xFF,0xFF,0x00,0x00,0x00,0x00
 };
 
-/* 1x1 pixel bmp using BITMAPCOREHEADER */
+/* 1x1 pixel bmp using BITMAPCOREHEADER with 24 bits colors (1 bit color fails to load) */
 static const unsigned char bmpcoreimage[38] = {
-0x42,0x4d,0x26,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x22,0x00,0x00,0x00,0x0c,0x00,
-0x00,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0xff,0xff,0xff,0x00,0x55,0x55,
-0x55,0x00,0x00,0x00,0x00,0x00
+0x42,0x4d,0x1e,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x1a,0x00,0x00,0x00,0x0c,0x00,
+0x00,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x18,0x00,0xff,0xff,0xff,0x00
 };
 
 /* 2x2 pixel gif */
@@ -1160,7 +1158,7 @@ static void test_LoadImageBitmap(HBITMAP hbm)
     HDC hdc = GetDC(NULL);
 
     ret = GetObjectA(hbm, sizeof(bm), &bm);
-    ok(ret == sizeof(bm), "GetObject returned %d\n", ret);
+    ok(ret == sizeof(bm), "GetObject returned %ld\n", ret);
 
     memset(&bmi, 0, sizeof(bmi));
     bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
@@ -1170,9 +1168,9 @@ static void test_LoadImageBitmap(HBITMAP hbm)
     bmi.bmiHeader.biBitCount= 24;
     bmi.bmiHeader.biCompression= BI_RGB;
     ret = GetDIBits(hdc, hbm, 0, bm.bmHeight, &pixel, &bmi, DIB_RGB_COLORS);
-    ok(ret == bm.bmHeight, "%d lines were converted, not %d\n", ret, bm.bmHeight);
+    ok(ret == bm.bmHeight, "%ld lines were converted, not %d\n", ret, bm.bmHeight);
 
-    ok(color_match(pixel, 0x00ffffff), "Pixel is 0x%08x\n", pixel);
+    ok(color_match(pixel, 0x00ffffff), "Pixel is 0x%08lx\n", pixel);
 
     ReleaseDC(NULL, hdc);
 }
@@ -1192,7 +1190,7 @@ static void test_LoadImageFile(const char * test_desc, const unsigned char * ima
     /* Create the test image. */
     handle = CreateFileA(filename, GENERIC_READ|GENERIC_WRITE, 0, NULL, CREATE_NEW,
         FILE_ATTRIBUTE_NORMAL, NULL);
-    ok(handle != INVALID_HANDLE_VALUE, "CreateFileA failed. %u\n", GetLastError());
+    ok(handle != INVALID_HANDLE_VALUE, "CreateFileA failed. %lu\n", GetLastError());
     ret = WriteFile(handle, image_data, image_size, &bytes_written, NULL);
     ok(ret && bytes_written == image_size, "test file created improperly.\n");
     CloseHandle(handle);
@@ -1202,10 +1200,7 @@ static void test_LoadImageFile(const char * test_desc, const unsigned char * ima
     handle = LoadImageA(NULL, filename, IMAGE_CURSOR, 0, 0, LR_LOADFROMFILE);
     ok(handle == NULL, "IMAGE_CURSOR succeeded incorrectly\n");
     error = GetLastError();
-    ok(error == 0 ||
-        broken(error == 0xdeadbeef) || /* Win9x */
-        broken(error == ERROR_BAD_PATHNAME), /* Win98, WinMe */
-        "Last error: %u\n", error);
+    ok(error == 0, "Last error: %lu\n", error);
     if (handle != NULL) DestroyCursor(handle);
 
     /* Load as icon. For all tested formats, this should fail */
@@ -1213,22 +1208,18 @@ static void test_LoadImageFile(const char * test_desc, const unsigned char * ima
     handle = LoadImageA(NULL, filename, IMAGE_ICON, 0, 0, LR_LOADFROMFILE);
     ok(handle == NULL, "IMAGE_ICON succeeded incorrectly\n");
     error = GetLastError();
-    ok(error == 0 ||
-        broken(error == 0xdeadbeef) || /* Win9x */
-        broken(error == ERROR_BAD_PATHNAME), /* Win98, WinMe */
-        "Last error: %u\n", error);
+    ok(error == 0, "Last error: %lu\n", error);
     if (handle != NULL) DestroyIcon(handle);
 
     /* Load as bitmap. Should succeed for correct bmp, fail for everything else */
     SetLastError(0xdeadbeef);
     handle = LoadImageA(NULL, filename, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
     error = GetLastError();
-    ok(error == 0 ||
-        error == 0xdeadbeef, /* Win9x, WinMe */
-        "Last error: %u\n", error);
+    ok(error == 0, "Last error: %lu\n", error);
 
     if (expect_success) {
-        ok(handle != NULL, "IMAGE_BITMAP failed\n");
+        ok(handle != NULL || broken(image_data == bmpcoreimage) /* pre-security update */,
+           "IMAGE_BITMAP failed\n");
         if (handle != NULL) test_LoadImageBitmap(handle);
     }
     else ok(handle == NULL, "IMAGE_BITMAP succeeded incorrectly\n");
@@ -1262,7 +1253,7 @@ static void create_ico_file(const char *filename, const test_icon_entries_t *tes
     for(i=0; i<entry_cnt; i++)
         icon_size += icon_bpp * test_icon_entries[i].width * test_icon_entries[i].height / 8;
 
-    buf = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, icon_size);
+    buf = calloc(1, icon_size);
     dir = (CURSORICONFILEDIR*)buf;
 
     dir->idReserved = 0;
@@ -1296,12 +1287,12 @@ static void create_ico_file(const char *filename, const test_icon_entries_t *tes
 
     /* Create the icon. */
     file = CreateFileA(filename, GENERIC_READ|GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-    ok(file != INVALID_HANDLE_VALUE, "CreateFileA failed. %u\n", GetLastError());
+    ok(file != INVALID_HANDLE_VALUE, "CreateFileA failed. %lu\n", GetLastError());
     ret = WriteFile(file, buf, icon_size, &bytes_written, NULL);
     ok(ret && bytes_written == icon_size, "icon.ico created improperly.\n");
     CloseHandle(file);
 
-    HeapFree(GetProcessHeap(), 0, buf);
+    free(buf);
 }
 
 static void create_bitmap_file(const char *filename, const BITMAPINFO *bmi, const unsigned char *bits)
@@ -1325,15 +1316,15 @@ static void create_bitmap_file(const char *filename, const BITMAPINFO *bmi, cons
     hdr.bfReserved2 = 0;
 
     file = CreateFileA(filename, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-    ok(file != INVALID_HANDLE_VALUE, "CreateFileA failed, result %u.\n", GetLastError());
+    ok(file != INVALID_HANDLE_VALUE, "CreateFileA failed, result %lu.\n", GetLastError());
     ret = WriteFile(file, &hdr, sizeof(hdr), &bytes_written, NULL);
-    ok(ret && bytes_written == sizeof(hdr), "Unexpected WriteFile() result, ret %#x, bytes_written %u.\n",
+    ok(ret && bytes_written == sizeof(hdr), "Unexpected WriteFile() result, ret %#x, bytes_written %lu.\n",
             ret, bytes_written);
     ret = WriteFile(file, bmi, bmi_size, &bytes_written, NULL);
-    ok(ret && bytes_written == bmi_size, "Unexpected WriteFile() result, ret %#x, bytes_written %u.\n",
+    ok(ret && bytes_written == bmi_size, "Unexpected WriteFile() result, ret %#x, bytes_written %lu.\n",
             ret, bytes_written);
     ret = WriteFile(file, bits, bits_size, &bytes_written, NULL);
-    ok(ret && bytes_written == bits_size, "Unexpected WriteFile() result, ret %#x, bytes_written %u.\n",
+    ok(ret && bytes_written == bits_size, "Unexpected WriteFile() result, ret %#x, bytes_written %lu.\n",
             ret, bytes_written);
     CloseHandle(file);
 }
@@ -1354,7 +1345,7 @@ static void test_LoadImage_working_directory_run(char *path)
     create_ico_file(path_icon, &icon_desc, 1);
 
     handle = CreateFileA(path_image, GENERIC_READ|GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-    ok(handle != INVALID_HANDLE_VALUE, "run %s: CreateFileA failed. %u\n", path, GetLastError());
+    ok(handle != INVALID_HANDLE_VALUE, "run %s: CreateFileA failed. %lu\n", path, GetLastError());
     ret = WriteFile(handle, bmpimage, sizeof(bmpimage), &bytes_written, NULL);
     ok(ret && bytes_written == sizeof(bmpimage), "run %s: Test file created improperly.\n", path);
     CloseHandle(handle);
@@ -1364,20 +1355,20 @@ static void test_LoadImage_working_directory_run(char *path)
     ok(handle != NULL, "run %s: LoadImage() failed.\n", path);
 
     ret = DestroyIcon(handle);
-    ok(ret, "run %s: DestroyIcon failed: %d\n", path, GetLastError());
+    ok(ret, "run %s: DestroyIcon failed: %ld\n", path, GetLastError());
 
     /* Test image */
     handle = LoadImageA(NULL, "test.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
     ok(handle != NULL, "run %s: LoadImageA failed.\n", path);
 
     ret = DeleteObject(handle);
-    ok(ret, "run %s: DeleteObject failed: %d\n", path, GetLastError());
+    ok(ret, "run %s: DeleteObject failed: %ld\n", path, GetLastError());
 
     /* Cleanup */
     ret = DeleteFileA(path_image);
-    ok(ret, "run %s: DeleteFileA failed: %d\n", path, GetLastError());
+    ok(ret, "run %s: DeleteFileA failed: %ld\n", path, GetLastError());
     ret = DeleteFileA(path_icon);
-    ok(ret, "run %s: DeleteFileA failed: %d\n", path, GetLastError());
+    ok(ret, "run %s: DeleteFileA failed: %ld\n", path, GetLastError());
 }
 
 static void test_LoadImage_working_directory(void)
@@ -1419,9 +1410,9 @@ static void test_LoadImage_working_directory(void)
     SetEnvironmentVariableA("PATH", old_PATH);
 
     ret = RemoveDirectoryA(temp_dir_current);
-    ok(ret, "RemoveDirectoryA failed: %d\n", GetLastError());
+    ok(ret, "RemoveDirectoryA failed: %ld\n", GetLastError());
     ret = RemoveDirectoryA(temp_dir_PATH);
-    ok(ret, "RemoveDirectoryA failed: %d\n", GetLastError());
+    ok(ret, "RemoveDirectoryA failed: %ld\n", GetLastError());
 }
 
 static void test_LoadImage(void)
@@ -1450,25 +1441,21 @@ static void test_LoadImage(void)
     handle = LoadImageA(NULL, "icon.ico", IMAGE_CURSOR, 0, 0, LR_LOADFROMFILE);
     ok(handle != NULL, "LoadImage() failed.\n");
     error = GetLastError();
-    ok(error == 0 ||
-        broken(error == 0xdeadbeef) || /* Win9x */
-        broken(error == ERROR_BAD_PATHNAME), /* Win98, WinMe */
-        "Last error: %u\n", error);
+    ok(error == 0, "Last error: %lu\n", error);
 
     /* Test the icon information. */
     SetLastError(0xdeadbeef);
     ret = GetIconInfo(handle, &icon_info);
     ok(ret, "GetIconInfo() failed.\n");
     error = GetLastError();
-    ok(error == 0xdeadbeef, "Last error: %u\n", error);
+    ok(error == 0xdeadbeef, "Last error: %lu\n", error);
 
     if (ret)
     {
         ok(icon_info.fIcon == FALSE, "fIcon != FALSE.\n");
-        ok(icon_info.xHotspot == 1, "xHotspot is %u.\n", icon_info.xHotspot);
-        ok(icon_info.yHotspot == 1, "yHotspot is %u.\n", icon_info.yHotspot);
-        ok(icon_info.hbmColor != NULL || broken(!icon_info.hbmColor) /* no color cursor support */,
-           "No hbmColor!\n");
+        ok(icon_info.xHotspot == 1, "xHotspot is %lu.\n", icon_info.xHotspot);
+        ok(icon_info.yHotspot == 1, "yHotspot is %lu.\n", icon_info.yHotspot);
+        ok(icon_info.hbmColor != NULL, "No hbmColor!\n");
         ok(icon_info.hbmMask != NULL, "No hbmMask!\n");
     }
 
@@ -1477,7 +1464,7 @@ static void test_LoadImage(void)
         ICONINFOEXA infoex;
         infoex.cbSize = sizeof(infoex);
         ret = pGetIconInfoExA( handle, &infoex );
-        ok( ret, "GetIconInfoEx failed err %d\n", GetLastError() );
+        ok( ret, "GetIconInfoEx failed err %ld\n", GetLastError() );
         ok( infoex.wResID == 0, "GetIconInfoEx wrong resid %x\n", infoex.wResID );
         ok( infoex.szModName[0] == 0, "GetIconInfoEx wrong module %s\n", infoex.szModName );
         ok( infoex.szResName[0] == 0, "GetIconInfoEx wrong name %s\n", infoex.szResName );
@@ -1489,7 +1476,7 @@ static void test_LoadImage(void)
     ret = DestroyCursor(handle);
     ok(ret, "DestroyCursor() failed.\n");
     error = GetLastError();
-    ok(error == 0xdeadbeef, "Last error: %u\n", error);
+    ok(error == 0xdeadbeef, "Last error: %lu\n", error);
 
     DeleteFileA("icon.ico");
 
@@ -1502,7 +1489,7 @@ static void test_LoadImage(void)
         ICONINFOEXW infoexW;
         infoexA.cbSize = sizeof(infoexA);
         ret = pGetIconInfoExA( handle, &infoexA );
-        ok( ret, "GetIconInfoEx failed err %d\n", GetLastError() );
+        ok( ret, "GetIconInfoEx failed err %ld\n", GetLastError() );
         ok( infoexA.wResID == (UINT_PTR)IDI_HAND, "GetIconInfoEx wrong resid %x\n", infoexA.wResID );
         /* the A version is broken on 64-bit, it truncates the string after the first char */
         if (is_win64 && infoexA.szModName[0] && infoexA.szModName[1] == 0)
@@ -1513,7 +1500,7 @@ static void test_LoadImage(void)
         ok( infoexA.szResName[0] == 0, "GetIconInfoEx wrong name %s\n", infoexA.szResName );
         infoexW.cbSize = sizeof(infoexW);
         ret = pGetIconInfoExW( handle, &infoexW );
-        ok( ret, "GetIconInfoEx failed err %d\n", GetLastError() );
+        ok( ret, "GetIconInfoEx failed err %ld\n", GetLastError() );
         ok( infoexW.wResID == (UINT_PTR)IDI_HAND, "GetIconInfoEx wrong resid %x\n", infoexW.wResID );
         ok( GetModuleHandleW(infoexW.szModName) == GetModuleHandleA("user32.dll"),
             "GetIconInfoEx wrong module %s\n", wine_dbgstr_w(infoexW.szModName) );
@@ -1584,7 +1571,7 @@ static void test_CreateIconFromResource(void)
 #define CRSR_RES_SIZE (2*sizeof(INT16) + ICON_RES_SIZE)
 
     /* Set icon data. */
-    hotspot = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, CRSR_RES_SIZE);
+    hotspot = calloc(1, CRSR_RES_SIZE);
 
     /* Cursor resources have an extra hotspot, icon resources not. */
     hotspot[0] = 3;
@@ -1603,22 +1590,21 @@ static void test_CreateIconFromResource(void)
     handle = CreateIconFromResource((PBYTE) hotspot, CRSR_RES_SIZE, FALSE, 0x00030000);
     ok(handle != NULL, "Create cursor failed.\n");
     ret = DestroyCursor(handle);
-    ok(ret, "Destroy cursor failed, error %u.\n", GetLastError());
+    ok(ret, "Destroy cursor failed, error %lu.\n", GetLastError());
 
     /* Test the icon information. */
     SetLastError(0xdeadbeef);
     ret = GetIconInfo(handle, &icon_info);
     ok(ret, "GetIconInfo() failed.\n");
     error = GetLastError();
-    ok(error == 0xdeadbeef, "Last error: %u\n", error);
+    ok(error == 0xdeadbeef, "Last error: %lu\n", error);
 
     if (ret)
     {
         ok(icon_info.fIcon == FALSE, "fIcon != FALSE.\n");
-        ok(icon_info.xHotspot == 3, "xHotspot is %u.\n", icon_info.xHotspot);
-        ok(icon_info.yHotspot == 3, "yHotspot is %u.\n", icon_info.yHotspot);
-        ok(icon_info.hbmColor != NULL || broken(!icon_info.hbmColor) /* no color cursor support */,
-           "No hbmColor!\n");
+        ok(icon_info.xHotspot == 3, "xHotspot is %lu.\n", icon_info.xHotspot);
+        ok(icon_info.yHotspot == 3, "yHotspot is %lu.\n", icon_info.yHotspot);
+        ok(icon_info.hbmColor != NULL, "No hbmColor!\n");
         ok(icon_info.hbmMask != NULL, "No hbmMask!\n");
     }
 
@@ -1627,7 +1613,7 @@ static void test_CreateIconFromResource(void)
         ICONINFOEXA infoex;
         infoex.cbSize = sizeof(infoex);
         ret = pGetIconInfoExA( handle, &infoex );
-        ok( ret, "GetIconInfoEx failed err %d\n", GetLastError() );
+        ok( ret, "GetIconInfoEx failed err %ld\n", GetLastError() );
         ok( infoex.wResID == 0, "GetIconInfoEx wrong resid %x\n", infoex.wResID );
         ok( infoex.szModName[0] == 0, "GetIconInfoEx wrong module %s\n", infoex.szModName );
         ok( infoex.szResName[0] == 0, "GetIconInfoEx wrong name %s\n", infoex.szResName );
@@ -1639,21 +1625,21 @@ static void test_CreateIconFromResource(void)
 				    0x00030000);
     ok(handle != NULL, "Create icon failed.\n");
     ret = DestroyIcon(handle);
-    ok(ret, "Destroy icon failed, error %u.\n", GetLastError());
+    ok(ret, "Destroy icon failed, error %lu.\n", GetLastError());
 
     /* Test the icon information. */
     SetLastError(0xdeadbeef);
     ret = GetIconInfo(handle, &icon_info);
     ok(ret, "GetIconInfo() failed.\n");
     error = GetLastError();
-    ok(error == 0xdeadbeef, "Last error: %u\n", error);
+    ok(error == 0xdeadbeef, "Last error: %lu\n", error);
 
     if (ret)
     {
         ok(icon_info.fIcon == TRUE, "fIcon != TRUE.\n");
 	/* Icons always have hotspot in the middle */
-        ok(icon_info.xHotspot == ICON_WIDTH/2, "xHotspot is %u.\n", icon_info.xHotspot);
-        ok(icon_info.yHotspot == ICON_HEIGHT/2, "yHotspot is %u.\n", icon_info.yHotspot);
+        ok(icon_info.xHotspot == ICON_WIDTH/2, "xHotspot is %lu.\n", icon_info.xHotspot);
+        ok(icon_info.yHotspot == ICON_HEIGHT/2, "yHotspot is %lu.\n", icon_info.yHotspot);
         ok(icon_info.hbmColor != NULL, "No hbmColor!\n");
         ok(icon_info.hbmMask != NULL, "No hbmMask!\n");
     }
@@ -1671,7 +1657,7 @@ static void test_CreateIconFromResource(void)
     handle = CreateIconFromResource((PBYTE) &empty_anicursor, sizeof(empty_anicursor), FALSE, 0x00030000);
     ok(handle != NULL, "Create cursor failed.\n");
     ret = DestroyCursor(handle);
-    ok(ret, "Destroy cursor failed, error %u.\n", GetLastError());
+    ok(ret, "Destroy cursor failed, error %lu.\n", GetLastError());
 
     /* Test the animated cursor's information. */
     SetLastError(0xdeadbeef);
@@ -1680,78 +1666,77 @@ static void test_CreateIconFromResource(void)
     ok(ret, "GetIconInfo() failed.\n");
     error = GetLastError();
     todo_wine
-    ok(error == 0xdeadbeef, "Last error: %u\n", error);
+    ok(error == 0xdeadbeef, "Last error: %lu\n", error);
 
     if (ret)
     {
         ok(icon_info.fIcon == FALSE, "fIcon != FALSE.\n");
-        ok(icon_info.xHotspot == 3, "xHotspot is %u.\n", icon_info.xHotspot);
-        ok(icon_info.yHotspot == 3, "yHotspot is %u.\n", icon_info.yHotspot);
-        ok(icon_info.hbmColor != NULL || broken(!icon_info.hbmColor) /* no color cursor support */,
-           "No hbmColor!\n");
+        ok(icon_info.xHotspot == 3, "xHotspot is %lu.\n", icon_info.xHotspot);
+        ok(icon_info.yHotspot == 3, "yHotspot is %lu.\n", icon_info.yHotspot);
+        ok(icon_info.hbmColor != NULL, "No hbmColor!\n");
         ok(icon_info.hbmMask != NULL, "No hbmMask!\n");
     }
 
     /* Test creating and destroying a non-shared icon. */
     handle = CreateIconFromResourceEx((BYTE *)icon_header, ICON_RES_SIZE, TRUE, 0x00030000,
                                        0, 0, LR_DEFAULTSIZE);
-    ok(handle != NULL, "Create icon failed, error %u.\n", GetLastError());
+    ok(handle != NULL, "Create icon failed, error %lu.\n", GetLastError());
     ret = DestroyIcon(handle);
-    ok(ret, "Destroy icon failed, error %u.\n", GetLastError());
+    ok(ret, "Destroy icon failed, error %lu.\n", GetLastError());
     ret = GetIconInfo(handle, &icon_info);
     ok(!ret, "Get info succeeded.\n");
-    ok(GetLastError() == ERROR_INVALID_CURSOR_HANDLE, "Got unexpected error %u.\n", error);
+    ok(GetLastError() == ERROR_INVALID_CURSOR_HANDLE, "Got unexpected error %lu.\n", error);
 
     /* Test creating and destroying a shared icon from heap bits. */
     handle = CreateIconFromResourceEx((BYTE *)icon_header, ICON_RES_SIZE, TRUE, 0x00030000,
                                        0, 0, LR_DEFAULTSIZE | LR_SHARED);
-    ok(handle != NULL, "Create icon failed, error %u.\n", GetLastError());
+    ok(handle != NULL, "Create icon failed, error %lu.\n", GetLastError());
     ret = DestroyIcon(handle);
-    ok(ret, "Destroy icon failed, error %u.\n", GetLastError());
+    ok(ret, "Destroy icon failed, error %lu.\n", GetLastError());
     ret = GetIconInfo(handle, &icon_info);
-    ok(ret, "Get info failed, error %u.\n", GetLastError());
+    ok(ret, "Get info failed, error %lu.\n", GetLastError());
 
     /* Test creating a shared icon from heap bits that has been created before. */
     old_handle = handle;
     handle = CreateIconFromResourceEx((BYTE *)icon_header, ICON_RES_SIZE, TRUE, 0x00030000,
                                        0, 0, LR_DEFAULTSIZE | LR_SHARED);
-    ok(handle != NULL, "Create icon failed, error %u.\n", GetLastError());
+    ok(handle != NULL, "Create icon failed, error %lu.\n", GetLastError());
     ok(handle != old_handle, "Expect a different handle.\n");
 
-    HeapFree(GetProcessHeap(), 0, hotspot);
+    free(hotspot);
 
     /* Get icon resource bits */
     user32 = GetModuleHandleA("user32.dll");
     EnumResourceNamesA(user32, (const char *)RT_GROUP_ICON, find_res_proc, (LONG_PTR)&res_name);
     rsrc = FindResourceA(user32, res_name, (const char *)RT_GROUP_ICON);
-    ok(rsrc != NULL, "Find resource failed, error %u.\n", GetLastError());
+    ok(rsrc != NULL, "Find resource failed, error %lu.\n", GetLastError());
     res = LoadResource(user32, rsrc);
-    ok(res != NULL, "Load resource failed, error %u.\n", GetLastError());
+    ok(res != NULL, "Load resource failed, error %lu.\n", GetLastError());
     bits = LockResource(res);
-    ok(bits != NULL, "Lock resource failed, error %u.\n", GetLastError());
+    ok(bits != NULL, "Lock resource failed, error %lu.\n", GetLastError());
 
     res_name = MAKEINTRESOURCEA(LookupIconIdFromDirectory(bits, TRUE));
     rsrc = FindResourceA(user32, res_name, (const char *)RT_ICON);
-    ok(rsrc != NULL, "Find resource failed, error %u.\n", GetLastError());
+    ok(rsrc != NULL, "Find resource failed, error %lu.\n", GetLastError());
     size = SizeofResource(user32, rsrc);
-    ok(size != 0, "Get resource size failed, error %u.\n", GetLastError());
+    ok(size != 0, "Get resource size failed, error %lu.\n", GetLastError());
     res = LoadResource(user32, rsrc);
-    ok(res != NULL, "Load resource failed, error %u.\n", GetLastError());
+    ok(res != NULL, "Load resource failed, error %lu.\n", GetLastError());
     bits = LockResource(res);
-    ok(bits != NULL, "Lock resource failed, error %u.\n", GetLastError());
+    ok(bits != NULL, "Lock resource failed, error %lu.\n", GetLastError());
 
     /* Test creating and destroying a shared icon from resource bits. */
     handle = CreateIconFromResourceEx(bits, size, TRUE, 0x00030000, 0, 0, LR_DEFAULTSIZE | LR_SHARED);
-    ok(handle != NULL, "Create icon failed, error %u\n", GetLastError());
+    ok(handle != NULL, "Create icon failed, error %lu\n", GetLastError());
     ret = DestroyIcon(handle);
-    ok(ret, "Destroy icon failed, error %u.\n", GetLastError());
+    ok(ret, "Destroy icon failed, error %lu.\n", GetLastError());
     ret = GetIconInfo(handle, &icon_info);
-    ok(ret, "Get info failed, error %u.\n", GetLastError());
+    ok(ret, "Get info failed, error %lu.\n", GetLastError());
 
     /* Test creating a shared icon from resource bits that has been created before. */
     old_handle = handle;
     handle = CreateIconFromResourceEx(bits, size, TRUE, 0x00030000, 0, 0, LR_DEFAULTSIZE | LR_SHARED);
-    ok(handle != NULL, "Create icon failed, error %u.\n", GetLastError());
+    ok(handle != NULL, "Create icon failed, error %lu.\n", GetLastError());
     ok(handle != old_handle, "Expect a different handle.\n");
 }
 
@@ -1767,8 +1752,8 @@ static int check_cursor_data( HDC hdc, HCURSOR hCursor, void *data, int length)
     ok(ret, "GetIconInfo() failed\n");
     if (!ret) return 0;
     ret = 0;
-    info = HeapAlloc( GetProcessHeap(), 0, FIELD_OFFSET( BITMAPINFO, bmiColors[256] ));
-    ok(info != NULL, "HeapAlloc() failed\n");
+    info = malloc( FIELD_OFFSET( BITMAPINFO, bmiColors[256] ));
+    ok(info != NULL, "malloc() failed\n");
     if (!info) return 0;
 
     info->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -1782,19 +1767,19 @@ static int check_cursor_data( HDC hdc, HCURSOR hCursor, void *data, int length)
     info->bmiHeader.biYPelsPerMeter = 0;
     info->bmiHeader.biClrUsed = 0;
     info->bmiHeader.biClrImportant = 0;
-    image = HeapAlloc( GetProcessHeap(), 0, info->bmiHeader.biSizeImage );
-    ok(image != NULL, "HeapAlloc() failed\n");
+    image = malloc( info->bmiHeader.biSizeImage );
+    ok(image != NULL, "malloc() failed\n");
     if (!image) goto cleanup;
     ret = GetDIBits( hdc, iinfo.hbmColor, 0, 32, image, info, DIB_RGB_COLORS );
     ok(ret, "GetDIBits() failed\n");
     for (i = 0; ret && i < length / sizeof(COLORREF); i++)
     {
         ret = color_match( ((COLORREF *)data)[i], ((COLORREF *)image)[i] );
-        ok(ret, "%04x: Expected 0x%x, actually 0x%x\n", i, ((COLORREF *)data)[i], ((COLORREF *)image)[i] );
+        ok(ret, "%04x: Expected 0x%lx, actually 0x%lx\n", i, ((COLORREF *)data)[i], ((COLORREF *)image)[i] );
     }
 cleanup:
-    HeapFree( GetProcessHeap(), 0, image );
-    HeapFree( GetProcessHeap(), 0, info );
+    free( image );
+    free( info );
     return ret;
 }
 
@@ -1847,7 +1832,7 @@ static void test_GetCursorFrameInfo(void)
 #define CRSR_RES_SIZE (2*sizeof(INT16) + ICON_RES_SIZE)
 
     /* Set icon data. */
-    hotspot = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, CRSR_RES_SIZE);
+    hotspot = calloc(1, CRSR_RES_SIZE);
 
     /* Cursor resources have an extra hotspot, icon resources not. */
     hotspot[0] = 3;
@@ -1864,19 +1849,19 @@ static void test_GetCursorFrameInfo(void)
     /* Creating a static cursor. */
     SetLastError(0xdeadbeef);
     h1 = CreateIconFromResource((PBYTE) hotspot, CRSR_RES_SIZE, FALSE, 0x00030000);
-    ok(h1 != NULL, "Create cursor failed (error = %d).\n", GetLastError());
+    ok(h1 != NULL, "Create cursor failed (error = %ld).\n", GetLastError());
 
     /* Check GetCursorFrameInfo behavior on a static cursor */
     rate = steps = 0xdead;
     h2 = pGetCursorFrameInfo(h1, 0xdead, 0xdead, &rate, &steps);
     ok(h1 == h2, "GetCursorFrameInfo() failed: (%p != %p).\n", h1, h2);
-    ok(rate == 0, "GetCursorFrameInfo() unexpected param 4 value (0x%x != 0x0).\n", rate);
-    ok(steps == 1, "GetCursorFrameInfo() unexpected param 5 value (%d != 1).\n", steps);
+    ok(rate == 0, "GetCursorFrameInfo() unexpected param 4 value (0x%lx != 0x0).\n", rate);
+    ok(steps == 1, "GetCursorFrameInfo() unexpected param 5 value (%ld != 1).\n", steps);
 
     /* Clean up static cursor. */
     SetLastError(0xdeadbeef);
     ret = DestroyCursor(h1);
-    ok(ret, "DestroyCursor() failed (error = %d).\n", GetLastError());
+    ok(ret, "DestroyCursor() failed (error = %ld).\n", GetLastError());
 
     /* Creating a single-frame animated cursor. */
     empty_anicursor.frames[0].data.icon_info.idType = 2; /* type: cursor */
@@ -1885,7 +1870,7 @@ static void test_GetCursorFrameInfo(void)
     memcpy( &empty_anicursor.frames[0].data.bmi_data.data[0], &frame_identifier[0], sizeof(DWORD) );
     SetLastError(0xdeadbeef);
     h1 = CreateIconFromResource((PBYTE) &empty_anicursor, sizeof(empty_anicursor), FALSE, 0x00030000);
-    ok(h1 != NULL, "Create cursor failed (error = %d).\n", GetLastError());
+    ok(h1 != NULL, "Create cursor failed (error = %ld).\n", GetLastError());
 
     /* Check GetCursorFrameInfo behavior on a single-frame animated cursor */
     rate = steps = 0xdead;
@@ -1893,14 +1878,14 @@ static void test_GetCursorFrameInfo(void)
     ok(h1 == h2, "GetCursorFrameInfo() failed: (%p != %p).\n", h1, h2);
     ret = check_cursor_data( hdc, h2, &frame_identifier[0], sizeof(DWORD) );
     ok(ret, "GetCursorFrameInfo() returned wrong cursor data for frame 0.\n");
-    ok(rate == 0x0, "GetCursorFrameInfo() unexpected param 4 value (0x%x != 0x0).\n", rate);
+    ok(rate == 0x0, "GetCursorFrameInfo() unexpected param 4 value (0x%lx != 0x0).\n", rate);
     ok(steps == empty_anicursor.header.header.num_steps,
-        "GetCursorFrameInfo() unexpected param 5 value (%d != 1).\n", steps);
+        "GetCursorFrameInfo() unexpected param 5 value (%ld != 1).\n", steps);
 
     /* Clean up single-frame animated cursor. */
     SetLastError(0xdeadbeef);
     ret = DestroyCursor(h1);
-    ok(ret, "DestroyCursor() failed (error = %d).\n", GetLastError());
+    ok(ret, "DestroyCursor() failed (error = %ld).\n", GetLastError());
 
     /* Creating a multi-frame animated cursor. */
     for (i=0; i<empty_anicursor3.header.header.num_frames; i++)
@@ -1912,14 +1897,14 @@ static void test_GetCursorFrameInfo(void)
     }
     SetLastError(0xdeadbeef);
     h1 = CreateIconFromResource((PBYTE) &empty_anicursor3, sizeof(empty_anicursor3), FALSE, 0x00030000);
-    ok(h1 != NULL, "Create cursor failed (error = %d).\n", GetLastError());
+    ok(h1 != NULL, "Create cursor failed (error = %ld).\n", GetLastError());
 
     /* Check number of steps in multi-frame animated cursor */
     i=0;
     while (DrawIconEx(hdc, 0, 0, h1, 32, 32, i, NULL, DI_NORMAL))
         i++;
     ok(i == empty_anicursor3.header.header.num_steps,
-        "Unexpected number of steps in cursor (%d != %d)\n",
+        "Unexpected number of steps in cursor (%d != %ld)\n",
         i, empty_anicursor3.header.header.num_steps);
 
     /* Check GetCursorFrameInfo behavior on a multi-frame animated cursor */
@@ -1931,10 +1916,10 @@ static void test_GetCursorFrameInfo(void)
         ret = check_cursor_data( hdc, h2, &frame_identifier[i], sizeof(DWORD) );
         ok(ret, "GetCursorFrameInfo() returned wrong cursor data for frame %d.\n", i);
         ok(rate == empty_anicursor3.header.header.display_rate,
-            "GetCursorFrameInfo() unexpected param 4 value (0x%x != 0x%x).\n",
+            "GetCursorFrameInfo() unexpected param 4 value (0x%lx != 0x%lx).\n",
             rate, empty_anicursor3.header.header.display_rate);
         ok(steps == empty_anicursor3.header.header.num_steps,
-            "GetCursorFrameInfo() unexpected param 5 value (%d != %d).\n",
+            "GetCursorFrameInfo() unexpected param 5 value (%ld != %ld).\n",
             steps, empty_anicursor3.header.header.num_steps);
     }
 
@@ -1942,30 +1927,26 @@ static void test_GetCursorFrameInfo(void)
     rate = steps = 0xdead;
     h2 = pGetCursorFrameInfo(h1, 0xdead, 3, &rate, &steps);
     ok(h2 == 0, "GetCursorFrameInfo() failed for cursor %p: (%p != 0).\n", h1, h2);
-    ok(rate == 0xdead || broken(rate == empty_anicursor3.header.header.display_rate) /*win2k*/
-       || broken(rate == ~0) /*win2k (sporadic)*/,
-        "GetCursorFrameInfo() unexpected param 4 value (0x%x != 0xdead).\n", rate);
-    ok(steps == 0xdead || broken(steps == empty_anicursor3.header.header.num_steps) /*win2k*/
-       || broken(steps == 0) /*win2k (sporadic)*/,
-        "GetCursorFrameInfo() unexpected param 5 value (0x%x != 0xdead).\n", steps);
+    ok(rate == 0xdead, "GetCursorFrameInfo() unexpected param 4 value (0x%lx != 0xdead).\n", rate);
+    ok(steps == 0xdead, "GetCursorFrameInfo() unexpected param 5 value (0x%lx != 0xdead).\n", steps);
 
     /* Clean up multi-frame animated cursor. */
     SetLastError(0xdeadbeef);
     ret = DestroyCursor(h1);
-    ok(ret, "DestroyCursor() failed (error = %d).\n", GetLastError());
+    ok(ret, "DestroyCursor() failed (error = %ld).\n", GetLastError());
 
     /* Create a multi-frame animated cursor with num_steps == 1 */
     empty_anicursor3.header.header.num_steps = 1;
     SetLastError(0xdeadbeef);
     h1 = CreateIconFromResource((PBYTE) &empty_anicursor3, sizeof(empty_anicursor3), FALSE, 0x00030000);
-    ok(h1 != NULL, "Create cursor failed (error = %d).\n", GetLastError());
+    ok(h1 != NULL, "Create cursor failed (error = %ld).\n", GetLastError());
 
     /* Check number of steps in multi-frame animated cursor (mismatch between steps and frames) */
     i=0;
     while (DrawIconEx(hdc, 0, 0, h1, 32, 32, i, NULL, DI_NORMAL))
         i++;
     ok(i == empty_anicursor3.header.header.num_steps,
-        "Unexpected number of steps in cursor (%d != %d)\n",
+        "Unexpected number of steps in cursor (%d != %ld)\n",
         i, empty_anicursor3.header.header.num_steps);
 
     /* Check GetCursorFrameInfo behavior on rate 0 for a multi-frame animated cursor (with num_steps == 1) */
@@ -1975,26 +1956,23 @@ static void test_GetCursorFrameInfo(void)
     ret = check_cursor_data( hdc, h2, &frame_identifier[0], sizeof(DWORD) );
     ok(ret, "GetCursorFrameInfo() returned wrong cursor data for frame 0.\n");
     ok(rate == empty_anicursor3.header.header.display_rate,
-        "GetCursorFrameInfo() unexpected param 4 value (0x%x != 0x%x).\n",
+        "GetCursorFrameInfo() unexpected param 4 value (0x%lx != 0x%lx).\n",
         rate, empty_anicursor3.header.header.display_rate);
-    ok(steps == ~0 || broken(steps == empty_anicursor3.header.header.num_steps) /*win2k*/,
-        "GetCursorFrameInfo() unexpected param 5 value (%d != ~0).\n", steps);
+    todo_wine
+    ok(steps == empty_anicursor3.header.header.num_steps,
+        "GetCursorFrameInfo() unexpected param 5 value (%ld != ~0).\n", steps);
 
     /* Check GetCursorFrameInfo behavior on rate 1 for a multi-frame animated cursor (with num_steps == 1) */
     rate = steps = 0xdead;
     h2 = pGetCursorFrameInfo(h1, 0xdead, 1, &rate, &steps);
     ok(h2 == 0, "GetCursorFrameInfo() failed for cursor %p: (%p != 0).\n", h1, h2);
-    ok(rate == 0xdead || broken(rate == empty_anicursor3.header.header.display_rate) /*win2k*/
-       || broken(rate == ~0) /*win2k (sporadic)*/,
-        "GetCursorFrameInfo() unexpected param 4 value (0x%x != 0xdead).\n", rate);
-    ok(steps == 0xdead || broken(steps == empty_anicursor3.header.header.num_steps) /*win2k*/
-       || broken(steps == 0) /*win2k (sporadic)*/,
-        "GetCursorFrameInfo() unexpected param 5 value (%d != 0xdead).\n", steps);
+    ok(rate == 0xdead, "GetCursorFrameInfo() unexpected param 4 value (0x%lx != 0xdead).\n", rate);
+    ok(steps == 0xdead, "GetCursorFrameInfo() unexpected param 5 value (%ld != 0xdead).\n", steps);
 
     /* Clean up multi-frame animated cursor. */
     SetLastError(0xdeadbeef);
     ret = DestroyCursor(h1);
-    ok(ret, "DestroyCursor() failed (error = %d).\n", GetLastError());
+    ok(ret, "DestroyCursor() failed (error = %ld).\n", GetLastError());
 
     /* Creating a multi-frame animated cursor with rate data. */
     for (i=0; i<empty_anicursor3_seq.header.header.num_frames; i++)
@@ -2006,14 +1984,14 @@ static void test_GetCursorFrameInfo(void)
     }
     SetLastError(0xdeadbeef);
     h1 = CreateIconFromResource((PBYTE) &empty_anicursor3_seq, sizeof(empty_anicursor3_seq), FALSE, 0x00030000);
-    ok(h1 != NULL, "Create cursor failed (error = %x).\n", GetLastError());
+    ok(h1 != NULL, "Create cursor failed (error = %lx).\n", GetLastError());
 
     /* Check number of steps in multi-frame animated cursor with rate data */
     i=0;
     while (DrawIconEx(hdc, 0, 0, h1, 32, 32, i, NULL, DI_NORMAL))
         i++;
     ok(i == empty_anicursor3_seq.header.header.num_steps,
-        "Unexpected number of steps in cursor (%d != %d)\n",
+        "Unexpected number of steps in cursor (%d != %ld)\n",
         i, empty_anicursor3_seq.header.header.num_steps);
 
     /* Check GetCursorFrameInfo behavior on a multi-frame animated cursor with rate data */
@@ -2027,19 +2005,19 @@ static void test_GetCursorFrameInfo(void)
         ret = check_cursor_data( hdc, h2, &frame_identifier[frame_id], sizeof(DWORD) );
         ok(ret, "GetCursorFrameInfo() returned wrong cursor data for frame %d.\n", i);
         ok(rate == empty_anicursor3_seq.rates.rate[i],
-            "GetCursorFrameInfo() unexpected param 4 value (0x%x != 0x%x).\n",
+            "GetCursorFrameInfo() unexpected param 4 value (0x%lx != 0x%lx).\n",
             rate, empty_anicursor3_seq.rates.rate[i]);
         ok(steps == empty_anicursor3_seq.header.header.num_steps,
-            "GetCursorFrameInfo() unexpected param 5 value (%d != %d).\n",
+            "GetCursorFrameInfo() unexpected param 5 value (%ld != %ld).\n",
             steps, empty_anicursor3_seq.header.header.num_steps);
     }
 
     /* Clean up multi-frame animated cursor with rate data. */
     SetLastError(0xdeadbeef);
     ret = DestroyCursor(h1);
-    ok(ret, "DestroyCursor() failed (error = %d).\n", GetLastError());
+    ok(ret, "DestroyCursor() failed (error = %ld).\n", GetLastError());
 
-    HeapFree(GetProcessHeap(), 0, hotspot);
+    free(hotspot);
 cleanup:
     if(bmpOld) SelectObject(hdc, bmpOld);
     if(bmp) DeleteObject(bmp);
@@ -2104,10 +2082,9 @@ static void check_alpha_draw(HDC hdc, BOOL drawiconex, BOOL alpha, int bpp, int 
         DrawIcon(hdc, 0, 0, hicon);
 
     result = GetPixel(hdc, 0, 0);
-    ok (color_match(result, modern_expected) ||         /* Windows 2000 and up */
-        broken(color_match(result, legacy_expected)),   /* Windows NT 4.0, 9X and below */
-        "%s. Expected a close match to %06X (modern) or %06X (legacy) with %s. "
-        "Got %06X from line %d\n",
+    ok (color_match(result, modern_expected),
+        "%s. Expected a close match to %06lX (modern) or %06lX (legacy) with %s. "
+        "Got %06lX from line %d\n",
         alpha ? "Alpha blending" : "Not alpha blending", modern_expected, legacy_expected,
         drawiconex ? "DrawIconEx" : "DrawIcon", result, line);
 }
@@ -2124,25 +2101,23 @@ static void check_DrawIcon(HDC hdc, BOOL maskvalue, UINT32 color, int bpp, COLOR
     DrawIcon(hdc, 0, 0, hicon);
     result = GetPixel(hdc, 0, 0);
 
-    ok (color_match(result, modern_expected) ||         /* Windows 2000 and up */
-        broken(color_match(result, legacy_expected)),   /* Windows NT 4.0, 9X and below */
+    ok (color_match(result, modern_expected),
         "Overlaying Mask %d on Color %06X with DrawIcon. "
-        "Expected a close match to %06X (modern), or %06X (legacy). Got %06X from line %d\n",
+        "Expected a close match to %06lX (modern), or %06lX (legacy). Got %06lX from line %d\n",
         maskvalue, color, modern_expected, legacy_expected, result, line);
 
     result = GetPixel(hdc, GetSystemMetrics(SM_CXICON)-1, GetSystemMetrics(SM_CYICON)-1);
 
-    ok (color_match(result, modern_expected) ||         /* Windows 2000 and up */
-        broken(color_match(result, legacy_expected)),   /* Windows NT 4.0, 9X and below */
+    ok (color_match(result, modern_expected),
         "Overlaying Mask %d on Color %06X with DrawIcon. "
-        "Expected a close match to %06X (modern), or %06X (legacy). Got %06X from line %d\n",
+        "Expected a close match to %06lX (modern), or %06lX (legacy). Got %06lX from line %d\n",
         maskvalue, color, modern_expected, legacy_expected, result, line);
 
     result = GetPixel(hdc, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
 
     ok (color_match(result, background),
         "Overlaying Mask %d on Color %06X with DrawIcon. "
-        "Expected unchanged background color %06X. Got %06X from line %d\n",
+        "Expected unchanged background color %06lX. Got %06lX from line %d\n",
         maskvalue, color, background, result, line);
 }
 
@@ -2223,10 +2198,9 @@ static void check_DrawIconEx(HDC hdc, BOOL maskvalue, UINT32 color, int bpp, UIN
     DrawIconEx(hdc, 0, 0, hicon, 1, 1, 0, NULL, flags);
     result = GetPixel(hdc, 0, 0);
 
-    ok (color_match(result, modern_expected) ||         /* Windows 2000 and up */
-        broken(color_match(result, legacy_expected)),   /* Windows NT 4.0, 9X and below */
+    ok (color_match(result, modern_expected),
         "Overlaying Mask %d on Color %06X with DrawIconEx flags %08X. "
-        "Expected a close match to %06X (modern) or %06X (legacy). Got %06X from line %d\n",
+        "Expected a close match to %06lX (modern) or %06lX (legacy). Got %06lX from line %d\n",
         maskvalue, color, flags, modern_expected, legacy_expected, result, line);
 }
 
@@ -2372,10 +2346,9 @@ static void check_DrawState_Color(HDC hdc, BOOL maskvalue, UINT32 color, int bpp
     /* Check the color of the pixel is correct */
     result = GetPixel(hdc, 1, 1);
 
-    ok (color_match(result, modern_expected) ||         /* Windows 2000 and up */
-        broken(color_match(result, legacy_expected)),   /* Windows NT 4.0, 9X and below */
+    ok (color_match(result, modern_expected),
         "DrawState drawing Icon with Overlaying Mask %d on Color %06X with flags %08X. "
-        "Expected a close match to %06X (modern) or %06X (legacy). Got %06X from line %d\n",
+        "Expected a close match to %06lX (modern) or %06lX (legacy). Got %06lX from line %d\n",
         maskvalue, color, (DST_ICON | flags), modern_expected, legacy_expected, result, line);
 }
 
@@ -2473,7 +2446,7 @@ static void test_SetCursor(void)
     thread = CreateThread( NULL, 0, set_cursor_thread, 0, 0, &id );
     WaitForSingleObject( thread, 1000 );
     GetExitCodeThread( thread, &result );
-    ok( result == (DWORD_PTR)cursor, "wrong thread cursor %x/%p\n", result, cursor );
+    ok( result == (DWORD_PTR)cursor, "wrong thread cursor %lx/%p\n", result, cursor );
 
     hdc = GetDC(0);
     display_bpp = GetDeviceCaps(hdc, BITSPIXEL);
@@ -2494,40 +2467,38 @@ static void test_SetCursor(void)
         info.cbSize = sizeof(info);
         ok( pGetCursorInfo( &info ), "GetCursorInfo failed\n" );
         /* global cursor doesn't change since we don't have a window */
-        ok( info.hCursor == global_cursor || broken(info.hCursor != cursor), /* win9x */
-            "expected global cursor %p\n", global_cursor );
+        ok( info.hCursor == global_cursor, "expected global cursor %p\n", global_cursor );
     }
     thread = CreateThread( NULL, 0, set_cursor_thread, 0, 0, &id );
     WaitForSingleObject( thread, 1000 );
     GetExitCodeThread( thread, &result );
-    ok( result == (DWORD_PTR)old_cursor, "wrong thread cursor %x/%p\n", result, old_cursor );
+    ok( result == (DWORD_PTR)old_cursor, "wrong thread cursor %lx/%p\n", result, old_cursor );
 
     SetCursor( 0 );
     ok( GetCursor() == 0, "wrong cursor %p\n", GetCursor() );
     thread = CreateThread( NULL, 0, set_cursor_thread, 0, 0, &id );
     WaitForSingleObject( thread, 1000 );
     GetExitCodeThread( thread, &result );
-    ok( result == (DWORD_PTR)old_cursor, "wrong thread cursor %x/%p\n", result, old_cursor );
+    ok( result == (DWORD_PTR)old_cursor, "wrong thread cursor %lx/%p\n", result, old_cursor );
 
     thread = CreateThread( NULL, 0, set_cursor_thread, cursor, 0, &id );
     WaitForSingleObject( thread, 1000 );
     GetExitCodeThread( thread, &result );
-    ok( result == (DWORD_PTR)old_cursor, "wrong thread cursor %x/%p\n", result, old_cursor );
+    ok( result == (DWORD_PTR)old_cursor, "wrong thread cursor %lx/%p\n", result, old_cursor );
     ok( GetCursor() == 0, "wrong cursor %p/0\n", GetCursor() );
 
     parent_id = GetCurrentThreadId();
     thread = CreateThread( NULL, 0, set_cursor_thread, cursor, 0, &id );
     WaitForSingleObject( thread, 1000 );
     GetExitCodeThread( thread, &result );
-    ok( result == (DWORD_PTR)old_cursor, "wrong thread cursor %x/%p\n", result, old_cursor );
+    ok( result == (DWORD_PTR)old_cursor, "wrong thread cursor %lx/%p\n", result, old_cursor );
     ok( GetCursor() == cursor, "wrong cursor %p/0\n", cursor );
 
     if (pGetCursorInfo)
     {
         info.cbSize = sizeof(info);
         ok( pGetCursorInfo( &info ), "GetCursorInfo failed\n" );
-        ok( info.hCursor == global_cursor || broken(info.hCursor != cursor), /* win9x */
-            "expected global cursor %p\n", global_cursor );
+        ok( info.hCursor == global_cursor, "expected global cursor %p\n", global_cursor );
     }
     SetCursor( old_cursor );
     DestroyCursor( cursor );
@@ -2536,15 +2507,13 @@ static void test_SetCursor(void)
     cursor = SetCursor( (HCURSOR)0xbadbad );
     error = GetLastError();
     ok( cursor == 0, "wrong cursor %p/0\n", cursor );
-    ok( error == ERROR_INVALID_CURSOR_HANDLE || broken( error == 0xdeadbeef ),  /* win9x */
-        "wrong error %u\n", error );
+    ok( error == ERROR_INVALID_CURSOR_HANDLE, "wrong error %lu\n", error );
 
     if (pGetCursorInfo)
     {
         info.cbSize = sizeof(info);
         ok( pGetCursorInfo( &info ), "GetCursorInfo failed\n" );
-        ok( info.hCursor == global_cursor || broken(info.hCursor != cursor), /* win9x */
-            "expected global cursor %p\n", global_cursor );
+        ok( info.hCursor == global_cursor, "expected global cursor %p\n", global_cursor );
     }
 }
 
@@ -2615,7 +2584,7 @@ static void test_ShowCursor(void)
     SetEvent( event_next );
     WaitForSingleObject( thread, 1000 );
     GetExitCodeThread( thread, &result );
-    ok( result == -1, "wrong thread count %d\n", result );
+    ok( result == -1, "wrong thread count %ld\n", result );
     count = ShowCursor( FALSE );
     ok( count == -4, "wrong count %d\n", count );
 
@@ -2626,7 +2595,7 @@ static void test_ShowCursor(void)
     SetEvent( event_next );
     WaitForSingleObject( thread, 1000 );
     GetExitCodeThread( thread, &result );
-    ok( result == 1, "wrong thread count %d\n", result );
+    ok( result == 1, "wrong thread count %ld\n", result );
     count = ShowCursor( TRUE );
     ok( count == -2, "wrong count %d\n", count );
 
@@ -2638,7 +2607,7 @@ static void test_ShowCursor(void)
     SetEvent( event_next );
     WaitForSingleObject( thread, 1000 );
     GetExitCodeThread( thread, &result );
-    ok( result == -3, "wrong thread count %d\n", result );
+    ok( result == -3, "wrong thread count %ld\n", result );
     count = ShowCursor( FALSE );
     ok( count == -2, "wrong count %d\n", count );
 
@@ -2649,7 +2618,7 @@ static void test_ShowCursor(void)
     SetEvent( event_next );
     WaitForSingleObject( thread, 1000 );
     GetExitCodeThread( thread, &result );
-    ok( result == 1, "wrong thread count %d\n", result );
+    ok( result == 1, "wrong thread count %ld\n", result );
     count = ShowCursor( FALSE );
     ok( count == -2, "wrong count %d\n", count );
 
@@ -2703,22 +2672,17 @@ static void test_DestroyCursor(void)
 
     SetLastError(0xdeadbeef);
     ret = DestroyCursor(cursor);
-    ok(!ret || broken(ret)  /* succeeds on win9x */, "DestroyCursor on the active cursor succeeded\n");
+    ok(!ret, "DestroyCursor on the active cursor succeeded\n");
     error = GetLastError();
-    ok(error == 0xdeadbeef, "Last error: %u\n", error);
+    ok(error == 0xdeadbeef, "Last error: %lu\n", error);
 
     new_cursor = GetCursor();
-    if (ret)  /* win9x replaces cursor by another one on destroy */
-        ok(new_cursor != cursor, "GetCursor returned %p/%p\n", new_cursor, cursor);
-    else
-        ok(new_cursor == cursor, "GetCursor returned %p/%p\n", new_cursor, cursor);
+    ok(new_cursor == cursor, "GetCursor returned %p/%p\n", new_cursor, cursor);
 
     SetLastError(0xdeadbeef);
     ret = GetIconInfo( cursor, &new_info );
-    ok( !ret || broken(ret), /* nt4 */ "GetIconInfo succeeded\n" );
-    ok( GetLastError() == ERROR_INVALID_CURSOR_HANDLE ||
-        broken(GetLastError() == 0xdeadbeef), /* win9x */
-        "wrong error %u\n", GetLastError() );
+    ok( !ret, "GetIconInfo succeeded\n" );
+    ok( GetLastError() == ERROR_INVALID_CURSOR_HANDLE, "wrong error %lu\n", GetLastError() );
 
     if (ret)  /* nt4 delays destruction until cursor changes */
     {
@@ -2729,37 +2693,32 @@ static void test_DestroyCursor(void)
         ret = DestroyCursor( cursor );
         ok( !ret, "DestroyCursor succeeded\n" );
         ok( GetLastError() == ERROR_INVALID_CURSOR_HANDLE || GetLastError() == 0xdeadbeef,
-            "wrong error %u\n", GetLastError() );
+            "wrong error %lu\n", GetLastError() );
 
         SetLastError(0xdeadbeef);
         cursor2 = SetCursor( cursor );
         ok( cursor2 == cursor, "SetCursor returned %p/%p\n", cursor2, cursor);
         ok( GetLastError() == ERROR_INVALID_CURSOR_HANDLE || GetLastError() == 0xdeadbeef,
-            "wrong error %u\n", GetLastError() );
+            "wrong error %lu\n", GetLastError() );
     }
     else
     {
         SetLastError(0xdeadbeef);
         cursor2 = CopyCursor( cursor );
         ok(!cursor2, "CopyCursor succeeded\n" );
-        ok( GetLastError() == ERROR_INVALID_CURSOR_HANDLE ||
-            broken(GetLastError() == 0xdeadbeef), /* win9x */
-            "wrong error %u\n", GetLastError() );
+        ok( GetLastError() == ERROR_INVALID_CURSOR_HANDLE, "wrong error %lu\n", GetLastError() );
 
         SetLastError(0xdeadbeef);
         ret = DestroyCursor( cursor );
-        if (new_cursor != cursor)  /* win9x */
-            ok( ret, "DestroyCursor succeeded\n" );
-        else
-            ok( !ret, "DestroyCursor succeeded\n" );
+        ok( !ret, "DestroyCursor succeeded\n" );
         ok( GetLastError() == ERROR_INVALID_CURSOR_HANDLE || GetLastError() == 0xdeadbeef,
-            "wrong error %u\n", GetLastError() );
+            "wrong error %lu\n", GetLastError() );
 
         SetLastError(0xdeadbeef);
         cursor2 = SetCursor( cursor );
         ok(!cursor2, "SetCursor returned %p/%p\n", cursor2, cursor);
         ok( GetLastError() == ERROR_INVALID_CURSOR_HANDLE || GetLastError() == 0xdeadbeef,
-            "wrong error %u\n", GetLastError() );
+            "wrong error %lu\n", GetLastError() );
     }
 
     cursor2 = GetCursor();
@@ -2767,23 +2726,17 @@ static void test_DestroyCursor(void)
 
     SetLastError(0xdeadbeef);
     cursor2 = SetCursor( 0 );
-    if (new_cursor != cursor)  /* win9x */
-        ok(cursor2 == new_cursor, "SetCursor returned %p/%p\n", cursor2, cursor);
-    else
-        ok(!cursor2, "SetCursor returned %p/%p\n", cursor2, cursor);
-    ok( GetLastError() == 0xdeadbeef, "wrong error %u\n", GetLastError() );
+    ok( cursor2 != new_cursor, "SetCursor returned %p/%p\n", cursor2, cursor );
+    ok( GetLastError() == 0xdeadbeef, "wrong error %lu\n", GetLastError() );
 
     cursor2 = GetCursor();
     ok(!cursor2, "GetCursor returned %p/%p\n", cursor2, cursor);
 
     SetLastError(0xdeadbeef);
     ret = DestroyCursor(cursor);
-    if (new_cursor != cursor)  /* win9x */
-        ok( ret, "DestroyCursor succeeded\n" );
-    else
-        ok( !ret, "DestroyCursor succeeded\n" );
+    ok( !ret, "DestroyCursor succeeded\n" );
     ok( GetLastError() == ERROR_INVALID_CURSOR_HANDLE || GetLastError() == 0xdeadbeef,
-        "wrong error %u\n", GetLastError() );
+        "wrong error %lu\n", GetLastError() );
 
     DeleteObject(cursorInfo.hbmMask);
     DeleteObject(cursorInfo.hbmColor);
@@ -2793,15 +2746,15 @@ static void test_DestroyCursor(void)
 
     SetLastError(0xdeadbeef);
     ret = DestroyCursor(cursor);
-    ok(ret || broken(!ret) /* fails on win9x */, "DestroyCursor on the active cursor failed.\n");
+    ok(ret, "DestroyCursor on the active cursor failed.\n");
     error = GetLastError();
-    ok(error == 0xdeadbeef, "Last error: 0x%08x\n", error);
+    ok(error == 0xdeadbeef, "Last error: 0x%08lx\n", error);
 
     /* Try setting the cursor to a destroyed OEM cursor. */
     SetLastError(0xdeadbeef);
     SetCursor(cursor);
     error = GetLastError();
-    ok(error == 0xdeadbeef, "Last error: 0x%08x\n", error);
+    ok(error == 0xdeadbeef, "Last error: 0x%08lx\n", error);
 
     /* Check if LoadCursor() returns the same handle with the same icon. */
     cursor2 = LoadCursorA(NULL, (LPCSTR)IDC_ARROW);
@@ -2844,8 +2797,8 @@ static void test_monochrome_icon(void)
     ULONG icon_size;
     BOOL monochrome, use_core_info;
 
-    icon_data = HeapAlloc(GetProcessHeap(), 0, sizeof(CURSORICONFILEDIR) + sizeof(BITMAPINFOHEADER) +
-                                               2 * sizeof(RGBQUAD) + sizeof(ULONG));
+    icon_data = malloc(sizeof(CURSORICONFILEDIR) + sizeof(BITMAPINFOHEADER) +
+                       2 * sizeof(RGBQUAD) + sizeof(ULONG));
 
     for (monochrome = FALSE; monochrome <= TRUE; monochrome++)
     for (use_core_info = FALSE; use_core_info <= TRUE; use_core_info++)
@@ -2908,15 +2861,14 @@ static void test_monochrome_icon(void)
 
         handle = CreateFileA("icon.ico", GENERIC_WRITE, 0, NULL, CREATE_NEW,
             FILE_ATTRIBUTE_NORMAL, NULL);
-        ok(handle != INVALID_HANDLE_VALUE, "CreateFileA failed. %u\n", GetLastError());
+        ok(handle != INVALID_HANDLE_VALUE, "CreateFileA failed. %lu\n", GetLastError());
         ret = WriteFile(handle, icon_data, icon_size, &bytes_written, NULL);
         ok(ret && bytes_written == icon_size, "icon.ico created improperly.\n");
         CloseHandle(handle);
 
         handle = LoadImageA(NULL, "icon.ico", IMAGE_ICON, 0, 0, LR_LOADFROMFILE);
-        ok(handle != NULL ||
-           broken(use_core_info && handle == NULL), /* Win 8, 10 */
-           "LoadImage() failed with %u.\n", GetLastError());
+        if (!monochrome && !use_core_info) ok(handle != NULL, "LoadImage() failed with %lu.\n", GetLastError());
+        else todo_wine ok(handle == NULL || broken(!use_core_info) /* Win7 */, "LoadImage() failed with %lu.\n", GetLastError());
         if (handle == NULL)
         {
             skip("Icon failed to load: %s, %s\n",
@@ -2927,12 +2879,12 @@ static void test_monochrome_icon(void)
         }
 
         ret = GetIconInfo(handle, &icon_info);
-        ok(ret, "GetIconInfo() failed with %u.\n", GetLastError());
+        ok(ret, "GetIconInfo() failed with %lu.\n", GetLastError());
         if (ret)
         {
             ok(icon_info.fIcon == TRUE, "fIcon is %u.\n", icon_info.fIcon);
-            ok(icon_info.xHotspot == 0, "xHotspot is %u.\n", icon_info.xHotspot);
-            ok(icon_info.yHotspot == 0, "yHotspot is %u.\n", icon_info.yHotspot);
+            ok(icon_info.xHotspot == 0, "xHotspot is %lu.\n", icon_info.xHotspot);
+            ok(icon_info.yHotspot == 0, "yHotspot is %lu.\n", icon_info.yHotspot);
             if (monochrome)
                 ok(icon_info.hbmColor == NULL, "Got hbmColor %p!\n", icon_info.hbmColor);
             else
@@ -2941,11 +2893,11 @@ static void test_monochrome_icon(void)
         }
 
         ret = DestroyIcon(handle);
-        ok(ret, "DestroyIcon() failed with %u.\n", GetLastError());
+        ok(ret, "DestroyIcon() failed with %lu.\n", GetLastError());
         DeleteFileA("icon.ico");
     }
 
-    HeapFree(GetProcessHeap(), 0, icon_data);
+    free(icon_data);
 }
 
 static COLORREF get_color_from_bits(const unsigned char *bits, const BITMAPINFO *bmi,
@@ -2983,10 +2935,10 @@ static void compare_bitmap_bits_(unsigned int line, HDC hdc, HBITMAP bitmap, BIT
     unsigned int row, column;
     int ret;
 
-    result_bits = HeapAlloc(GetProcessHeap(), 0, result_bits_size);
+    result_bits = malloc(result_bits_size);
     ret = GetDIBits(hdc, bitmap, 0, bmi->bmiHeader.biHeight,
             result_bits, bmi, DIB_RGB_COLORS);
-    ok(ret == bmi->bmiHeader.biHeight, "Unexpected GetDIBits result %d, GetLastError() %u.\n",
+    ok(ret == bmi->bmiHeader.biHeight, "Unexpected GetDIBits result %d, GetLastError() %lu.\n",
             ret, GetLastError());
     for (row = 0; row < bmi->bmiHeader.biHeight; ++row)
         for (column = 0; column < bmi->bmiHeader.biWidth; ++column)
@@ -2999,10 +2951,10 @@ static void compare_bitmap_bits_(unsigned int line, HDC hdc, HBITMAP bitmap, BIT
             todo_wine_if(allow_todo && result != expected)
             ok_(__FILE__, line)(result == expected || broken(expected_broken_bits
                     && result == get_color_from_bits(expected_broken_bits, bmi, row, column)),
-                    "Colors do not match, got 0x%06x, expected 0x%06x, test_index %u, row %u, column %u.\n",
+                    "Colors do not match, got 0x%06lx, expected 0x%06lx, test_index %u, row %u, column %u.\n",
                     result, expected, test_index, row, column);
         }
-    HeapFree(GetProcessHeap(), 0, result_bits);
+    free(result_bits);
 }
 
 static void test_Image_StretchMode(void)
@@ -3104,8 +3056,8 @@ static void test_Image_StretchMode(void)
     HDC hdc;
 
     bmi_size = sizeof(BITMAPINFOHEADER) + 256 * sizeof(RGBQUAD);
-    bmi = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bmi_size);
-    bmi_output = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bmi_size);
+    bmi = calloc(1, bmi_size);
+    bmi_output = calloc(1, bmi_size);
     bmi->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bmi->bmiHeader.biPlanes = 1;
     bmi->bmiHeader.biCompression = BI_RGB;
@@ -3130,12 +3082,12 @@ static void test_Image_StretchMode(void)
         bmi_output->bmiHeader.biHeight = tests[test_index].output_height;
 
         bitmap = CreateDIBSection(hdc, bmi, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
-        ok(bitmap && bits, "CreateDIBSection() failed, result %u.\n", GetLastError());
+        ok(bitmap && bits, "CreateDIBSection() failed, result %lu.\n", GetLastError());
         memcpy(bits, tests[test_index].test_bits, tests[test_index].test_bits_size);
 
         bitmap_copy = CopyImage(bitmap, IMAGE_BITMAP, tests[test_index].output_width,
                 tests[test_index].output_height, LR_CREATEDIBSECTION);
-        ok(!!bitmap_copy, "CopyImage() failed, result %u.\n", GetLastError());
+        ok(!!bitmap_copy, "CopyImage() failed, result %lu.\n", GetLastError());
 
         compare_bitmap_bits(hdc, bitmap_copy, bmi_output, tests[test_index].result_bits_size,
                 tests[test_index].expected_bits, test_index, tests[test_index].allow_todo,
@@ -3146,7 +3098,7 @@ static void test_Image_StretchMode(void)
         create_bitmap_file(filename, bmi, tests[test_index].test_bits);
         bitmap = LoadImageA(NULL, filename, IMAGE_BITMAP, tests[test_index].output_width,
                 tests[test_index].output_height, LR_CREATEDIBSECTION | LR_LOADFROMFILE);
-        ok(!!bitmap, "LoadImageA() failed, result %u.\n", GetLastError());
+        ok(!!bitmap, "LoadImageA() failed, result %lu.\n", GetLastError());
         DeleteFileA(filename);
         compare_bitmap_bits(hdc, bitmap, bmi_output, tests[test_index].result_bits_size,
                 tests[test_index].expected_bits, test_index, tests[test_index].allow_todo,
@@ -3154,8 +3106,8 @@ static void test_Image_StretchMode(void)
         DeleteObject(bitmap);
     }
     ReleaseDC(0, hdc);
-    HeapFree(GetProcessHeap(), 0, bmi_output);
-    HeapFree(GetProcessHeap(), 0, bmi);
+    free(bmi_output);
+    free(bmi);
 }
 
 static void test_copy_image(void)

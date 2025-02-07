@@ -27,6 +27,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <commdlg.h>
+#include <commctrl.h>
 #include <shlwapi.h>
 #include <winternl.h>
 
@@ -35,8 +36,6 @@
 
 #define SPACES_IN_TAB 8
 #define PRINT_LEN_MAX 500
-
-static const WCHAR helpfileW[] = { 'n','o','t','e','p','a','d','.','h','l','p',0 };
 
 static INT_PTR WINAPI DIALOG_PAGESETUP_DlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -101,9 +100,8 @@ VOID ShowLastError(void)
  */
 void UpdateWindowCaption(void)
 {
-  static const WCHAR hyphenW[] = { ' ','-',' ',0 };
   WCHAR szNotepad[64];
-  WCHAR szCaption[ARRAY_SIZE(Globals.szFileTitle) + ARRAY_SIZE(hyphenW) + ARRAY_SIZE(szNotepad)];
+  WCHAR szCaption[ARRAY_SIZE(Globals.szFileTitle) + ARRAY_SIZE(L" - ") + ARRAY_SIZE(szNotepad)];
 
   if (Globals.szFileTitle[0] != '\0')
       lstrcpyW(szCaption, Globals.szFileTitle);
@@ -111,7 +109,7 @@ void UpdateWindowCaption(void)
       LoadStringW(Globals.hInstance, STRING_UNTITLED, szCaption, ARRAY_SIZE(szCaption));
 
   LoadStringW(Globals.hInstance, STRING_NOTEPAD, szNotepad, ARRAY_SIZE(szNotepad));
-  lstrcatW(szCaption, hyphenW);
+  lstrcatW(szCaption, L" - ");
   lstrcatW(szCaption, szNotepad);
 
   SetWindowTextW(Globals.hMainWnd, szCaption);
@@ -168,7 +166,7 @@ static int AlertUnicodeCharactersLost(LPCWSTR szFileName)
     load_encoding_name(ENCODING_ANSI, szEnc, ARRAY_SIZE(szEnc));
     args[0] = (DWORD_PTR)szFileName;
     args[1] = (DWORD_PTR)szEnc;
-    FormatMessageW(FORMAT_MESSAGE_FROM_STRING|FORMAT_MESSAGE_ALLOCATE_BUFFER|FORMAT_MESSAGE_ARGUMENT_ARRAY, szMsgFormat, 0, 0, (LPWSTR)&szMsg, 0, (__ms_va_list*)args);
+    FormatMessageW(FORMAT_MESSAGE_FROM_STRING|FORMAT_MESSAGE_ALLOCATE_BUFFER|FORMAT_MESSAGE_ARGUMENT_ARRAY, szMsgFormat, 0, 0, (LPWSTR)&szMsg, 0, (va_list *)args);
     rc = MessageBoxW(Globals.hMainWnd, szMsg, szCaption,
                      MB_OKCANCEL|MB_ICONEXCLAMATION);
     LocalFree(szMsg);
@@ -310,7 +308,6 @@ static SAVE_STATUS DoSaveFile(LPCWSTR szFileName, ENCODING enc)
 BOOL DoCloseFile(void)
 {
     int nResult;
-    static const WCHAR empty_strW[] = { 0 };
 
     nResult=GetWindowTextLengthW(Globals.hEdit);
     if (SendMessageW(Globals.hEdit, EM_GETMODIFY, 0, 0) &&
@@ -329,7 +326,7 @@ BOOL DoCloseFile(void)
         } /* switch */
     } /* if */
 
-    SetFileNameAndEncoding(empty_strW, ENCODING_ANSI);
+    SetFileNameAndEncoding(L"", ENCODING_ANSI);
 
     UpdateWindowCaption();
     return(TRUE);
@@ -357,7 +354,6 @@ static inline ENCODING detect_encoding_of_buffer(const void* buffer, int size)
 
 void DoOpenFile(LPCWSTR szFileName, ENCODING enc)
 {
-    static const WCHAR dotlog[] = { '.','L','O','G',0 };
     HANDLE hFile;
     LPSTR pTemp;
     DWORD size;
@@ -472,13 +468,12 @@ void DoOpenFile(LPCWSTR szFileName, ENCODING enc)
     SetFocus(Globals.hEdit);
     
     /*  If the file starts with .LOG, add a time/date at the end and set cursor after */
-    if (GetWindowTextW(Globals.hEdit, log, ARRAY_SIZE(log)) && !lstrcmpW(log, dotlog))
+    if (GetWindowTextW(Globals.hEdit, log, ARRAY_SIZE(log)) && !lstrcmpW(log, L".LOG"))
     {
-	static const WCHAR lfW[] = { '\r','\n',0 };
         SendMessageW(Globals.hEdit, EM_SETSEL, GetWindowTextLengthW(Globals.hEdit), -1);
-        SendMessageW(Globals.hEdit, EM_REPLACESEL, TRUE, (LPARAM)lfW);
+        SendMessageW(Globals.hEdit, EM_REPLACESEL, TRUE, (LPARAM)L"\r\n");
 	DIALOG_EditTimeDate();
-        SendMessageW(Globals.hEdit, EM_REPLACESEL, TRUE, (LPARAM)lfW);
+        SendMessageW(Globals.hEdit, EM_REPLACESEL, TRUE, (LPARAM)L"\r\n");
     }
 
     SetFileNameAndEncoding(szFileName, enc);
@@ -487,11 +482,9 @@ void DoOpenFile(LPCWSTR szFileName, ENCODING enc)
 
 VOID DIALOG_FileNew(VOID)
 {
-    static const WCHAR empty_strW[] = { 0 };
-
     /* Close any files and prompt to save changes */
     if (DoCloseFile()) {
-        SetWindowTextW(Globals.hEdit, empty_strW);
+        SetWindowTextW(Globals.hEdit, L"");
         SendMessageW(Globals.hEdit, EM_EMPTYUNDOBUFFER, 0, 0);
         SetFocus(Globals.hEdit);
     }
@@ -530,8 +523,7 @@ static ENCODING detect_encoding_of_file(LPCWSTR szFileName)
 static LPWSTR dialog_print_to_file(HWND hMainWnd)
 {
     OPENFILENAMEW ofn;
-    static WCHAR file[MAX_PATH] = {'o','u','t','p','u','t','.','p','r','n',0};
-    static const WCHAR defExt[] = {'p','r','n',0};
+    static WCHAR file[MAX_PATH] = L"output.prn";
 
     ZeroMemory(&ofn, sizeof(ofn));
 
@@ -540,7 +532,7 @@ static LPWSTR dialog_print_to_file(HWND hMainWnd)
     ofn.hwndOwner = hMainWnd;
     ofn.lpstrFile = file;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrDefExt = defExt;
+    ofn.lpstrDefExt = L"prn";
 
     if(GetSaveFileNameW(&ofn))
         return file;
@@ -612,12 +604,10 @@ VOID DIALOG_FileOpen(VOID)
 {
     OPENFILENAMEW openfilename;
     WCHAR szPath[MAX_PATH];
-    static const WCHAR szDefaultExt[] = { 't','x','t',0 };
-    static const WCHAR txt_files[] = { '*','.','t','x','t',0 };
 
     ZeroMemory(&openfilename, sizeof(openfilename));
 
-    lstrcpyW(szPath, txt_files);
+    lstrcpyW(szPath, L"*.txt");
 
     openfilename.lStructSize       = sizeof(openfilename);
     openfilename.hwndOwner         = Globals.hMainWnd;
@@ -630,7 +620,7 @@ VOID DIALOG_FileOpen(VOID)
                          OFN_HIDEREADONLY | OFN_ENABLESIZING;
     openfilename.lpfnHook          = OfnHookProc;
     openfilename.lpTemplateName    = MAKEINTRESOURCEW(IDD_OFN_TEMPLATE);
-    openfilename.lpstrDefExt       = szDefaultExt;
+    openfilename.lpstrDefExt       = L"txt";
 
     Globals.encOfnCombo = ENCODING_ANSI;
     Globals.bOfnIsOpenDialog = TRUE;
@@ -659,12 +649,10 @@ BOOL DIALOG_FileSaveAs(VOID)
 {
     OPENFILENAMEW saveas;
     WCHAR szPath[MAX_PATH];
-    static const WCHAR szDefaultExt[] = { 't','x','t',0 };
-    static const WCHAR txt_files[] = { '*','.','t','x','t',0 };
 
     ZeroMemory(&saveas, sizeof(saveas));
 
-    lstrcpyW(szPath, txt_files);
+    lstrcpyW(szPath, L"*.txt");
 
     saveas.lStructSize       = sizeof(OPENFILENAMEW);
     saveas.hwndOwner         = Globals.hMainWnd;
@@ -677,7 +665,7 @@ BOOL DIALOG_FileSaveAs(VOID)
                             OFN_HIDEREADONLY | OFN_ENABLESIZING;
     saveas.lpfnHook          = OfnHookProc;
     saveas.lpTemplateName    = MAKEINTRESOURCEW(IDD_OFN_TEMPLATE);
-    saveas.lpstrDefExt       = szDefaultExt;
+    saveas.lpstrDefExt       = L"txt";
 
     /* Preset encoding to what file was opened/saved last with. */
     Globals.encOfnCombo = Globals.encFile;
@@ -761,10 +749,7 @@ static WCHAR *expand_header_vars(WCHAR *pattern, int page)
                 if (pattern[i] == '&')
                     buffer[j++] = '&';
                 else if (pattern[i] == 'p')
-                {
-                    static const WCHAR percent_dW[] = {'%','d',0};
-                    j += wnsprintfW(&buffer[j], 11, percent_dW, page);
-                }
+                    j += wnsprintfW(&buffer[j], 11, L"%d", page);
                 inside = FALSE;
             }
             else if (pattern[i] == '&')
@@ -792,9 +777,7 @@ static BOOL notepad_print_page(HDC hdc, RECT *rc, BOOL dopage, int page, LPTEXTI
     {
         if (StartPage(hdc) <= 0)
         {
-            static const WCHAR failedW[] = { 'S','t','a','r','t','P','a','g','e',' ','f','a','i','l','e','d',0 };
-            static const WCHAR errorW[] = { 'P','r','i','n','t',' ','E','r','r','o','r',0 };
-            MessageBoxW(Globals.hMainWnd, failedW, errorW, MB_ICONEXCLAMATION);
+            MessageBoxW(Globals.hMainWnd, L"StartPage failed", L"Print Error", MB_ICONEXCLAMATION);
             HeapFree(GetProcessHeap(), 0, footer_text);
             return FALSE;
         }
@@ -957,7 +940,7 @@ VOID DIALOG_FilePrint(VOID)
 
         /* Create a font for the printer resolution */
         lfFont = Globals.lfFont;
-        lfFont.lfHeight = MulDiv(lfFont.lfHeight, GetDeviceCaps(printer.hDC, LOGPIXELSY), get_dpi());
+        lfFont.lfHeight = MulDiv(lfFont.lfHeight, GetDeviceCaps(printer.hDC, LOGPIXELSY), GetDpiForWindow(Globals.hMainWnd));
         /* Make the font a bit lighter */
         lfFont.lfWeight -= 100;
         hTextFont = CreateFontIndirectW(&lfFont);
@@ -1060,14 +1043,13 @@ VOID DIALOG_EditTimeDate(VOID)
 {
     SYSTEMTIME   st;
     WCHAR        szDate[MAX_STRING_LEN];
-    static const WCHAR spaceW[] = { ' ',0 };
 
     GetLocalTime(&st);
 
     GetTimeFormatW(LOCALE_USER_DEFAULT, TIME_NOSECONDS, &st, NULL, szDate, MAX_STRING_LEN);
     SendMessageW(Globals.hEdit, EM_REPLACESEL, TRUE, (LPARAM)szDate);
 
-    SendMessageW(Globals.hEdit, EM_REPLACESEL, TRUE, (LPARAM)spaceW);
+    SendMessageW(Globals.hEdit, EM_REPLACESEL, TRUE, (LPARAM)L" ");
 
     GetDateFormatW(LOCALE_USER_DEFAULT, 0, &st, NULL, szDate, MAX_STRING_LEN);
     SendMessageW(Globals.hEdit, EM_REPLACESEL, TRUE, (LPARAM)szDate);
@@ -1076,7 +1058,6 @@ VOID DIALOG_EditTimeDate(VOID)
 VOID DIALOG_EditWrap(VOID)
 {
     BOOL modify = FALSE;
-    static const WCHAR editW[] = { 'e','d','i','t',0 };
     DWORD dwStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL |
                     ES_AUTOVSCROLL | ES_MULTILINE;
     RECT rc;
@@ -1095,7 +1076,7 @@ VOID DIALOG_EditWrap(VOID)
     DestroyWindow(Globals.hEdit);
     GetClientRect(Globals.hMainWnd, &rc);
     if( Globals.bWrapLongLines ) dwStyle |= WS_HSCROLL | ES_AUTOHSCROLL;
-    Globals.hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, editW, NULL, dwStyle,
+    Globals.hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"edit", NULL, dwStyle,
                          0, 0, rc.right, rc.bottom, Globals.hMainWnd,
                          NULL, Globals.hInstance, NULL);
     SendMessageW(Globals.hEdit, WM_SETFONT, (WPARAM)Globals.hFont, FALSE);
@@ -1107,6 +1088,8 @@ VOID DIALOG_EditWrap(VOID)
     Globals.bWrapLongLines = !Globals.bWrapLongLines;
     CheckMenuItem(GetMenu(Globals.hMainWnd), CMD_WRAP,
         MF_BYCOMMAND | (Globals.bWrapLongLines ? MF_CHECKED : MF_UNCHECKED));
+    SetWindowSubclass(Globals.hEdit, EDIT_CallBackProc, 0, 0);
+    updateWindowSize(rc.right, rc.bottom);
 }
 
 VOID DIALOG_SelectFont(VOID)
@@ -1192,18 +1175,17 @@ VOID DIALOG_Replace(VOID)
 
 VOID DIALOG_HelpContents(VOID)
 {
-    WinHelpW(Globals.hMainWnd, helpfileW, HELP_INDEX, 0);
+    WinHelpW(Globals.hMainWnd, L"notepad.hlp", HELP_INDEX, 0);
 }
 
 VOID DIALOG_HelpAboutNotepad(VOID)
 {
-    static const WCHAR notepadW[] = { 'W','i','n','e',' ','N','o','t','e','p','a','d',0 };
     WCHAR szNotepad[MAX_STRING_LEN];
     HICON icon = LoadImageW(Globals.hInstance, MAKEINTRESOURCEW(IDI_NOTEPAD),
                             IMAGE_ICON, 48, 48, LR_SHARED);
 
     LoadStringW(Globals.hInstance, STRING_NOTEPAD, szNotepad, ARRAY_SIZE(szNotepad));
-    ShellAboutW(Globals.hMainWnd, szNotepad, notepadW, icon);
+    ShellAboutW(Globals.hMainWnd, szNotepad, L"Wine Notepad", icon);
 }
 
 
@@ -1251,9 +1233,7 @@ static INT_PTR WINAPI DIALOG_PAGESETUP_DlgProc(HWND hDlg, UINT msg, WPARAM wPara
         case IDHELP:
         {
           /* FIXME: Bring this to work */
-          static const WCHAR sorryW[] = { 'S','o','r','r','y',',',' ','n','o',' ','h','e','l','p',' ','a','v','a','i','l','a','b','l','e',0 };
-          static const WCHAR helpW[] = { 'H','e','l','p',0 };
-          MessageBoxW(Globals.hMainWnd, sorryW, helpW, MB_ICONEXCLAMATION);
+          MessageBoxW(Globals.hMainWnd, L"Sorry, no help available", L"Help", MB_ICONEXCLAMATION);
           return TRUE;
         }
 
@@ -1274,4 +1254,50 @@ static INT_PTR WINAPI DIALOG_PAGESETUP_DlgProc(HWND hDlg, UINT msg, WPARAM wPara
     }
 
   return FALSE;
+}
+
+static INT_PTR WINAPI DIALOG_GOTO_DlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch(msg)
+    {
+        case WM_COMMAND:
+        {
+            switch (wParam)
+            {
+                case IDOK:
+                {
+                    int lineValue = GetDlgItemInt(hDlg, IDC_GOTO_LINEVALUE, NULL, FALSE) - 1;
+                    long lineIndex = SendMessageW(Globals.hEdit, EM_LINEINDEX, lineValue, 0);
+
+                    SendMessageW(Globals.hEdit, EM_SETSEL, lineIndex, lineIndex);
+                    UpdateStatusBar();
+                    EndDialog(hDlg, IDOK);
+                    return TRUE;
+                }
+                case IDCANCEL:
+                {
+                    EndDialog(hDlg, IDCANCEL);
+                    return TRUE;
+                }
+                default:
+                {
+                    break;
+                }
+            }
+            break;
+        }
+        case WM_INITDIALOG:
+        {
+            int currentLine = SendMessageW(Globals.hEdit, EM_LINEFROMCHAR, -1, 0) + 1;
+            SetDlgItemInt(hDlg, IDC_GOTO_LINEVALUE, currentLine, FALSE);
+            break;
+        }
+    }
+    return FALSE;
+}
+
+void DIALOG_EditGoTo(void)
+{
+    DialogBoxW(Globals.hInstance, MAKEINTRESOURCEW(DIALOG_GOTO),
+               Globals.hMainWnd, DIALOG_GOTO_DlgProc);
 }

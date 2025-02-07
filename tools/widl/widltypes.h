@@ -22,6 +22,7 @@
 #define __WIDL_WIDLTYPES_H
 
 #include <stdarg.h>
+#include <stdbool.h>
 #include <assert.h>
 #include "ndrtypes.h"
 #include "wine/list.h"
@@ -37,7 +38,6 @@ struct uuid
 #define TRUE 1
 #define FALSE 0
 
-typedef struct _loc_info_t loc_info_t;
 typedef struct _attr_t attr_t;
 typedef struct _attr_custdata_t attr_custdata_t;
 typedef struct _expr_t expr_t;
@@ -85,6 +85,7 @@ enum attr_type
     ATTR_CASE,
     ATTR_CODE,
     ATTR_COMMSTATUS,
+    ATTR_COMPOSABLE,
     ATTR_CONTEXTHANDLE,
     ATTR_CONTRACT,
     ATTR_CONTRACTVERSION,
@@ -92,10 +93,12 @@ enum attr_type
     ATTR_CUSTOM,
     ATTR_DECODE,
     ATTR_DEFAULT,
+    ATTR_DEFAULT_OVERLOAD,
     ATTR_DEFAULTBIND,
     ATTR_DEFAULTCOLLELEM,
     ATTR_DEFAULTVALUE,
     ATTR_DEFAULTVTABLE,
+    ATTR_DEPRECATED,
     ATTR_DISABLECONSISTENCYCHECK,
     ATTR_DISPINTERFACE,
     ATTR_DISPLAYBIND,
@@ -155,6 +158,7 @@ enum attr_type
     ATTR_PROPGET,
     ATTR_PROPPUT,
     ATTR_PROPPUTREF,
+    ATTR_PROTECTED,
     ATTR_PROXY,
     ATTR_PUBLIC,
     ATTR_RANGE,
@@ -187,7 +191,6 @@ enum expr_type
 {
     EXPR_VOID,
     EXPR_NUM,
-    EXPR_HEXNUM,
     EXPR_DOUBLE,
     EXPR_IDENTIFIER,
     EXPR_NEG,
@@ -311,11 +314,13 @@ enum type_basic_type
 #define TYPE_BASIC_INT_MIN TYPE_BASIC_INT8
 #define TYPE_BASIC_INT_MAX TYPE_BASIC_HYPER
 
-struct _loc_info_t
+struct location
 {
     const char *input_name;
-    int line_number;
-    const char *near_text;
+    int first_line;
+    int last_line;
+    int first_column;
+    int last_column;
 };
 
 struct str_list_entry_t
@@ -340,13 +345,22 @@ struct _attr_t {
   } u;
   /* parser-internal */
   struct list entry;
+  struct location where;
+};
+
+struct integer
+{
+    int value;
+    int is_unsigned;
+    int is_long;
+    int is_hex;
 };
 
 struct _expr_t {
   enum expr_type type;
   const expr_t *ref;
   union {
-    int lval;
+    struct integer integer;
     double dval;
     const char *sval;
     const expr_t *ext;
@@ -513,9 +527,10 @@ struct _type_t {
   unsigned int typestring_offset;
   unsigned int ptrdesc;           /* used for complex structs */
   int typelib_idx;
-  loc_info_t loc_info;
+  struct location where;
   unsigned int ignore : 1;
   unsigned int defined : 1;
+  unsigned int defined_in_import : 1;
   unsigned int written : 1;
   unsigned int user_types_registered : 1;
   unsigned int tfswrite : 1;   /* if the type needs to be written to the TFS */
@@ -533,9 +548,10 @@ struct _var_t {
   /* fields specific to functions */
   unsigned int procstring_offset, func_idx;
 
-  struct _loc_info_t loc_info;
+  struct location where;
 
-  unsigned int declonly : 1;
+  /* Should we define the UDT in this var, when writing a header? */
+  unsigned int is_defined : 1;
 
   /* parser-internal */
   struct list entry;
@@ -616,7 +632,9 @@ struct _statement_t {
         typelib_t *lib;
         typeref_list_t *type_list;
     } u;
-    unsigned int declonly : 1; /* for STMT_TYPE and STMT_TYPEDEF */
+    /* For STMT_TYPE and STMT_TYPEDEF, should we define the UDT in this
+     * statement, when writing a header? */
+    unsigned int is_defined : 1;
 };
 
 struct _warning_t {
@@ -653,8 +671,6 @@ type_t *reg_type(type_t *type, const char *name, struct namespace *namespace, in
 
 var_t *make_var(char *name);
 var_list_t *append_var(var_list_t *list, var_t *var);
-
-void init_loc_info(loc_info_t *);
 
 char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix,
                        const char *abi_prefix);

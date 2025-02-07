@@ -64,6 +64,8 @@ static int (__cdecl *p_strncmp)(const char *, const char *, size_t);
 static int (__cdecl *p_strcpy)(char *dst, const char *src);
 static int (__cdecl *pstrcpy_s)(char *dst, size_t len, const char *src);
 static int (__cdecl *pstrcat_s)(char *dst, size_t len, const char *src);
+static int (__cdecl *p_strncpy_s)(char *dst, size_t size, const char *src, size_t count);
+static int (__cdecl *p_strncat_s)(char *dst, size_t elem, const char *src, size_t count);
 static int (__cdecl *p_mbscat_s)(unsigned char *dst, size_t size, const unsigned char *src);
 static int (__cdecl *p_mbsnbcat_s)(unsigned char *dst, size_t size, const unsigned char *src, size_t count);
 static int (__cdecl *p_mbsnbcpy_s)(unsigned char * dst, size_t size, const unsigned char * src, size_t count);
@@ -118,6 +120,8 @@ static int (__cdecl *p__memicmp_l)(const char*, const char*, size_t, _locale_t);
 static size_t (__cdecl *p___strncnt)(const char*, size_t);
 static unsigned int (__cdecl *p_mbsnextc_l)(const unsigned char*, _locale_t);
 static int (__cdecl *p_mbscmp_l)(const unsigned char*, const unsigned char*, _locale_t);
+static int (__cdecl *p__strnicmp_l)(const char*, const char*, size_t, _locale_t);
+static int (__cdecl *p_toupper)(int);
 
 int CDECL __STRINGTOLD(_LDOUBLE*, char**, const char*, int);
 
@@ -262,6 +266,7 @@ static void test_mbcp(void)
     unsigned char *mbstring2 = (unsigned char *)"\xb0\xb1\xb2\xb3Q\xb4\xb5"; /* correct string */
     unsigned char *mbsonlylead = (unsigned char *)"\xb0\0\xb1\xb2 \xb3";
     unsigned char buf[16];
+    unsigned char *ret;
     int step;
     CPINFO cp_info;
 
@@ -333,6 +338,7 @@ static void test_mbcp(void)
     expect_eq(_ismbstrail(mbsonlylead, &mbsonlylead[5]), FALSE, int, "%d");
 
     /* _mbsbtype */
+    expect_eq(_mbsbtype(NULL, 0), _MBC_ILLEGAL, int, "%d");
     expect_eq(_mbsbtype(mbstring, 0), _MBC_LEAD, int, "%d");
     expect_eq(_mbsbtype(mbstring, 1), _MBC_TRAIL, int, "%d");
     expect_eq(_mbsbtype(mbstring, 2), _MBC_LEAD, int, "%d");
@@ -364,6 +370,7 @@ static void test_mbcp(void)
     expect_eq(_mbclen(mbstring), 2, int, "%d");
     expect_eq(_mbclen(&mbstring[2]), 2, int, "%d");
     expect_eq(_mbclen(&mbstring[3]), 1, int, "%d");
+    expect_eq(_mbclen(mbsonlylead), 1, int, "%d");
     expect_eq(_mbslen(mbstring2), 4, int, "%d");
     expect_eq(_mbslen(mbsonlylead), 0, int, "%d");          /* lead + NUL not counted as character */
     expect_eq(_mbslen(mbstring), 4, int, "%d");             /* lead + invalid trail counted */
@@ -457,6 +464,53 @@ static void test_mbcp(void)
         ok(copied == 1, "copied = %d\n", copied);
         expect_bin(buf, "\x00\xff", 2);
     }
+
+    errno = 0xdeadbeef;
+    ret = _mbsncpy(NULL, mbstring, 1);
+    ok(ret == NULL, "_mbsncpy returned %p, expected NULL\n", ret);
+    ok(errno == EINVAL, "_mbsncpy returned %d\n", errno);
+
+    memset(buf, 0xff, sizeof(buf));
+    errno = 0xdeadbeef;
+    ret = _mbsncpy(buf, NULL, 1);
+    ok(ret == NULL, "_mbsncpy returned %p, expected NULL\n", ret);
+    ok(errno == EINVAL, "_mbsncpy returned %d\n", errno);
+    expect_bin(buf, "\xff\xff\xff", 3);
+
+    errno = 0xdeadbeef;
+    ret = _mbsncpy(NULL, mbstring, 0);
+    ok(ret == NULL, "_mbsncpy returned %p, expected NULL\n", ret);
+    ok(errno == 0xdeadbeef, "_mbsncpy should not change errno\n");
+
+    memset(buf, 0xff, sizeof(buf));
+    errno = 0xdeadbeef;
+    ret = _mbsncpy(buf, NULL, 0);
+    ok(ret == buf, "_mbsncpy returned %p, expected %sp\n", ret, buf);
+    ok(errno == 0xdeadbeef, "_mbsncpy should not change errno\n");
+
+    memset(buf, 0xff, sizeof(buf));
+    errno = 0xdeadbeef;
+    ret = _mbsncpy(NULL, mbstring, 1);
+    ok(ret == NULL, "_mbsncpy returned %p, expected NULL\n", ret);
+    ok(errno == EINVAL, "_mbsncpy returned %d\n", errno);
+
+    memset(buf, 0xff, sizeof(buf));
+    errno = 0xdeadbeef;
+    ret = _mbsncpy(buf, NULL, 1);
+    ok(ret == NULL, "_mbsncpy returned %p, expected NULL\n", ret);
+    ok(errno == EINVAL, "_mbsncpy returned %d\n", errno);
+
+    memset(buf, 0xff, sizeof(buf));
+    ret = _mbsncpy(NULL, mbstring, 0);
+    ok(ret == NULL, "_mbsncpy returned %p, expected %p\n", ret, buf);
+
+    memset(buf, 0xff, sizeof(buf));
+    ret = _mbsncpy(buf, NULL, 0);
+    ok(ret == buf, "_mbsncpy returned %p, expected %sp\n", ret, buf);
+
+    memset(buf, 0xff, sizeof(buf));
+    ret = _mbsncpy(buf, mbstring, 0);
+    ok(ret == buf, "_mbsncpy returned %p, expected %p\n", ret, buf);
 
     memset(buf, 0xff, sizeof(buf));
     _mbsncpy(buf, mbstring, 1);
@@ -639,10 +693,20 @@ static void test_mbsspnp( void)
 
 static void test_strdup(void)
 {
-   char *str;
-   str = _strdup( 0 );
-   ok( str == 0, "strdup returns %s should be 0\n", str);
-   free( str );
+    char *str;
+    errno = 0xdeadbeef;
+    str = strdup(0);
+    ok(str == 0, "strdup returned %s, expected NULL\n", wine_dbgstr_a(str));
+    ok(errno == 0xdeadbeef, "errno is %d, expected 0xdeadbeef\n", errno);
+}
+
+static void test_wcsdup(void)
+{
+    WCHAR *str;
+    errno = 0xdeadbeef;
+    str = wcsdup(0);
+    ok(str == 0, "wcsdup returned %s, expected NULL\n", wine_dbgstr_w(str));
+    ok(errno == 0xdeadbeef, "errno is %d, expected 0xdeadbeef\n", errno);
 }
 
 static void test_strcmp(void)
@@ -660,12 +724,21 @@ static void test_strcmp(void)
 
     ret = p_strncmp( "abc", "abcd", 3 );
     ok( ret == 0, "wrong ret %d\n", ret );
+#ifdef _WIN64
     ret = p_strncmp( "", "abc", 3 );
-    ok( ret == 0 - 'a' || ret == -1, "wrong ret %d\n", ret );
+    ok( ret == -1, "wrong ret %d\n", ret );
     ret = p_strncmp( "abc", "ab\xa0", 4 );
-    ok( ret == 'c' - 0xa0 || ret == -1, "wrong ret %d\n", ret );
+    ok( ret == -1, "wrong ret %d\n", ret );
     ret = p_strncmp( "ab\xb0", "ab\xa0", 3 );
-    ok( ret == 0xb0 - 0xa0 || ret == 1, "wrong ret %d\n", ret );
+    ok( ret == 1, "wrong ret %d\n", ret );
+#else
+    ret = p_strncmp( "", "abc", 3 );
+    ok( ret == 0 - 'a', "wrong ret %d\n", ret );
+    ret = p_strncmp( "abc", "ab\xa0", 4 );
+    ok( ret == 'c' - 0xa0, "wrong ret %d\n", ret );
+    ret = p_strncmp( "ab\xb0", "ab\xa0", 3 );
+    ok( ret == 0xb0 - 0xa0, "wrong ret %d\n", ret );
+#endif
     ret = p_strncmp( "ab\xb0", "ab\xa0", 2 );
     ok( ret == 0, "wrong ret %d\n", ret );
     ret = p_strncmp( "ab\xc2", "ab\xc2", 3 );
@@ -738,6 +811,55 @@ static void test_strcpy_s(void)
             dest[4] == 'l' && dest[5] == '\0' && dest[6] == '\0' && dest[7] == 'X',
             "Unexpected return data from strcpy: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x\n",
             dest[0], dest[1], dest[2], dest[3], dest[4], dest[5], dest[6], dest[7]);
+
+    if(!p_strncpy_s)
+    {
+        win_skip("strncpy_s not found\n");
+        return;
+    }
+
+    ret = p_strncpy_s(NULL, 18, big, ARRAY_SIZE(big));
+    ok(ret == EINVAL, "p_strncpy_s expect EINVAL got %d\n", ret);
+
+    dest[0] = 'A';
+    ret = p_strncpy_s(dest, 8, NULL, 1);
+    ok(ret == EINVAL, "expected EINVAL got %d\n", ret);
+    ok(dest[0] == 0, "dest[0] not 0\n");
+
+    dest[0] = 'A';
+    ret = p_strncpy_s(dest, 8, NULL, 0);
+    ok(ret == 0, "expected ERROR_SUCCESS got %d\n", ret);
+    ok(dest[0] == 0, "dest[0] not 0\n");
+
+    dest[0] = 'A';
+    ret = p_strncpy_s(dest, 0, big, ARRAY_SIZE(big));
+    ok(ret == ERANGE || ret == EINVAL, "expected ERANGE/EINVAL got %d\n", ret);
+    ok(dest[0] == 0 || ret == EINVAL, "dest[0] not 0\n");
+
+    ret = p_strncpy_s(dest, 8, small, ARRAY_SIZE(small));
+    ok(ret == 0, "expected 0 got %d\n", ret);
+    ok(!strcmp(dest, small), "dest != small\n");
+
+    dest[0] = 'A';
+    ret = p_strncpy_s(dest, 8, big, ARRAY_SIZE(big));
+    ok(ret == ERANGE || ret == EINVAL, "expected ERANGE/EINVAL got %d\n", ret);
+    ok(dest[0] == 0, "dest[0] not 0\n");
+
+    dest[0] = 'A';
+    ret = p_strncpy_s(dest, 5, big, -1);
+    ok(ret == STRUNCATE, "expected STRUNCATE got %d\n", ret);
+    ok(dest[4] == 0, "dest[4] not 0\n");
+    ok(!memcmp(dest, big, 4), "dest = %s\n", wine_dbgstr_a(dest));
+
+    ret = p_strncpy_s(NULL, 0, (void*)0xdeadbeef, 0);
+    ok(ret == 0, "ret = %d\n", ret);
+
+    dest[0] = '1';
+    dest[1] = 0;
+    ret = p_strncpy_s(dest+1, 4, dest, -1);
+    ok(ret == STRUNCATE, "expected ERROR_SUCCESS got %d\n", ret);
+    ok(dest[0]=='1' && dest[1]=='1' && dest[2]=='1' && dest[3]=='1',
+            "dest = %s\n", wine_dbgstr_a(dest));
 }
 
 #define okchars(dst, b0, b1, b2, b3, b4, b5, b6, b7) \
@@ -1707,58 +1829,58 @@ static void test_strtol(void)
     /* errno is modified on W2K8+ */
     errno = EBADF;
     l = strtol("-1234", &e, 0);
-    ok(l==-1234, "wrong value %d\n", l);
+    ok(l==-1234, "wrong value %ld\n", l);
     ok(errno == EBADF || broken(errno == 0), "wrong errno %d\n", errno);
     errno = EBADF;
     ul = strtoul("1234", &e, 0);
-    ok(ul==1234, "wrong value %u\n", ul);
+    ok(ul==1234, "wrong value %lu\n", ul);
     ok(errno == EBADF || broken(errno == 0), "wrong errno %d\n", errno);
 
     errno = EBADF;
     l = strtol("2147483647L", &e, 0);
-    ok(l==2147483647, "wrong value %d\n", l);
+    ok(l==2147483647, "wrong value %ld\n", l);
     ok(errno == EBADF || broken(errno == 0), "wrong errno %d\n", errno);
     errno = EBADF;
     l = strtol("-2147483648L", &e, 0);
-    ok(l==-2147483647L - 1, "wrong value %d\n", l);
+    ok(l==-2147483647L - 1, "wrong value %ld\n", l);
     ok(errno == EBADF || broken(errno == 0), "wrong errno %d\n", errno);
     errno = EBADF;
     ul = strtoul("4294967295UL", &e, 0);
-    ok(ul==4294967295ul, "wrong value %u\n", ul);
+    ok(ul==4294967295ul, "wrong value %lu\n", ul);
     ok(errno == EBADF || broken(errno == 0), "wrong errno %d\n", errno);
 
     errno = 0;
     l = strtol("9223372036854775807L", &e, 0);
-    ok(l==2147483647, "wrong value %d\n", l);
+    ok(l==2147483647, "wrong value %ld\n", l);
     ok(errno == ERANGE, "wrong errno %d\n", errno);
     errno = 0;
     ul = strtoul("9223372036854775807L", &e, 0);
-    ok(ul==4294967295ul, "wrong value %u\n", ul);
+    ok(ul==4294967295ul, "wrong value %lu\n", ul);
     ok(errno == ERANGE, "wrong errno %d\n", errno);
 
     errno = 0;
     ul = strtoul("-2", NULL, 0);
-    ok(ul == -2, "wrong value %u\n", ul);
+    ok(ul == -2, "wrong value %lu\n", ul);
     ok(errno == 0, "wrong errno %d\n", errno);
 
     errno = 0;
     ul = strtoul("-4294967294", NULL, 0);
-    ok(ul == 2, "wrong value %u\n", ul);
+    ok(ul == 2, "wrong value %lu\n", ul);
     ok(errno == 0, "wrong errno %d\n", errno);
 
     errno = 0;
     ul = strtoul("-4294967295", NULL, 0);
-    ok(ul==1, "wrong value %u\n", ul);
+    ok(ul==1, "wrong value %lu\n", ul);
     ok(errno == 0, "wrong errno %d\n", errno);
 
     errno = 0;
     ul = strtoul("-4294967296", NULL, 0);
-    ok(ul == 1, "wrong value %u\n", ul);
+    ok(ul == 1, "wrong value %lu\n", ul);
     ok(errno == ERANGE, "wrong errno %d\n", errno);
 
     errno = 0;
     l = strtol(neg, &e, 0);
-    ok(l == 0, "wrong value %d\n", l);
+    ok(l == 0, "wrong value %ld\n", l);
     ok(errno == 0, "wrong errno %d\n", errno);
     ok(e == neg, "e = %p, neg = %p\n", e, neg);
 }
@@ -2349,7 +2471,7 @@ static void test__wcstombs_s_l(void)
         memset(out, 0xcc, sizeof(out));
         err = p_wcstombs_s_l(&ret, tests[i].str ? out : NULL, tests[i].len,
                              tests[i].wstr, tests[i].wlen, locale);
-        ok(ret == tests[i].ret, "%d: expected ret %d, got %d for '%s' in locale %s\n", i, tests[i].ret, ret,
+        ok(ret == tests[i].ret, "%d: expected ret %Id, got %Id for '%s' in locale %s\n", i, tests[i].ret, ret,
             wine_dbgstr_w(tests[i].wstr), tests[i].locale);
         ok(err == tests[i].err, "%d: expected err %d, got %d for '%s' in locale %s\n", i, tests[i].err, err,
             wine_dbgstr_w(tests[i].wstr), tests[i].locale);
@@ -2553,6 +2675,53 @@ static void test__strlwr_s(void)
     ok(ret == 0, "Expected _strlwr_s to return 0, got %d\n", ret);
 }
 
+static void test_strncat_s(void)
+{
+    int ret;
+    char dst[4];
+    char src[4];
+
+    if (!p_wcsncat_s)
+    {
+        win_skip("skipping wcsncat_s tests\n");
+        return;
+    }
+
+    strcpy(src, "abc");
+    strcpy(dst, "a");
+    ret = p_strncat_s(NULL, 4, src, 4);
+    ok(ret == EINVAL, "err = %d\n", ret);
+    ret = p_strncat_s(dst, 0, src, 4);
+    ok(ret == EINVAL, "err = %d\n", ret);
+    ok(dst[0] == 'a', "dst %x\n", dst[0]);
+    ret = p_strncat_s(dst, 0, src, _TRUNCATE);
+    ok(ret == EINVAL, "err = %d\n", ret);
+    ret = p_strncat_s(dst, 4, NULL, 1);
+    ok(ret == EINVAL, "err = %d\n", ret);
+    ok(!dst[0], "dst %x\n", dst[0]);
+    ret = p_strncat_s(NULL, 4, src, 0);
+    ok(ret == EINVAL, "err = %d\n", ret);
+    strcpy(dst, "a");
+    ret = p_strncat_s(dst, 4, NULL, 0);
+    ok(ret == 0, "err = %d\n", ret);
+    ok(dst[0] == 'a', "dst %x\n", dst[0]);
+
+    dst[0] = 0;
+    ret = p_strncat_s(dst, 2, src, 4);
+    ok(ret == ERANGE, "err = %d\n", ret);
+
+    dst[0] = 0;
+    ret = p_strncat_s(dst, 2, src, _TRUNCATE);
+    ok(ret == STRUNCATE, "err = %d\n", ret);
+    ok(dst[0] == 'a' && dst[1] == 0, "dst is %s\n", wine_dbgstr_a(dst));
+
+    strcpy(dst, "abc");
+    dst[3] = 'd';
+    ret = p_strncat_s(dst, 4, src, 4);
+    ok(ret == EINVAL, "err = %d\n", ret);
+    ok(!dst[0], "dst %x\n", dst[0]);
+}
+
 static void test_wcsncat_s(void)
 {
     int ret;
@@ -2566,15 +2735,24 @@ static void test_wcsncat_s(void)
     }
 
     wcscpy(src, L"abc");
-    dst[0] = 0;
+    wcscpy(dst, L"a");
     ret = p_wcsncat_s(NULL, 4, src, 4);
     ok(ret == EINVAL, "err = %d\n", ret);
     ret = p_wcsncat_s(dst, 0, src, 4);
     ok(ret == EINVAL, "err = %d\n", ret);
+    ok(dst[0] == 'a', "dst %x\n", dst[0]);
     ret = p_wcsncat_s(dst, 0, src, _TRUNCATE);
     ok(ret == EINVAL, "err = %d\n", ret);
+    ok(dst[0] == 'a', "dst %x\n", dst[0]);
+    ret = p_wcsncat_s(dst, 4, NULL, 1);
+    ok(ret == EINVAL, "err = %d\n", ret);
+    ok(!dst[0], "dst %x\n", dst[0]);
+    ret = p_wcsncat_s(NULL, 4, src, 0);
+    ok(ret == EINVAL, "err = %d\n", ret);
+    wcscpy(dst, L"a");
     ret = p_wcsncat_s(dst, 4, NULL, 0);
     ok(ret == 0, "err = %d\n", ret);
+    ok(dst[0] == 'a', "dst %x\n", dst[0]);
 
     dst[0] = 0;
     ret = p_wcsncat_s(dst, 2, src, 4);
@@ -2589,6 +2767,7 @@ static void test_wcsncat_s(void)
     dst[3] = 'd';
     ret = p_wcsncat_s(dst, 4, src, 4);
     ok(ret == EINVAL, "err = %d\n", ret);
+    ok(!dst[0], "dst %x\n", dst[0]);
 }
 
 static void test__mbsnbcat_s(void)
@@ -2722,6 +2901,7 @@ static void test__mbsupr_s(void)
 {
     errno_t ret;
     unsigned char buffer[20];
+    int cp = _getmbcp();
 
     if (!p_mbsupr_s)
     {
@@ -2761,7 +2941,7 @@ static void test__mbsupr_s(void)
 
     memcpy(buffer, "abcdefgh", sizeof("abcdefgh"));
     errno = EBADF;
-    ret = p_mbsupr_s(buffer, 4);
+    ret = p_mbsupr_s(buffer, sizeof("abcdefgh") - 1);
     ok(ret == EINVAL, "Expected _mbsupr_s to return EINVAL, got %d\n", ret);
     ok(errno == EINVAL, "Expected errno to be EINVAL, got %d\n", errno);
 
@@ -2773,12 +2953,20 @@ static void test__mbsupr_s(void)
        "Expected the output buffer to be \"ABCDEFGH\\0ijklmnop\", got \"%s\"\n",
        buffer);
 
+    _setmbcp(936);
+    memcpy(buffer, "\xa2\xa1\xa2\xa2q", sizeof("\xa2\xa1\xa2\xa2q"));
+    ret = p_mbsupr_s(buffer, sizeof(buffer));
+    ok(ret == 0, "Expected _mbsupr_s to return 0, got %d\n", ret);
+    ok(!memcmp(buffer, "\xa2\xf1\xa2\xf2Q", sizeof("\xa2\xf1\xa2\xf2Q")),
+            "got %s\n", debugstr_a((char*)buffer));
+    _setmbcp(cp);
 }
 
 static void test__mbslwr_s(void)
 {
     errno_t ret;
     unsigned char buffer[20];
+    int cp = _getmbcp();
 
     if (!p_mbslwr_s)
     {
@@ -2818,7 +3006,7 @@ static void test__mbslwr_s(void)
 
     memcpy(buffer, "ABCDEFGH", sizeof("ABCDEFGH"));
     errno = EBADF;
-    ret = p_mbslwr_s(buffer, 4);
+    ret = p_mbslwr_s(buffer, sizeof("ABCDEFGH") - 1);
     ok(ret == EINVAL, "Expected _mbslwr_s to return EINVAL, got %d\n", ret);
     ok(errno == EINVAL, "Expected errno to be EINVAL, got %d\n", errno);
 
@@ -2829,6 +3017,14 @@ static void test__mbslwr_s(void)
     ok(!memcmp(buffer, "abcdefgh\0IJKLMNOP", sizeof("abcdefgh\0IJKLMNOP")),
        "Expected the output buffer to be \"abcdefgh\\0IJKLMNOP\", got \"%s\"\n",
        buffer);
+
+    _setmbcp(936);
+    memcpy(buffer, "\xa2\xf1\xa2\xf2Q", sizeof("\xa2\xf1\xa2\xf2Q"));
+    ret = p_mbslwr_s(buffer, sizeof(buffer));
+    ok(ret == 0, "Expected _mbsupr_s to return 0, got %d\n", ret);
+    ok(!memcmp(buffer, "\xa2\xa1\xa2\xa2q", sizeof("\xa2\xa1\xa2\xa2q")),
+            "got %s\n", debugstr_a((char*)buffer));
+    _setmbcp(cp);
 }
 
 static void test__mbstok(void)
@@ -3193,6 +3389,46 @@ static void test_tolower(void)
     ret = p_tolower((unsigned char)0xD0);
     ok(ret == 0xF0, "ret = %x\n", ret);
 
+    ok(setlocale(LC_ALL, "Japanese_Japan.932") != NULL, "setlocale failed.\n");
+    errno = 0xdeadbeef;
+    ret = p_tolower((signed char)0xd0);
+    ok(ret == 0xd0, "Got %#x.\n", ret);
+    ok(errno == EILSEQ, "Got errno %d.\n", errno);
+    errno = 0xdeadbeef;
+    ret = p_tolower(0xd0);
+    ok(ret == 0xd0, "Got %#x.\n", ret);
+    ok(errno == 0xdeadbeef, "Got errno %d.\n", errno);
+
+    ok(setlocale(LC_ALL, "Chinese_China.936") != NULL, "setlocale failed.\n");
+    errno = 0xdeadbeef;
+    ret = p_tolower((signed char)0xd0);
+    ok(ret == (signed char)0xd0, "Got %#x.\n", ret);
+    ok(errno == EILSEQ, "Got errno %d.\n", errno);
+    errno = 0xdeadbeef;
+    ret = p_tolower(0xd0);
+    ok(ret == 0xd0, "Got %#x.\n", ret);
+    ok(errno == 0xdeadbeef, "Got errno %d.\n", errno);
+
+    ok(setlocale(LC_ALL, "Korean_Korea.949") != NULL, "setlocale failed.\n");
+    errno = 0xdeadbeef;
+    ret = p_tolower((signed char)0xd0);
+    ok(ret == (signed char)0xd0, "Got %#x.\n", ret);
+    ok(errno == EILSEQ, "Got errno %d.\n", errno);
+    errno = 0xdeadbeef;
+    ret = p_tolower(0xd0);
+    ok(ret == 0xd0, "Got %#x.\n", ret);
+    ok(errno == 0xdeadbeef, "Got errno %d.\n", errno);
+
+    ok(setlocale(LC_ALL, "Chinese_Taiwan.950") != NULL, "setlocale failed.\n");
+    errno = 0xdeadbeef;
+    ret = p_tolower((signed char)0xd0);
+    ok(ret == (signed char)0xd0, "Got %#x.\n", ret);
+    ok(errno == EILSEQ, "Got errno %d.\n", errno);
+    errno = 0xdeadbeef;
+    ret = p_tolower(0xd0);
+    ok(ret == 0xd0, "Got %#x.\n", ret);
+    ok(errno == 0xdeadbeef, "Got errno %d.\n", errno);
+
     setlocale(LC_ALL, "C");
 }
 
@@ -3297,6 +3533,10 @@ static void test__stricmp(void)
     ok(ret > 0, "_stricmp returned %d\n", ret);
     ret = _stricmp("\xa5", "\xb9");
     ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("\xa5\xa1", "\xb9\xa1"); /* valid gbk characters */
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("abc\xa5\xa1", "abc");
+    ok(ret > 0, "_stricmp returned %d\n", ret);
 
     if(!setlocale(LC_ALL, "polish")) {
         win_skip("stricmp tests\n");
@@ -3313,6 +3553,48 @@ static void test__stricmp(void)
     ok(ret == 0, "_stricmp returned %d\n", ret);
     ret = _stricmp("a", "\xb9");
     ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("\xa5\xa1", "\xb9\xa1"); /* valid gbk characters */
+    ok(ret == 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("abc\xa5\xa1", "abc");
+    ok(ret > 0, "_stricmp returned %d\n", ret);
+
+    ok(setlocale(LC_ALL, ".936") != NULL, "setlocale failed.\n");
+    ret = _stricmp("test", "test");
+    ok(ret == 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("a", "z");
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("z", "a");
+    ok(ret > 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("\xa5", "\xb9");
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("a", "\xb9");
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("\xa5\xa1", "\xb9\xa1"); /* valid gbk characters */
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("\x82\xa0", "\x83\x41"); /* valid shift-jis characters */
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("\x81\x00", "\x81\x01"); /* invalid for gbk and shift-jis */
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("abc\xa5\xa1", "abc");
+    ok(ret > 0, "_stricmp returned %d\n", ret);
+
+    ok(setlocale(LC_ALL, "Japanese_Japan.932") != NULL, "setlocale failed.\n");
+    ret = _stricmp("test", "test");
+    ok(ret == 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("a", "z");
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("z", "a");
+    ok(ret > 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("\xa5", "\xb9");
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("\xa5\xa1", "\xb9\xa1"); /* valid gbk characters */
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("\x82\xa0", "\x83\x41"); /* valid shift-jis characters */
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("\x81\x00", "\x81\x01"); /* invalid for gbk and shift-jis */
+    ok(ret < 0, "_stricmp returned %d\n", ret);
+    ret = _stricmp("abc\x82\xa0", "abc");
+    ok(ret > 0, "_stricmp returned %d\n", ret);
 
     setlocale(LC_ALL, "C");
 }
@@ -3960,6 +4242,9 @@ static void test__tcsncoll(void)
         { "English", "ABCe", "ABCf",  3,  0 },
         { "English", "abcd", "ABCD", 10, -1 },
 
+        { "English", "AB D", "AB-D",  4,  1 },
+        { "English", "AB D", "AB'D",  4,  1 },
+
         { "C",       "ABCD", "ABCD",  4,  0 },
         { "C",       "ABCD", "ABCD", 10,  0 },
 
@@ -3971,6 +4256,9 @@ static void test__tcsncoll(void)
 
         { "C",       "ABCe", "ABCf",  3,  0 },
         { "C",       "abcd", "ABCD", 10,  1 },
+
+        { "C",       "AB D", "AB-D",  4,  -1 },
+        { "C",       "AB D", "AB'D",  4,  -1 },
     };
     WCHAR str1W[16];
     WCHAR str2W[16];
@@ -3997,11 +4285,14 @@ static void test__tcsncoll(void)
 
         ret = _strncoll(str1, str2, tests[i].count);
         if (!tests[i].exp)
-            ok(!ret, "expected 0, got %d for %s, %s, %d\n", ret, str1, str2, (int)tests[i].count);
+            ok(!ret, "expected 0, got %d for %s, %s, %d for locale %s\n",
+               ret, str1, str2, (int)tests[i].count, tests[i].locale);
         else if (tests[i].exp < 0)
-            ok(ret < 0, "expected < 0, got %d for %s, %s, %d\n", ret, str1, str2, (int)tests[i].count);
+            ok(ret < 0, "expected < 0, got %d for %s, %s, %d for locale %s\n",
+               ret, str1, str2, (int)tests[i].count, tests[i].locale);
         else
-            ok(ret > 0, "expected > 0, got %d for %s, %s, %d\n", ret, str1, str2, (int)tests[i].count);
+            ok(ret > 0, "expected > 0, got %d for %s, %s, %d for locale %s\n",
+               ret, str1, str2, (int)tests[i].count, tests[i].locale);
 
         memset(str1W, 0xee, sizeof(str1W));
         len = mbstowcs(str1W, str1, ARRAY_SIZE(str1W));
@@ -4013,11 +4304,94 @@ static void test__tcsncoll(void)
 
         ret = _wcsncoll(str1W, str2W, tests[i].count);
         if (!tests[i].exp)
-            ok(!ret, "expected 0, got %d for %s, %s, %d\n", ret, str1, str2, (int)tests[i].count);
+            ok(!ret, "expected 0, got %d for %s, %s, %d for locale %s\n",
+               ret, str1, str2, (int)tests[i].count, tests[i].locale);
         else if (tests[i].exp < 0)
-            ok(ret < 0, "expected < 0, got %d for %s, %s, %d\n", ret, str1, str2, (int)tests[i].count);
+            ok(ret < 0, "expected < 0, got %d for %s, %s, %d for locale %s\n",
+               ret, str1, str2, (int)tests[i].count, tests[i].locale);
         else
-            ok(ret > 0, "expected > 0, got %d for %s, %s, %d\n", ret, str1, str2, (int)tests[i].count);
+            ok(ret > 0, "expected > 0, got %d for %s, %s, %d for locale %s\n",
+               ret, str1, str2, (int)tests[i].count, tests[i].locale);
+    }
+}
+
+static void test__tcscoll(void)
+{
+    struct test {
+        const char *locale;
+        const char *str1;
+        const char *str2;
+        int exp;
+    };
+    static const struct test tests[] = {
+        { "English", "ABCD", "ABCD",  0 },
+        { "English", "ABC",  "ABCD", -1 },
+        { "English", "ABCD",  "ABC",  1 },
+        { "English", "ABCe", "ABCf", -1 },
+        { "English", "abcd", "ABCD", -1 },
+        { "English", "AB D", "AB-D",  1 },
+        { "English", "AB D", "AB'D",  1 },
+
+        { "C",       "ABCD", "ABCD",  0 },
+        { "C",       "ABC",  "ABCD", -1 },
+        { "C",       "ABCD",  "ABC",  1 },
+        { "C",       "ABCe", "ABCf", -1 },
+        { "C",       "abcd", "ABCD",  1 },
+        { "C",       "AB D", "AB-D", -1 },
+        { "C",       "AB D", "AB'D", -1 },
+    };
+    WCHAR str1W[16];
+    WCHAR str2W[16];
+    char str1[16];
+    char str2[16];
+    size_t len;
+    int i, ret;
+
+    for (i = 0; i < ARRAY_SIZE(tests); i++)
+    {
+        if (!setlocale(LC_ALL, tests[i].locale))
+        {
+            win_skip("%s locale _tcsncoll tests\n", tests[i].locale);
+            for (; i+1 < ARRAY_SIZE(tests); i++)
+                if (strcmp(tests[i].locale, tests[i+1].locale)) break;
+            continue;
+        }
+
+        memset(str1, 0xee, sizeof(str1));
+        strcpy(str1, tests[i].str1);
+
+        memset(str2, 0xff, sizeof(str2));
+        strcpy(str2, tests[i].str2);
+
+        ret = strcoll(str1, str2);
+        if (!tests[i].exp)
+            ok(!ret, "expected 0, got %d for %s, %s for locale %s\n",
+               ret, str1, str2, tests[i].locale);
+        else if (tests[i].exp < 0)
+            ok(ret < 0, "expected < 0, got %d for %s, %s for locale %s\n",
+               ret, str1, str2, tests[i].locale);
+        else
+            ok(ret > 0, "expected > 0, got %d for %s, %s for locale %s\n",
+               ret, str1, str2, tests[i].locale);
+
+        memset(str1W, 0xee, sizeof(str1W));
+        len = mbstowcs(str1W, str1, ARRAY_SIZE(str1W));
+        str1W[len] = 0;
+
+        memset(str2W, 0xff, sizeof(str2W));
+        len = mbstowcs(str2W, str2, ARRAY_SIZE(str2W));
+        str2W[len] = 0;
+
+        ret = wcscoll(str1W, str2W);
+        if (!tests[i].exp)
+            ok(!ret, "expected 0, got %d for %s, %s for locale %s\n",
+               ret, str1, str2, tests[i].locale);
+        else if (tests[i].exp < 0)
+            ok(ret < 0, "expected < 0, got %d for %s, %s for locale %s\n",
+               ret, str1, str2, tests[i].locale);
+        else
+            ok(ret > 0, "expected > 0, got %d for %s, %s for locale %s\n",
+               ret, str1, str2, tests[i].locale);
     }
 }
 
@@ -4477,6 +4851,177 @@ static void test_wcsncpy(void)
             wine_dbgstr_wn(dst, ARRAY_SIZE(dst)));
 }
 
+static void test_mbsrev(void)
+{
+    unsigned char buf[64], *ret;
+    int cp = _getmbcp();
+
+    _setmbcp(932);
+
+    strcpy((char *)buf, "\x36\x8c\x8e");
+    ret = _mbsrev(buf);
+    ok(ret == buf, "ret = %p, expected %p\n", ret, buf);
+    ok(!memcmp(buf, "\x8c\x8e\x36", 4), "buf = %s\n", wine_dbgstr_a((char *)buf));
+
+    /* test string that ends with leading byte */
+    strcpy((char *)buf, "\x36\x8c");
+    ret = _mbsrev(buf);
+    ok(ret == buf, "ret = %p, expected %p\n", ret, buf);
+    ok(!memcmp(buf, "\x36", 2), "buf = %s\n", wine_dbgstr_a((char *)buf));
+
+    _setmbcp(cp);
+}
+
+static void test__tolower_l(void)
+{
+    int ret;
+
+    ok(setlocale(LC_ALL, "english") != NULL, "setlocale failed.\n");
+    ret = _tolower_l('\xa5', 0);
+    ok(ret == 165, "Got %d.\n", ret);
+    ret = _tolower_l('\xb9', 0);
+    ok(ret == 185, "Got %d.\n", ret);
+    ret = _tolower_l('a', 0);
+    ok(ret == 97, "Got %d.\n", ret);
+
+    ok(setlocale(LC_ALL, ".936") != NULL, "setlocale failed.\n");
+    ret = _tolower_l('\xa5', 0);
+    ok(ret == -91, "Got %d.\n", ret);
+    ret = _tolower_l('\xb9', 0);
+    ok(ret == -71, "Got %d.\n", ret);
+    ret = _tolower_l('a', 0);
+    ok(ret == 97, "Got %d.\n", ret);
+
+    ok(setlocale(LC_ALL, "chinese-simplified") != NULL, "setlocale failed.\n");
+    ret = _tolower_l('\xa5', 0);
+    ok(ret == -91, "Got %d.\n", ret);
+    ret = _tolower_l('\xb9', 0);
+    ok(ret == -71, "Got %d.\n", ret);
+    ret = _tolower_l('a', 0);
+    ok(ret == 97, "Got %d.\n", ret);
+
+    setlocale(LC_ALL, "C");
+}
+
+static void test__strnicmp_l(void)
+{
+    static const struct {
+        const char *str1;
+        const char *str2;
+    } tests[] = {
+        { "wine",             "win" },
+        /* GBK string tests */
+        { "\xce\xac",         "ceac" },
+        { "\xce\xac\xc4\xe1", "\xce\xac" },
+        { "\xce\xac""abc",    "\xce\xac" },
+        { "abc\xce\xac",      "abc" },
+        { "\xce\xac\xc4\xe1", "\xc4\xe1" },
+        { "\xce\xac",         "\xc4\xe1" },
+        { "\xb8\xdf",         "\xb8\xdb" },
+        { "\xb9",             "\xa5" },
+    };
+    _locale_t locale;
+    int ret, i;
+
+    if (!p__strnicmp_l)
+    {
+        win_skip("_strnicmp_l isn't available.\n");
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(tests); i++)
+    {
+        ret = p__strnicmp_l(tests[i].str1, tests[i].str2, INT_MAX, 0);
+        ok(ret > 0, "tests[%d]: Got %d.\n", i, ret);
+
+        ret = p__strnicmp_l(tests[i].str2, tests[i].str1, INT_MAX, 0);
+        ok(ret < 0, "tests[%d]: Got %d.\n", i, ret);
+    }
+
+    if (!p__create_locale)
+        win_skip("_create_locale isn't available.\n");
+    else
+    {
+        locale = p__create_locale(LC_ALL, ".936");
+        ok(locale != NULL, "Failed to create locale.\n");
+
+        for (i = 0; i < ARRAY_SIZE(tests); i++)
+        {
+            ret = p__strnicmp_l(tests[i].str1, tests[i].str2, INT_MAX, locale);
+            ok(ret > 0, "tests[%d]: Got %d.\n", i, ret);
+
+            ret = p__strnicmp_l(tests[i].str2, tests[i].str1, INT_MAX, locale);
+            ok(ret < 0, "tests[%d]: Got %d.\n", i, ret);
+        }
+
+        p__free_locale(locale);
+    }
+
+    if (!setlocale(LC_ALL, ".936"))
+    {
+        win_skip("Skip testing _strnicmp_l with 936 code page.\n");
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(tests); i++)
+    {
+        ret = p__strnicmp_l(tests[i].str1, tests[i].str2, INT_MAX, 0);
+        ok(ret > 0, "tests[%d]: Got %d.\n", i, ret);
+
+        ret = p__strnicmp_l(tests[i].str2, tests[i].str1, INT_MAX, 0);
+        ok(ret < 0, "tests[%d]: Got %d.\n", i, ret);
+    }
+
+    setlocale(LC_ALL, "C");
+}
+
+static void test_toupper(void)
+{
+    int ret;
+
+    ok(setlocale(LC_ALL, "English_United States") != NULL, "setlocale failed.\n");
+    errno = 0xdeadbeef;
+    ret = p_toupper((signed char)0xf0);
+    ok(ret == 0xd0, "Got %#x.\n", ret);
+    ok(errno == EILSEQ, "Got errno %d.\n", errno);
+    errno = 0xdeadbeef;
+    ret = p_toupper(0xf0);
+    ok(ret == 0xd0, "Got %#x.\n", ret);
+    ok(errno == 0xdeadbeef, "Got errno %d.\n", errno);
+
+    ok(setlocale(LC_ALL, "Polish") != NULL, "setlocale failed.\n");
+    errno = 0xdeadbeef;
+    ret = p_toupper((signed char)0xa5);
+    ok(ret == 0xa5, "Got %#x.\n", ret);
+    ok(errno == EILSEQ, "Got errno %d.\n", errno);
+    errno = 0xdeadbeef;
+    ret = p_toupper((signed char)0xb9);
+    ok(ret == 0xa5, "Got %#x.\n", ret);
+    ok(errno == EILSEQ, "Got errno %d.\n", errno);
+
+    ok(setlocale(LC_ALL, "Japanese_Japan.932") != NULL, "setlocale failed.\n");
+    errno = 0xdeadbeef;
+    ret = p_toupper((signed char)0xf0);
+    ok(ret == (signed char)0xf0, "Got %#x.\n", ret);
+    ok(errno == EILSEQ, "Got errno %d.\n", errno);
+    errno = 0xdeadbeef;
+    ret = p_toupper(0xf0);
+    ok(ret == 0xf0, "Got %#x.\n", ret);
+    ok(errno == 0xdeadbeef, "Got errno %d.\n", errno);
+
+    ok(setlocale(LC_ALL, "Chinese_China.936") != NULL, "setlocale failed.\n");
+    errno = 0xdeadbeef;
+    ret = p_toupper((signed char)0xf0);
+    ok(ret == (signed char)0xf0, "Got %#x.\n", ret);
+    ok(errno == EILSEQ, "Got errno %d.\n", errno);
+    errno = 0xdeadbeef;
+    ret = p_toupper(0xf0);
+    ok(ret == 0xf0, "Got %#x.\n", ret);
+    ok(errno == 0xdeadbeef, "Got errno %d.\n", errno);
+
+    setlocale(LC_ALL, "C");
+}
+
 START_TEST(string)
 {
     char mem[100];
@@ -4498,6 +5043,8 @@ START_TEST(string)
     SET(p_strncmp, "strncmp");
     pstrcpy_s = (void *)GetProcAddress( hMsvcrt,"strcpy_s" );
     pstrcat_s = (void *)GetProcAddress( hMsvcrt,"strcat_s" );
+    p_strncpy_s = (void *)GetProcAddress( hMsvcrt, "strncpy_s" );
+    p_strncat_s = (void *)GetProcAddress( hMsvcrt, "strncat_s" );
     p_mbscat_s = (void*)GetProcAddress( hMsvcrt, "_mbscat_s" );
     p_mbsnbcat_s = (void *)GetProcAddress( hMsvcrt,"_mbsnbcat_s" );
     p_mbsnbcpy_s = (void *)GetProcAddress( hMsvcrt,"_mbsnbcpy_s" );
@@ -4550,6 +5097,8 @@ START_TEST(string)
     p___strncnt = (void*)GetProcAddress(hMsvcrt, "__strncnt");
     p_mbsnextc_l = (void*)GetProcAddress(hMsvcrt, "_mbsnextc_l");
     p_mbscmp_l = (void*)GetProcAddress(hMsvcrt, "_mbscmp_l");
+    p__strnicmp_l = (void*)GetProcAddress(hMsvcrt, "_strnicmp_l");
+    p_toupper = (void*)GetProcAddress(hMsvcrt, "toupper");
 
     /* MSVCRT memcpy behaves like memmove for overlapping moves,
        MFC42 CString::Insert seems to rely on that behaviour */
@@ -4567,11 +5116,13 @@ START_TEST(string)
     test_mbsspn();
     test_mbsspnp();
     test_strdup();
+    test_wcsdup();
     test_strcmp();
     test_strcpy_s();
     test_memcpy_s();
     test_memmove_s();
     test_strcat_s();
+    test_strncat_s();
     test__mbscat_s();
     test__mbsnbcpy_s();
     test__mbscpy_s();
@@ -4623,6 +5174,7 @@ START_TEST(string)
     test__memicmp_l();
     test__strupr();
     test__tcsncoll();
+    test__tcscoll();
     test__tcsnicoll();
     test___strncnt();
     test_C_locale();
@@ -4633,4 +5185,8 @@ START_TEST(string)
     test_SpecialCasing();
     test__mbbtype();
     test_wcsncpy();
+    test_mbsrev();
+    test__tolower_l();
+    test__strnicmp_l();
+    test_toupper();
 }

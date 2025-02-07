@@ -1,10 +1,9 @@
-EXTRADEFS = -DWINE_NO_LONG_TYPES
 TESTDLL   = kernelbase.dll
 
-C_SRCS = \
+SOURCES = \
+	file.c \
+	memory.c \
 	path.c \
 	process.c \
+	rsrc.rc \
 	sync.c
-
-RC_SRCS = \
-	rsrc.rc

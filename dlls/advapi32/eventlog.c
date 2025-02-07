@@ -27,6 +27,7 @@
 #include "winerror.h"
 #include "winternl.h"
 #include "wmistr.h"
+#define _WMI_SOURCE_
 #include "evntrace.h"
 #include "evntprov.h"
 
@@ -58,7 +59,7 @@ BOOL WINAPI BackupEventLogA( HANDLE hEventLog, LPCSTR lpBackupFileName )
 
     backupW = strdupAW(lpBackupFileName);
     ret = BackupEventLogW(hEventLog, backupW);
-    heap_free(backupW);
+    free(backupW);
 
     return ret;
 }
@@ -115,7 +116,7 @@ BOOL WINAPI ClearEventLogA( HANDLE hEventLog, LPCSTR lpBackupFileName )
 
     backupW = strdupAW(lpBackupFileName);
     ret = ClearEventLogW(hEventLog, backupW);
-    heap_free(backupW);
+    free(backupW);
 
     return ret;
 }
@@ -205,7 +206,7 @@ ULONG WINAPI EnableTraceEx( LPCGUID provider, LPCGUID source, TRACEHANDLE hSessi
                             UCHAR level, ULONGLONG anykeyword, ULONGLONG allkeyword, ULONG enableprop,
                             PEVENT_FILTER_DESCRIPTOR filterdesc )
 {
-    FIXME("(%s, %s, %s, %u, %u, %s, %s, %u, %p): stub\n", debugstr_guid(provider),
+    FIXME("(%s, %s, %s, %lu, %u, %s, %s, %lu, %p): stub\n", debugstr_guid(provider),
             debugstr_guid(source), wine_dbgstr_longlong(hSession), enable, level,
             wine_dbgstr_longlong(anykeyword), wine_dbgstr_longlong(allkeyword),
             enableprop, filterdesc);
@@ -218,7 +219,7 @@ ULONG WINAPI EnableTraceEx( LPCGUID provider, LPCGUID source, TRACEHANDLE hSessi
  */
 ULONG WINAPI EnableTrace( ULONG enable, ULONG flag, ULONG level, LPCGUID guid, TRACEHANDLE hSession )
 {
-    FIXME("(%d, 0x%x, %d, %s, %s): stub\n", enable, flag, level,
+    FIXME("(%ld, 0x%lx, %ld, %s, %s): stub\n", enable, flag, level,
             debugstr_guid(guid), wine_dbgstr_longlong(hSession));
 
     return ERROR_SUCCESS;
@@ -245,7 +246,7 @@ BOOL WINAPI GetEventLogInformation( HANDLE hEventLog, DWORD dwInfoLevel, LPVOID 
 {
     EVENTLOG_FULL_INFORMATION *efi;
 
-    FIXME("(%p, %d, %p, %d, %p) stub\n", hEventLog, dwInfoLevel, lpBuffer, cbBufSize, pcbBytesNeeded);
+    FIXME("(%p, %ld, %p, %ld, %p) stub\n", hEventLog, dwInfoLevel, lpBuffer, cbBufSize, pcbBytesNeeded);
 
     if (dwInfoLevel != EVENTLOG_FULL_INFO)
     {
@@ -394,8 +395,8 @@ HANDLE WINAPI OpenBackupEventLogA( LPCSTR lpUNCServerName, LPCSTR lpFileName )
     uncnameW = strdupAW(lpUNCServerName);
     filenameW = strdupAW(lpFileName);
     handle = OpenBackupEventLogW(uncnameW, filenameW);
-    heap_free(uncnameW);
-    heap_free(filenameW);
+    free(uncnameW);
+    free(filenameW);
 
     return handle;
 }
@@ -453,8 +454,8 @@ HANDLE WINAPI OpenEventLogA( LPCSTR uncname, LPCSTR source )
     uncnameW = strdupAW(uncname);
     sourceW = strdupAW(source);
     handle = OpenEventLogW(uncnameW, sourceW);
-    heap_free(uncnameW);
-    heap_free(sourceW);
+    free(uncnameW);
+    free(sourceW);
 
     return handle;
 }
@@ -506,7 +507,7 @@ HANDLE WINAPI OpenEventLogW( LPCWSTR uncname, LPCWSTR source )
 BOOL WINAPI ReadEventLogA( HANDLE hEventLog, DWORD dwReadFlags, DWORD dwRecordOffset,
     LPVOID lpBuffer, DWORD nNumberOfBytesToRead, DWORD *pnBytesRead, DWORD *pnMinNumberOfBytesNeeded )
 {
-    FIXME("(%p,0x%08x,0x%08x,%p,0x%08x,%p,%p) stub\n", hEventLog, dwReadFlags,
+    FIXME("(%p,0x%08lx,0x%08lx,%p,0x%08lx,%p,%p) stub\n", hEventLog, dwReadFlags,
           dwRecordOffset, lpBuffer, nNumberOfBytesToRead, pnBytesRead, pnMinNumberOfBytesNeeded);
 
     SetLastError(ERROR_HANDLE_EOF);
@@ -521,7 +522,7 @@ BOOL WINAPI ReadEventLogA( HANDLE hEventLog, DWORD dwReadFlags, DWORD dwRecordOf
 BOOL WINAPI ReadEventLogW( HANDLE hEventLog, DWORD dwReadFlags, DWORD dwRecordOffset,
     LPVOID lpBuffer, DWORD nNumberOfBytesToRead, DWORD *pnBytesRead, DWORD *pnMinNumberOfBytesNeeded )
 {
-    FIXME("(%p,0x%08x,0x%08x,%p,0x%08x,%p,%p) stub\n", hEventLog, dwReadFlags,
+    FIXME("(%p,0x%08lx,0x%08lx,%p,0x%08lx,%p,%p) stub\n", hEventLog, dwReadFlags,
           dwRecordOffset, lpBuffer, nNumberOfBytesToRead, pnBytesRead, pnMinNumberOfBytesNeeded);
 
     SetLastError(ERROR_HANDLE_EOF);
@@ -602,13 +603,13 @@ BOOL WINAPI ReportEventA ( HANDLE hEventLog, WORD wType, WORD wCategory, DWORD d
     UINT i;
     BOOL ret;
 
-    FIXME("(%p,0x%04x,0x%04x,0x%08x,%p,0x%04x,0x%08x,%p,%p): stub\n", hEventLog,
+    FIXME("(%p,0x%04x,0x%04x,0x%08lx,%p,0x%04x,0x%08lx,%p,%p): stub\n", hEventLog,
           wType, wCategory, dwEventID, lpUserSid, wNumStrings, dwDataSize, lpStrings, lpRawData);
 
     if (wNumStrings == 0) return TRUE;
     if (!lpStrings) return TRUE;
 
-    wideStrArray = heap_alloc(sizeof(LPWSTR) * wNumStrings);
+    wideStrArray = malloc(sizeof(WCHAR *) * wNumStrings);
     for (i = 0; i < wNumStrings; i++)
     {
         RtlCreateUnicodeStringFromAsciiz(&str, lpStrings[i]);
@@ -617,8 +618,8 @@ BOOL WINAPI ReportEventA ( HANDLE hEventLog, WORD wType, WORD wCategory, DWORD d
     ret = ReportEventW(hEventLog, wType, wCategory, dwEventID, lpUserSid,
                        wNumStrings, dwDataSize, (LPCWSTR *)wideStrArray, lpRawData);
     for (i = 0; i < wNumStrings; i++)
-        heap_free( wideStrArray[i] );
-    heap_free(wideStrArray);
+        free(wideStrArray[i]);
+    free(wideStrArray);
     return ret;
 }
 
@@ -632,7 +633,7 @@ BOOL WINAPI ReportEventW( HANDLE hEventLog, WORD wType, WORD wCategory, DWORD dw
 {
     UINT i;
 
-    FIXME("(%p,0x%04x,0x%04x,0x%08x,%p,0x%04x,0x%08x,%p,%p): stub\n", hEventLog,
+    FIXME("(%p,0x%04x,0x%04x,0x%08lx,%p,0x%04x,0x%08lx,%p,%p): stub\n", hEventLog,
           wType, wCategory, dwEventID, lpUserSid, wNumStrings, dwDataSize, lpStrings, lpRawData);
 
     /* partial stub */
@@ -642,20 +643,34 @@ BOOL WINAPI ReportEventW( HANDLE hEventLog, WORD wType, WORD wCategory, DWORD dw
 
     for (i = 0; i < wNumStrings; i++)
     {
-        switch (wType)
+        const WCHAR *line = lpStrings[i];
+
+        while (*line)
         {
-        case EVENTLOG_SUCCESS:
-            TRACE_(eventlog)("%s\n", debugstr_w(lpStrings[i]));
-            break;
-        case EVENTLOG_ERROR_TYPE:
-            ERR_(eventlog)("%s\n", debugstr_w(lpStrings[i]));
-            break;
-        case EVENTLOG_WARNING_TYPE:
-            WARN_(eventlog)("%s\n", debugstr_w(lpStrings[i]));
-            break;
-        default:
-            TRACE_(eventlog)("%s\n", debugstr_w(lpStrings[i]));
-            break;
+            const WCHAR *next = wcschr( line, '\n' );
+
+            if (next)
+                ++next;
+            else
+                next = line + wcslen( line );
+
+            switch (wType)
+            {
+            case EVENTLOG_SUCCESS:
+                TRACE_(eventlog)("%s\n", debugstr_wn(line, next - line));
+                break;
+            case EVENTLOG_ERROR_TYPE:
+                ERR_(eventlog)("%s\n", debugstr_wn(line, next - line));
+                break;
+            case EVENTLOG_WARNING_TYPE:
+                WARN_(eventlog)("%s\n", debugstr_wn(line, next - line));
+                break;
+            default:
+                TRACE_(eventlog)("%s\n", debugstr_wn(line, next - line));
+                break;
+            }
+
+            line = next;
         }
     }
     return TRUE;
@@ -709,6 +724,6 @@ TRACEHANDLE WINAPI OpenTraceA( PEVENT_TRACE_LOGFILEA logfile )
 ULONG WINAPI EnumerateTraceGuids(PTRACE_GUID_PROPERTIES *propertiesarray,
                                  ULONG arraycount, PULONG guidcount)
 {
-    FIXME("%p %d %p: stub\n", propertiesarray, arraycount, guidcount);
+    FIXME("%p %ld %p: stub\n", propertiesarray, arraycount, guidcount);
     return ERROR_INVALID_PARAMETER;
 }

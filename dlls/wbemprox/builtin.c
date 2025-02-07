@@ -17,11 +17,8 @@
  */
 
 #define COBJMACROS
-#define NONAMELESSUNION
-#define NONAMELESSSTRUCT
 
 #include <stdarg.h>
-#include <intrin.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -46,7 +43,6 @@
 #include "setupapi.h"
 #include "ntddstor.h"
 
-#include "wine/asm.h"
 #include "wine/debug.h"
 #include "wbemprox_private.h"
 
@@ -83,6 +79,7 @@ static const struct column col_bios[] =
     { L"SMBIOSBIOSVersion",              CIM_STRING|COL_FLAG_DYNAMIC },
     { L"SMBIOSMajorVersion",             CIM_UINT16 },
     { L"SMBIOSMinorVersion",             CIM_UINT16 },
+    { L"Status",                         CIM_STRING },
     { L"SystemBiosMajorVersion",         CIM_UINT8 },
     { L"SystemBiosMinorVersion",         CIM_UINT8 },
     { L"Version",                        CIM_STRING|COL_FLAG_KEY },
@@ -100,11 +97,13 @@ static const struct column col_compsys[] =
     { L"Description",               CIM_STRING },
     { L"Domain",                    CIM_STRING },
     { L"DomainRole",                CIM_UINT16 },
+    { L"HypervisorPresent",         CIM_BOOLEAN },
     { L"Manufacturer",              CIM_STRING },
     { L"Model",                     CIM_STRING },
     { L"Name",                      CIM_STRING|COL_FLAG_DYNAMIC },
     { L"NumberOfLogicalProcessors", CIM_UINT32 },
     { L"NumberOfProcessors",        CIM_UINT32 },
+    { L"SystemType",                CIM_STRING },
     { L"TotalPhysicalMemory",       CIM_UINT64 },
     { L"UserName",                  CIM_STRING|COL_FLAG_DYNAMIC },
 };
@@ -134,6 +133,7 @@ static const struct column col_directory[] =
 };
 static const struct column col_diskdrive[] =
 {
+    { L"Caption",       CIM_STRING },
     { L"DeviceId",      CIM_STRING|COL_FLAG_DYNAMIC|COL_FLAG_KEY },
     { L"Index",         CIM_UINT32 },
     { L"InterfaceType", CIM_STRING },
@@ -204,7 +204,9 @@ static const struct column col_networkadapter[] =
     { L"MACAddress",          CIM_STRING|COL_FLAG_DYNAMIC },
     { L"Manufacturer",        CIM_STRING },
     { L"Name",                CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"NetConnectionID",     CIM_STRING },
     { L"NetConnectionStatus", CIM_UINT16 },
+    { L"NetEnabled",          CIM_BOOLEAN },
     { L"PhysicalAdapter",     CIM_BOOLEAN },
     { L"PNPDeviceID",         CIM_STRING },
     { L"ServiceName",         CIM_STRING|COL_FLAG_DYNAMIC },
@@ -228,7 +230,9 @@ static const struct column col_networkadapterconfig[] =
 };
 static const struct column col_operatingsystem[] =
 {
+    { L"BootDevice",              CIM_STRING },
     { L"BuildNumber",             CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"BuildType",               CIM_STRING|COL_FLAG_DYNAMIC },
     { L"Caption",                 CIM_STRING|COL_FLAG_DYNAMIC },
     { L"CodeSet",                 CIM_STRING|COL_FLAG_DYNAMIC },
     { L"CountryCode",             CIM_STRING|COL_FLAG_DYNAMIC },
@@ -236,19 +240,22 @@ static const struct column col_operatingsystem[] =
     { L"CSName",                  CIM_STRING|COL_FLAG_DYNAMIC },
     { L"CurrentTimeZone",         CIM_SINT16 },
     { L"FreePhysicalMemory",      CIM_UINT64 },
-    { L"InstallDate",             CIM_DATETIME },
+    { L"FreeVirtualMemory",       CIM_UINT64 },
+    { L"InstallDate",             CIM_DATETIME|COL_FLAG_DYNAMIC },
     { L"LastBootUpTime",          CIM_DATETIME|COL_FLAG_DYNAMIC },
     { L"LocalDateTime",           CIM_DATETIME|COL_FLAG_DYNAMIC },
     { L"Locale",                  CIM_STRING|COL_FLAG_DYNAMIC },
     { L"Manufacturer",            CIM_STRING },
     { L"Name",                    CIM_STRING|COL_FLAG_DYNAMIC },
     { L"OperatingSystemSKU",      CIM_UINT32 },
+    { L"Organization",            CIM_STRING|COL_FLAG_DYNAMIC },
     { L"OSArchitecture",          CIM_STRING },
     { L"OSLanguage",              CIM_UINT32 },
     { L"OSProductSuite",          CIM_UINT32 },
     { L"OSType",                  CIM_UINT16 },
     { L"Primary",                 CIM_BOOLEAN },
     { L"ProductType",             CIM_UINT32 },
+    { L"RegisteredUser",          CIM_STRING|COL_FLAG_DYNAMIC },
     { L"SerialNumber",            CIM_STRING|COL_FLAG_DYNAMIC },
     { L"ServicePackMajorVersion", CIM_UINT16 },
     { L"ServicePackMinorVersion", CIM_UINT16 },
@@ -259,6 +266,11 @@ static const struct column col_operatingsystem[] =
     { L"TotalVirtualMemorySize",  CIM_UINT64 },
     { L"TotalVisibleMemorySize",  CIM_UINT64 },
     { L"Version",                 CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"WindowsDirectory",        CIM_STRING|COL_FLAG_DYNAMIC },
+};
+static const struct column col_pagefileusage[] =
+{
+    { L"Name", CIM_STRING },
 };
 static const struct column col_param[] =
 {
@@ -288,9 +300,12 @@ static const struct column col_physicalmemory[] =
 };
 static const struct column col_pnpentity[] =
 {
+    { L"Caption",              CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"ClassGuid",            CIM_STRING|COL_FLAG_DYNAMIC },
     { L"DeviceId",             CIM_STRING|COL_FLAG_DYNAMIC },
     { L"Manufacturer",         CIM_STRING },
-    { L"Name",                 CIM_STRING },
+    { L"Name",                 CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"Service",              CIM_STRING|COL_FLAG_DYNAMIC },
 };
 static const struct column col_printer[] =
 {
@@ -309,6 +324,7 @@ static const struct column col_process[] =
     { L"Caption",         CIM_STRING|COL_FLAG_DYNAMIC },
     { L"CommandLine",     CIM_STRING|COL_FLAG_DYNAMIC },
     { L"Description",     CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"ExecutablePath",  CIM_STRING|COL_FLAG_DYNAMIC },
     { L"Handle",          CIM_STRING|COL_FLAG_DYNAMIC|COL_FLAG_KEY },
     { L"Name",            CIM_STRING|COL_FLAG_DYNAMIC },
     { L"ParentProcessID", CIM_UINT32 },
@@ -356,7 +372,10 @@ static const struct column col_qualifier[] =
 static const struct column col_quickfixengineering[] =
 {
     { L"Caption",  CIM_STRING },
+    { L"Description",  CIM_STRING },
     { L"HotFixID", CIM_STRING|COL_FLAG_KEY },
+    { L"InstalledBy",  CIM_STRING },
+    { L"InstalledOn",  CIM_STRING },
 };
 static const struct column col_rawsmbiostables[] =
 {
@@ -394,6 +413,7 @@ static const struct column col_softwarelicensingproduct[] =
 };
 static const struct column col_sounddevice[] =
 {
+    { L"Caption",      CIM_STRING },
     { L"DeviceID",     CIM_STRING|COL_FLAG_DYNAMIC },
     { L"Manufacturer", CIM_STRING },
     { L"Name",         CIM_STRING },
@@ -407,6 +427,7 @@ static const struct column col_stdregprov[] =
     { L"CreateKey",      CIM_FLAG_ARRAY|COL_FLAG_METHOD },
     { L"EnumKey",        CIM_FLAG_ARRAY|COL_FLAG_METHOD },
     { L"EnumValues",     CIM_FLAG_ARRAY|COL_FLAG_METHOD },
+    { L"GetBinaryValue", CIM_FLAG_ARRAY|COL_FLAG_METHOD },
     { L"GetStringValue", CIM_FLAG_ARRAY|COL_FLAG_METHOD },
     { L"SetStringValue", CIM_FLAG_ARRAY|COL_FLAG_METHOD },
     { L"SetDWORDValue",  CIM_FLAG_ARRAY|COL_FLAG_METHOD },
@@ -443,30 +464,72 @@ static const struct column col_sysrestore[] =
 };
 static const struct column col_videocontroller[] =
 {
+    { L"AcceleratorCapabilities",     CIM_UINT16|CIM_FLAG_ARRAY },
     { L"AdapterCompatibility",        CIM_STRING },
     { L"AdapterDACType",              CIM_STRING },
     { L"AdapterRAM",                  CIM_UINT32 },
     { L"Availability",                CIM_UINT16 },
+    { L"CapabilityDescriptions",      CIM_STRING|CIM_FLAG_ARRAY },
     { L"Caption",                     CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"ColorTableEntries",           CIM_UINT32 },
     { L"ConfigManagerErrorCode",      CIM_UINT32 },
+    { L"ConfigManagerUserConfig",     CIM_BOOLEAN },
+    { L"CreationClassName",           CIM_STRING },
     { L"CurrentBitsPerPixel",         CIM_UINT32 },
     { L"CurrentHorizontalResolution", CIM_UINT32 },
+    { L"CurrentNumberOfColors",       CIM_UINT64 },
+    { L"CurrentNumberOfColumns",      CIM_UINT32 },
+    { L"CurrentNumberOfRows",         CIM_UINT32 },
     { L"CurrentRefreshRate",          CIM_UINT32 },
     { L"CurrentScanMode",             CIM_UINT16 },
     { L"CurrentVerticalResolution",   CIM_UINT32 },
     { L"Description",                 CIM_STRING|COL_FLAG_DYNAMIC },
     { L"DeviceId",                    CIM_STRING|COL_FLAG_KEY },
+    { L"DeviceSpecificPens",          CIM_UINT32 },
+    { L"DitherType",                  CIM_UINT32 },
     { L"DriverDate",                  CIM_DATETIME },
     { L"DriverVersion",               CIM_STRING },
+    { L"ErrorCleared",                CIM_BOOLEAN },
+    { L"ErrorDescription",            CIM_STRING },
+    { L"ICMIntent",                   CIM_UINT32 },
+    { L"ICMMethod",                   CIM_UINT32 },
+    { L"InfFilename",                 CIM_STRING },
+    { L"InfSection",                  CIM_STRING },
     { L"InstalledDisplayDrivers",     CIM_STRING },
+    { L"LastErrorCode",               CIM_UINT32 },
+    { L"MaxMemorySupported",          CIM_UINT32 },
+    { L"MaxNumberControlled",         CIM_UINT32 },
+    { L"MaxRefreshRate",              CIM_UINT32 },
+    { L"MinRefreshRate",              CIM_UINT32 },
+    { L"Monochrome",                  CIM_BOOLEAN },
     { L"Name",                        CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"NumberOfColorPlanes",         CIM_UINT16 },
+    { L"NumberOfVideoPages",          CIM_UINT32 },
     { L"PNPDeviceID",                 CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"PowerManagementCapabilities", CIM_UINT16|CIM_FLAG_ARRAY },
+    { L"PowerManagementSupported",    CIM_BOOLEAN },
+    { L"ProtocolSupported",           CIM_UINT16 },
+    { L"ReservedSystemPaletteEntries", CIM_UINT32 },
+    { L"SpecificationVersion",        CIM_UINT32 },
     { L"Status",                      CIM_STRING },
+    { L"StatusInfo",                  CIM_UINT16 },
+    { L"SystemCreationClassName",     CIM_STRING },
+    { L"SystemName",                  CIM_STRING },
+    { L"SystemPaletteEntries",        CIM_UINT32 },
+    { L"TimeOfLastReset",             CIM_DATETIME },
     { L"VideoArchitecture",           CIM_UINT16 },
     { L"VideoMemoryType",             CIM_UINT16 },
+    { L"VideoMode",                   CIM_UINT16 },
     { L"VideoModeDescription",        CIM_STRING|COL_FLAG_DYNAMIC },
     { L"VideoProcessor",              CIM_STRING|COL_FLAG_DYNAMIC },
 };
+
+static const struct column col_volume[] =
+{
+    { L"DeviceId",      CIM_STRING|COL_FLAG_DYNAMIC|COL_FLAG_KEY },
+    { L"DriveLetter",   CIM_STRING|COL_FLAG_DYNAMIC },
+};
+
 static const struct column col_winsat[] =
 {
     { L"CPUScore",              CIM_REAL32 },
@@ -510,6 +573,7 @@ struct record_bios
     const WCHAR *smbiosbiosversion;
     UINT16       smbiosmajorversion;
     UINT16       smbiosminorversion;
+    const WCHAR *status;
     UINT8        systembiosmajorversion;
     UINT8        systembiosminorversion;
     const WCHAR *version;
@@ -527,11 +591,13 @@ struct record_computersystem
     const WCHAR *description;
     const WCHAR *domain;
     UINT16       domainrole;
+    int          hypervisorpresent;
     const WCHAR *manufacturer;
     const WCHAR *model;
     const WCHAR *name;
     UINT32       num_logical_processors;
     UINT32       num_processors;
+    const WCHAR *systemtype;
     UINT64       total_physical_memory;
     const WCHAR *username;
 };
@@ -561,6 +627,7 @@ struct record_directory
 };
 struct record_diskdrive
 {
+    const WCHAR *caption;
     const WCHAR *device_id;
     UINT32       index;
     const WCHAR *interfacetype;
@@ -631,7 +698,9 @@ struct record_networkadapter
     const WCHAR *mac_address;
     const WCHAR *manufacturer;
     const WCHAR *name;
+    const WCHAR *netconnection_id;
     UINT16       netconnection_status;
+    int          netenabled;
     int          physicaladapter;
     const WCHAR *pnpdevice_id;
     const WCHAR *servicename;
@@ -655,7 +724,9 @@ struct record_networkadapterconfig
 };
 struct record_operatingsystem
 {
+    const WCHAR *bootdevice;
     const WCHAR *buildnumber;
+    const WCHAR *buildtype;
     const WCHAR *caption;
     const WCHAR *codeset;
     const WCHAR *countrycode;
@@ -663,6 +734,7 @@ struct record_operatingsystem
     const WCHAR *csname;
     INT16        currenttimezone;
     UINT64       freephysicalmemory;
+    UINT64       freevirtualmemory;
     const WCHAR *installdate;
     const WCHAR *lastbootuptime;
     const WCHAR *localdatetime;
@@ -670,12 +742,14 @@ struct record_operatingsystem
     const WCHAR *manufacturer;
     const WCHAR *name;
     UINT32       operatingsystemsku;
+    const WCHAR *organization;
     const WCHAR *osarchitecture;
     UINT32       oslanguage;
     UINT32       osproductsuite;
     UINT16       ostype;
     int          primary;
     UINT32       producttype;
+    const WCHAR *registereduser;
     const WCHAR *serialnumber;
     UINT16       servicepackmajor;
     UINT16       servicepackminor;
@@ -686,6 +760,11 @@ struct record_operatingsystem
     UINT64       totalvirtualmemorysize;
     UINT64       totalvisiblememorysize;
     const WCHAR *version;
+    const WCHAR *windowsdirectory;
+};
+struct record_pagefileusage
+{
+    const WCHAR *name;
 };
 struct record_param
 {
@@ -715,9 +794,12 @@ struct record_physicalmemory
 };
 struct record_pnpentity
 {
+    const WCHAR *caption;
+    const WCHAR *class_guid;
     const WCHAR *device_id;
     const WCHAR *manufacturer;
     const WCHAR *name;
+    const WCHAR *service;
 };
 struct record_printer
 {
@@ -736,6 +818,7 @@ struct record_process
     const WCHAR *caption;
     const WCHAR *commandline;
     const WCHAR *description;
+    const WCHAR *executablepath;
     const WCHAR *handle;
     const WCHAR *name;
     UINT32       pprocess_id;
@@ -783,7 +866,10 @@ struct record_qualifier
 struct record_quickfixengineering
 {
     const WCHAR *caption;
+    const WCHAR *description;
     const WCHAR *hotfixid;
+    const WCHAR *installedby;
+    const WCHAR *installedon;
 };
 struct record_rawsmbiostables
 {
@@ -821,6 +907,7 @@ struct record_softwarelicensingproduct
 };
 struct record_sounddevice
 {
+    const WCHAR *caption;
     const WCHAR *deviceid;
     const WCHAR *manufacturer;
     const WCHAR *name;
@@ -834,6 +921,7 @@ struct record_stdregprov
     class_method *createkey;
     class_method *enumkey;
     class_method *enumvalues;
+    class_method *getbinaryvalue;
     class_method *getstringvalue;
     class_method *setstringvalue;
     class_method *setdwordvalue;
@@ -869,30 +957,72 @@ struct record_systemenclosure
 };
 struct record_videocontroller
 {
+    const struct array *accelerator_caps;
     const WCHAR *adapter_compatibility;
     const WCHAR *adapter_dactype;
     UINT32       adapter_ram;
     UINT16       availability;
+    const struct array *capability_desc;
     const WCHAR *caption;
+    UINT32       color_table_entries;
     UINT32       config_errorcode;
+    int          config_userconfig;
+    const WCHAR *creation_class_name;
     UINT32       current_bitsperpixel;
     UINT32       current_horizontalres;
+    UINT64       current_numcolors;
+    UINT32       current_numcolumns;
+    UINT32       current_numrows;
     UINT32       current_refreshrate;
     UINT16       current_scanmode;
     UINT32       current_verticalres;
     const WCHAR *description;
     const WCHAR *device_id;
+    UINT32       device_pens;
+    UINT32       dither_type;
     const WCHAR *driverdate;
     const WCHAR *driverversion;
+    int          error_cleared;
+    const WCHAR *error_desc;
+    UINT32       icm_intent;
+    UINT32       icm_method;
+    const WCHAR *inf_name;
+    const WCHAR *infsection;
     const WCHAR *installeddriver;
+    UINT32       lasterror;
+    UINT32       max_memory;
+    UINT32       max_number;
+    UINT32       max_refresh;
+    UINT32       min_refresh;
+    int          monochrome;
     const WCHAR *name;
+    UINT16       number_planes;
+    UINT32       number_pages;
     const WCHAR *pnpdevice_id;
+    const struct array *power_caps;
+    int          power_supported;
+    UINT16       protocol_supported;
+    UINT32       reserved_entries;
+    UINT32       spec_version;
     const WCHAR *status;
+    UINT16       status_info;
+    const WCHAR *systemclass_name;
+    const WCHAR *system_name;
+    UINT32       system_entries;
+    const WCHAR *time_reset;
     UINT16       videoarchitecture;
     UINT16       videomemorytype;
+    UINT16       videomode;
     const WCHAR *videomodedescription;
     const WCHAR *videoprocessor;
 };
+
+struct record_volume
+{
+    const WCHAR *deviceid;
+    const WCHAR *driveletter;
+};
+
 struct record_winsat
 {
     FLOAT        cpuscore;
@@ -910,6 +1040,10 @@ static const struct record_associator data_associator[] =
 {
     { L"Win32_DiskDriveToDiskPartition", L"Win32_DiskPartition", L"Win32_DiskDrive" },
     { L"Win32_LogicalDiskToPartition", L"Win32_LogicalDisk", L"Win32_DiskPartition" },
+};
+static const struct record_pagefileusage data_pagefileusage[] =
+{
+    { L"c:\\pagefile.sys", },
 };
 static const struct record_param data_param[] =
 {
@@ -932,6 +1066,11 @@ static const struct record_param data_param[] =
     { L"StdRegProv", L"EnumValues", -1, L"ReturnValue", CIM_UINT32 },
     { L"StdRegProv", L"EnumValues", -1, L"sNames", CIM_STRING|CIM_FLAG_ARRAY },
     { L"StdRegProv", L"EnumValues", -1, L"Types", CIM_SINT32|CIM_FLAG_ARRAY },
+    { L"StdRegProv", L"GetBinaryValue", 1, L"hDefKey", CIM_SINT32, 0x80000002 },
+    { L"StdRegProv", L"GetBinaryValue", 1, L"sSubKeyName", CIM_STRING },
+    { L"StdRegProv", L"GetBinaryValue", 1, L"sValueName", CIM_STRING },
+    { L"StdRegProv", L"GetBinaryValue", -1, L"ReturnValue", CIM_UINT32 },
+    { L"StdRegProv", L"GetBinaryValue", -1, L"uValue", CIM_UINT8|CIM_FLAG_ARRAY },
     { L"StdRegProv", L"GetStringValue", 1, L"hDefKey", CIM_SINT32, 0x80000002 },
     { L"StdRegProv", L"GetStringValue", 1, L"sSubKeyName", CIM_STRING },
     { L"StdRegProv", L"GetStringValue", 1, L"sValueName", CIM_STRING },
@@ -985,7 +1124,7 @@ static const struct record_qualifier data_qualifier[] =
 
 static const struct record_quickfixengineering data_quickfixengineering[] =
 {
-    { L"http://winehq.org", L"KB1234567" },
+    { L"http://winehq.org", L"Update", L"KB1234567", L"", L"22/2/2022" },
 };
 
 static const struct record_softwarelicensingproduct data_softwarelicensingproduct[] =
@@ -999,6 +1138,7 @@ static const struct record_stdregprov data_stdregprov[] =
         reg_create_key,
         reg_enum_key,
         reg_enum_values,
+        reg_get_binaryvalue,
         reg_get_stringvalue,
         reg_set_stringvalue,
         reg_set_dwordvalue,
@@ -1055,7 +1195,7 @@ static BOOL resize_table( struct table *table, UINT row_count, UINT row_size )
 {
     if (!table->num_rows_allocated)
     {
-        if (!(table->data = malloc( row_count * row_size ))) return FALSE;
+        if (!(table->data = calloc( row_count, row_size ))) return FALSE;
         table->num_rows_allocated = row_count;
         return TRUE;
     }
@@ -1064,6 +1204,7 @@ static BOOL resize_table( struct table *table, UINT row_count, UINT row_size )
         BYTE *data;
         UINT count = max( row_count, table->num_rows_allocated * 2 );
         if (!(data = realloc( table->data, count * row_size ))) return FALSE;
+        memset( data + table->num_rows_allocated * row_size, 0, (count - table->num_rows_allocated) * row_size );
         table->data = data;
         table->num_rows_allocated = count;
     }
@@ -1082,10 +1223,13 @@ struct smbios_prologue
 
 enum smbios_type
 {
-    SMBIOS_TYPE_BIOS,
-    SMBIOS_TYPE_SYSTEM,
-    SMBIOS_TYPE_BASEBOARD,
-    SMBIOS_TYPE_CHASSIS,
+    SMBIOS_TYPE_BIOS = 0,
+    SMBIOS_TYPE_SYSTEM = 1,
+    SMBIOS_TYPE_BASEBOARD = 2,
+    SMBIOS_TYPE_CHASSIS = 3,
+    SMBIOS_TYPE_PROCESSOR = 4,
+    SMBIOS_TYPE_BOOTINFO = 32,
+    SMBIOS_TYPE_END = 127
 };
 
 struct smbios_header
@@ -1139,11 +1283,43 @@ struct smbios_system
     BYTE                 serial;
     BYTE                 uuid[16];
 };
+
+struct smbios_processor
+{
+    struct smbios_header hdr;
+    BYTE                 socket;
+    BYTE                 type;
+    BYTE                 family;
+    BYTE                 vendor;
+    ULONGLONG            id;
+    BYTE                 version;
+    BYTE                 voltage;
+    WORD                 clock;
+    WORD                 max_speed;
+    WORD                 cur_speed;
+    BYTE                 status;
+    BYTE                 upgrade;
+    WORD                 l1cache;
+    WORD                 l2cache;
+    WORD                 l3cache;
+    BYTE                 serial;
+    BYTE                 asset_tag;
+    BYTE                 part_number;
+    BYTE                 core_count;
+    BYTE                 core_enabled;
+    BYTE                 thread_count;
+    WORD                 characteristics;
+    WORD                 family2;
+    WORD                 core_count2;
+    WORD                 core_enabled2;
+    WORD                 thread_count2;
+};
 #include "poppack.h"
 
 #define RSMB (('R' << 24) | ('S' << 16) | ('M' << 8) | 'B')
 
-static const struct smbios_header *find_smbios_entry( enum smbios_type type, const char *buf, UINT len )
+static const struct smbios_header *find_smbios_entry( enum smbios_type type, unsigned int index,
+                                                      const char *buf, UINT len )
 {
     const char *ptr, *start;
     const struct smbios_prologue *prologue;
@@ -1169,23 +1345,19 @@ static const struct smbios_header *find_smbios_entry( enum smbios_type type, con
         if (hdr->type == type)
         {
             if ((const char *)hdr - start + hdr->length > prologue->length) return NULL;
-            break;
+            if (!index--) return hdr;
         }
-        else /* skip other entries and their strings */
+        /* skip other entries and their strings */
+        for (ptr = (const char *)hdr + hdr->length; ptr - buf < len && *ptr; ptr++)
         {
-            for (ptr = (const char *)hdr + hdr->length; ptr - buf < len && *ptr; ptr++)
-            {
-                for (; ptr - buf < len; ptr++) if (!*ptr) break;
-            }
-            if (ptr == (const char *)hdr + hdr->length) ptr++;
-            hdr = (const struct smbios_header *)(ptr + 1);
+            for (; ptr - buf < len; ptr++) if (!*ptr) break;
         }
+        if (ptr == (const char *)hdr + hdr->length) ptr++;
+        hdr = (const struct smbios_header *)(ptr + 1);
     }
-
-    return hdr;
 }
 
-static WCHAR *get_smbios_string( BYTE id, const char *buf, UINT offset, UINT buflen )
+static WCHAR *get_smbios_string_by_id( BYTE id, const char *buf, UINT offset, UINT buflen )
 {
     const char *ptr = buf + offset;
     UINT i = 0;
@@ -1199,44 +1371,65 @@ static WCHAR *get_smbios_string( BYTE id, const char *buf, UINT offset, UINT buf
     return NULL;
 }
 
-static WCHAR *get_baseboard_string( BYTE id, const char *buf, UINT len )
+static WCHAR *get_smbios_string( enum smbios_type type, unsigned int index, size_t field_offset, const char *buf, UINT len )
 {
     const struct smbios_header *hdr;
-    const struct smbios_baseboard *baseboard;
     UINT offset;
 
-    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_BASEBOARD, buf, len ))) return NULL;
+    if (!(hdr = find_smbios_entry( type, index, buf, len ))) return NULL;
 
-    baseboard = (const struct smbios_baseboard *)hdr;
-    offset = (const char *)baseboard - buf + baseboard->hdr.length;
-    return get_smbios_string( id, buf, offset, len );
+    if (field_offset + sizeof(BYTE) > hdr->length) return NULL;
+
+    offset = (const char *)hdr - buf + hdr->length;
+    return get_smbios_string_by_id( ((const BYTE *)hdr)[field_offset], buf, offset, len );
+}
+
+static WCHAR *get_reg_str( HKEY root, const WCHAR *path, const WCHAR *value )
+{
+    HKEY hkey = 0;
+    DWORD size, type;
+    WCHAR *ret = NULL;
+
+    if (!RegOpenKeyExW( root, path, 0, KEY_READ, &hkey ) &&
+        !RegQueryValueExW( hkey, value, NULL, &type, NULL, &size ) && type == REG_SZ &&
+        (ret = malloc( size + sizeof(WCHAR) )))
+    {
+        size += sizeof(WCHAR);
+        if (RegQueryValueExW( hkey, value, NULL, NULL, (BYTE *)ret, &size ))
+        {
+            free( ret );
+            ret = NULL;
+        }
+    }
+    if (hkey) RegCloseKey( hkey );
+    return ret;
 }
 
 static WCHAR *get_baseboard_manufacturer( const char *buf, UINT len )
 {
-    WCHAR *ret = get_baseboard_string( 1, buf, len );
-    if (!ret) return heap_strdupW( L"Intel Corporation" );
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_BASEBOARD, 0, offsetof(struct smbios_baseboard, vendor), buf, len );
+    if (!ret) return wcsdup( L"Intel Corporation" );
     return ret;
 }
 
 static WCHAR *get_baseboard_product( const char *buf, UINT len )
 {
-    WCHAR *ret = get_baseboard_string( 2, buf, len );
-    if (!ret) return heap_strdupW( L"Base Board" );
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_BASEBOARD, 0, offsetof(struct smbios_baseboard, product), buf, len );
+    if (!ret) return wcsdup( L"Base Board" );
     return ret;
 }
 
 static WCHAR *get_baseboard_serialnumber( const char *buf, UINT len )
 {
-    WCHAR *ret = get_baseboard_string( 4, buf, len );
-    if (!ret) return heap_strdupW( L"None" );
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_BASEBOARD, 0, offsetof(struct smbios_baseboard, serial), buf, len );
+    if (!ret) return wcsdup( L"None" );
     return ret;
 }
 
 static WCHAR *get_baseboard_version( const char *buf, UINT len )
 {
-    WCHAR *ret = get_baseboard_string( 3, buf, len );
-    if (!ret) return heap_strdupW( L"1.0" );
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_BASEBOARD, 0, offsetof(struct smbios_baseboard, version), buf, len );
+    if (!ret) return wcsdup( L"1.0" );
     return ret;
 }
 
@@ -1284,24 +1477,10 @@ static UINT16 get_bios_smbiosminorversion( const char *buf, UINT len )
     if (len < sizeof(*prologue)) return 0;
     return prologue->minor_version;
 }
-
-static WCHAR *get_bios_string( BYTE id, const char *buf, UINT len )
-{
-    const struct smbios_header *hdr;
-    const struct smbios_bios *bios;
-    UINT offset;
-
-    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_BIOS, buf, len ))) return NULL;
-
-    bios = (const struct smbios_bios *)hdr;
-    offset = (const char *)bios - buf + bios->hdr.length;
-    return get_smbios_string( id, buf, offset, len );
-}
-
 static WCHAR *get_bios_manufacturer( const char *buf, UINT len )
 {
-    WCHAR *ret = get_bios_string( 1, buf, len );
-    if (!ret) return heap_strdupW( L"The Wine Project" );
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_BIOS, 0, offsetof(struct smbios_bios, vendor), buf, len );
+    if (!ret) return wcsdup( L"The Wine Project" );
     return ret;
 }
 
@@ -1338,16 +1517,16 @@ static WCHAR *convert_bios_date( const WCHAR *str )
 
 static WCHAR *get_bios_releasedate( const char *buf, UINT len )
 {
-    WCHAR *ret, *date = get_bios_string( 3, buf, len );
-    if (!date || !(ret = convert_bios_date( date ))) ret = heap_strdupW( L"20120608000000.000000+000" );
+    WCHAR *ret, *date = get_smbios_string( SMBIOS_TYPE_BIOS, 0, offsetof(struct smbios_bios, date), buf, len );
+    if (!date || !(ret = convert_bios_date( date ))) ret = wcsdup( L"20120608000000.000000+000" );
     free( date );
     return ret;
 }
 
 static WCHAR *get_bios_smbiosbiosversion( const char *buf, UINT len )
 {
-    WCHAR *ret = get_bios_string( 2, buf, len );
-    if (!ret) return heap_strdupW( L"Wine" );
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_BIOS, 0, offsetof(struct smbios_bios, version), buf, len );
+    if (!ret) return wcsdup( L"Wine" );
     return ret;
 }
 
@@ -1356,7 +1535,7 @@ static BYTE get_bios_ec_firmware_major_release( const char *buf, UINT len )
     const struct smbios_header *hdr;
     const struct smbios_bios *bios;
 
-    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_BIOS, buf, len ))) return 0xFF;
+    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_BIOS, 0, buf, len ))) return 0xFF;
 
     bios = (const struct smbios_bios *)hdr;
     if (bios->hdr.length >= 0x18) return bios->ec_firmware_major_release;
@@ -1368,7 +1547,7 @@ static BYTE get_bios_ec_firmware_minor_release( const char *buf, UINT len )
     const struct smbios_header *hdr;
     const struct smbios_bios *bios;
 
-    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_BIOS, buf, len ))) return 0xFF;
+    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_BIOS, 0, buf, len ))) return 0xFF;
 
     bios = (const struct smbios_bios *)hdr;
     if (bios->hdr.length >= 0x18) return bios->ec_firmware_minor_release;
@@ -1380,7 +1559,7 @@ static BYTE get_bios_system_bios_major_release( const char *buf, UINT len )
     const struct smbios_header *hdr;
     const struct smbios_bios *bios;
 
-    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_BIOS, buf, len ))) return 0xFF;
+    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_BIOS, 0, buf, len ))) return 0xFF;
 
     bios = (const struct smbios_bios *)hdr;
     if (bios->hdr.length >= 0x18) return bios->system_bios_major_release;
@@ -1392,7 +1571,7 @@ static BYTE get_bios_system_bios_minor_release( const char *buf, UINT len )
     const struct smbios_header *hdr;
     const struct smbios_bios *bios;
 
-    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_BIOS, buf, len ))) return 0xFF;
+    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_BIOS, 0, buf, len ))) return 0xFF;
 
     bios = (const struct smbios_bios *)hdr;
     if (bios->hdr.length >= 0x18) return bios->system_bios_minor_release;
@@ -1413,18 +1592,17 @@ static enum fill_status fill_bios( struct table *table, const struct expr *cond 
     GetSystemFirmwareTable( RSMB, 0, buf, len );
 
     rec = (struct record_bios *)table->data;
-    rec->currentlanguage        = NULL;
     rec->description            = L"Default System BIOS";
     rec->ecmajorversion         = get_bios_ec_firmware_major_release( buf, len );
     rec->ecminorversion         = get_bios_ec_firmware_minor_release( buf, len );
-    rec->identificationcode     = NULL;
     rec->manufacturer           = get_bios_manufacturer( buf, len );
     rec->name                   = L"Default System BIOS";
     rec->releasedate            = get_bios_releasedate( buf, len );
-    rec->serialnumber           = L"0";
+    rec->serialnumber           = L"Serial number";
     rec->smbiosbiosversion      = get_bios_smbiosbiosversion( buf, len );
     rec->smbiosmajorversion     = get_bios_smbiosmajorversion( buf, len );
     rec->smbiosminorversion     = get_bios_smbiosminorversion( buf, len );
+    rec->status                 = L"OK";
     rec->systembiosmajorversion = get_bios_system_bios_major_release( buf, len );
     rec->systembiosminorversion = get_bios_system_bios_minor_release( buf, len );
     rec->version                = L"WINE   - 1";
@@ -1461,7 +1639,7 @@ static enum fill_status fill_cdromdrive( struct table *table, const struct expr 
             rec = (struct record_cdromdrive *)(table->data + offset);
             rec->device_id    = L"IDE\\CDROMWINE_CD-ROM_____________________________1.0_____\\5&3A2A5854&0&1.0.0";
             swprintf( drive, ARRAY_SIZE( drive ), L"%c:", 'A' + i );
-            rec->drive        = heap_strdupW( drive );
+            rec->drive        = wcsdup( drive );
             rec->mediatype    = L"CR-ROM";
             rec->name         = L"Wine CD_ROM ATA Device";
             rec->pnpdevice_id = L"IDE\\CDROMWINE_CD-ROM_____________________________1.0_____\\5&3A2A5854&0&1.0.0";
@@ -1487,47 +1665,20 @@ static UINT get_processor_count(void)
     return info.NumberOfProcessors;
 }
 
-static UINT get_logical_processor_count( UINT *num_physical, UINT *num_packages )
+static UINT get_physical_processor_count( const char *buf, UINT len, UINT *num_logical )
 {
-    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *buf, *entry;
-    UINT core_relation_count = 0, package_relation_count = 0;
-    NTSTATUS status;
-    ULONG len, offset = 0;
-    BOOL smt_enabled = FALSE;
-    DWORD all = RelationAll;
+    const struct smbios_header *hdr;
+    const struct smbios_processor *proc;
+    UINT thread_count = 0, package_count = 0;
 
-    if (num_packages) *num_packages = 1;
-    status = NtQuerySystemInformationEx( SystemLogicalProcessorInformationEx, &all, sizeof(all), NULL, 0, &len );
-    if (status != STATUS_INFO_LENGTH_MISMATCH) return get_processor_count();
-
-    if (!(buf = malloc( len ))) return get_processor_count();
-    status = NtQuerySystemInformationEx( SystemLogicalProcessorInformationEx, &all, sizeof(all), buf, len, NULL );
-    if (status != STATUS_SUCCESS)
+    while ((hdr = find_smbios_entry( SMBIOS_TYPE_PROCESSOR, package_count, buf, len )))
     {
-        free( buf );
-        return get_processor_count();
+        proc = (const struct smbios_processor *)hdr;
+        thread_count += proc->thread_count2;
+        package_count++;
     }
-
-    while (offset < len)
-    {
-        entry = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *)((char *)buf + offset);
-
-        if (entry->Relationship == RelationProcessorCore)
-        {
-            core_relation_count++;
-            if (entry->u.Processor.Flags & LTP_PC_SMT) smt_enabled = TRUE;
-        }
-        else if (entry->Relationship == RelationProcessorPackage)
-        {
-            package_relation_count++;
-        }
-        offset += entry->Size;
-    }
-
-    free( buf );
-    if (num_physical) *num_physical = core_relation_count;
-    if (num_packages) *num_packages = package_relation_count;
-    return smt_enabled ? core_relation_count * 2 : core_relation_count;
+    if (num_logical) *num_logical = thread_count;
+    return package_count;
 }
 
 static UINT64 get_total_physical_memory(void)
@@ -1548,6 +1699,24 @@ static UINT64 get_available_physical_memory(void)
     return status.ullAvailPhys;
 }
 
+static UINT64 get_total_virtual_memory(void)
+{
+    MEMORYSTATUSEX status;
+
+    status.dwLength = sizeof(status);
+    if (!GlobalMemoryStatusEx( &status )) return 1024 * 1024 * 1024;
+    return status.ullTotalVirtual;
+}
+
+static UINT64 get_available_virtual_memory(void)
+{
+    MEMORYSTATUSEX status;
+
+    status.dwLength = sizeof(status);
+    if (!GlobalMemoryStatusEx( &status )) return 1024 * 1024 * 1024;
+    return status.ullAvailVirtual;
+}
+
 static WCHAR *get_computername(void)
 {
     WCHAR *ret;
@@ -1556,6 +1725,20 @@ static WCHAR *get_computername(void)
     if (!(ret = malloc( size * sizeof(WCHAR) ))) return NULL;
     GetComputerNameW( ret, &size );
     return ret;
+}
+
+static const WCHAR *get_systemtype(void)
+{
+    SYSTEM_CPU_INFORMATION info;
+
+    RtlGetNativeSystemInformation( SystemCpuInformation, &info, sizeof(info), NULL );
+    switch (info.ProcessorArchitecture)
+    {
+    case PROCESSOR_ARCHITECTURE_ARM:   return L"ARM-based PC";
+    case PROCESSOR_ARCHITECTURE_ARM64: return L"ARM64-based PC";
+    case PROCESSOR_ARCHITECTURE_AMD64: return L"x64-based PC";
+    default:                           return L"x86-based PC";
+    }
 }
 
 static WCHAR *get_username(void)
@@ -1576,56 +1759,57 @@ static WCHAR *get_username(void)
     return ret;
 }
 
+static WCHAR *get_compsysproduct_name( const char *buf, UINT len )
+{
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_SYSTEM, 0, offsetof(struct smbios_system, product), buf, len );
+    if (!ret) return wcsdup( L"Wine" );
+    return ret;
+}
+
+static WCHAR *get_compsysproduct_vendor( const char *buf, UINT len )
+{
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_SYSTEM, 0, offsetof(struct smbios_system, vendor), buf, len );
+    if (!ret) return wcsdup( L"The Wine Project" );
+    return ret;
+}
+
 static enum fill_status fill_compsys( struct table *table, const struct expr *cond )
 {
     struct record_computersystem *rec;
     enum fill_status status = FILL_STATUS_UNFILTERED;
-    UINT row = 0;
+    UINT row = 0, len;
+    char *buf;
 
     if (!resize_table( table, 1, sizeof(*rec) )) return FILL_STATUS_FAILED;
+
+    len = GetSystemFirmwareTable( RSMB, 0, NULL, 0 );
+    if (!(buf = malloc( len ))) return FILL_STATUS_FAILED;
+    GetSystemFirmwareTable( RSMB, 0, buf, len );
 
     rec = (struct record_computersystem *)table->data;
     rec->description            = L"AT/AT COMPATIBLE";
     rec->domain                 = L"WORKGROUP";
-    rec->domainrole             = 0; /* standalone workstation */
-    rec->manufacturer           = L"The Wine Project";
-    rec->model                  = L"Wine";
+    rec->manufacturer           = get_compsysproduct_vendor( buf, len );
+    rec->model                  = get_compsysproduct_name( buf, len );
     rec->name                   = get_computername();
-    rec->num_logical_processors = get_logical_processor_count( NULL, &rec->num_processors );
+    rec->num_processors         = get_physical_processor_count( buf, len, &rec->num_logical_processors );
+    rec->systemtype             = get_systemtype();
     rec->total_physical_memory  = get_total_physical_memory();
     rec->username               = get_username();
     if (!match_row( table, row, cond, &status )) free_row_values( table, row );
     else row++;
+
+    free( buf );
 
     TRACE("created %u rows\n", row);
     table->num_rows = row;
     return status;
 }
 
-static WCHAR *get_compsysproduct_string( BYTE id, const char *buf, UINT len )
-{
-    const struct smbios_header *hdr;
-    const struct smbios_system *system;
-    UINT offset;
-
-    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_SYSTEM, buf, len ))) return NULL;
-
-    system = (const struct smbios_system *)hdr;
-    offset = (const char *)system - buf + system->hdr.length;
-    return get_smbios_string( id, buf, offset, len );
-}
-
 static WCHAR *get_compsysproduct_identifyingnumber( const char *buf, UINT len )
 {
-    WCHAR *ret = get_compsysproduct_string( 4, buf, len );
-    if (!ret) return heap_strdupW( L"0" );
-    return ret;
-}
-
-static WCHAR *get_compsysproduct_name( const char *buf, UINT len )
-{
-    WCHAR *ret = get_compsysproduct_string( 2, buf, len );
-    if (!ret) return heap_strdupW( L"Wine" );
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_SYSTEM, 0, offsetof(struct smbios_system, serial), buf, len );
+    if (!ret) return wcsdup( L"0" );
     return ret;
 }
 
@@ -1637,7 +1821,7 @@ static WCHAR *get_compsysproduct_uuid( const char *buf, UINT len )
     const BYTE *ptr;
     WCHAR *ret = NULL;
 
-    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_SYSTEM, buf, len )) || hdr->length < sizeof(*system)) goto done;
+    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_SYSTEM, 0, buf, len )) || hdr->length < sizeof(*system)) goto done;
     system = (const struct smbios_system *)hdr;
     if (!memcmp( system->uuid, none, sizeof(none) ) || !(ret = malloc( 37 * sizeof(WCHAR) ))) goto done;
 
@@ -1646,21 +1830,14 @@ static WCHAR *get_compsysproduct_uuid( const char *buf, UINT len )
               ptr[2], ptr[3], ptr[4], ptr[5], ptr[6], ptr[7], ptr[8], ptr[9], ptr[10], ptr[11], ptr[12], ptr[13],
               ptr[14], ptr[15] );
 done:
-    if (!ret) ret = heap_strdupW( L"deaddead-dead-dead-dead-deaddeaddead" );
-    return ret;
-}
-
-static WCHAR *get_compsysproduct_vendor( const char *buf, UINT len )
-{
-    WCHAR *ret = get_compsysproduct_string( 1, buf, len );
-    if (!ret) return heap_strdupW( L"The Wine Project" );
+    if (!ret) ret = wcsdup( L"deaddead-dead-dead-dead-deaddeaddead" );
     return ret;
 }
 
 static WCHAR *get_compsysproduct_version( const char *buf, UINT len )
 {
-    WCHAR *ret = get_compsysproduct_string( 3, buf, len );
-    if (!ret) return heap_strdupW( L"1.0" );
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_SYSTEM, 0, offsetof(struct smbios_system, version), buf, len );
+    if (!ret) return wcsdup( L"1.0" );
     return ret;
 }
 
@@ -1680,7 +1857,6 @@ static enum fill_status fill_compsysproduct( struct table *table, const struct e
     rec = (struct record_computersystemproduct *)table->data;
     rec->identifyingnumber = get_compsysproduct_identifyingnumber( buf, len );
     rec->name              = get_compsysproduct_name( buf, len );
-    rec->skunumber         = NULL;
     rec->uuid              = get_compsysproduct_uuid( buf, len );
     rec->vendor            = get_compsysproduct_vendor( buf, len );
     rec->version           = get_compsysproduct_version( buf, len );
@@ -1939,7 +2115,8 @@ static WCHAR *append_path( const WCHAR *path, const WCHAR *segment, UINT *len )
 static WCHAR *get_file_version( const WCHAR *filename )
 {
     VS_FIXEDFILEINFO *info;
-    DWORD size, len = 4 * 5 + ARRAY_SIZE( L"%u.%u.%u.%u" );
+    UINT size;
+    DWORD len = 4 * 5 + ARRAY_SIZE( L"%u.%u.%u.%u" );
     void *block;
     WCHAR *ret;
 
@@ -2243,7 +2420,7 @@ static WCHAR *get_diskdrive_serialnumber( WCHAR letter )
 
 done:
     if (handle != INVALID_HANDLE_VALUE) CloseHandle( handle );
-    if (!ret) ret = heap_strdupW( L"WINEHDISK" );
+    if (!ret) ret = wcsdup( L"WINEHDISK" );
     return ret;
 }
 
@@ -2271,8 +2448,9 @@ static enum fill_status fill_diskdrive( struct table *table, const struct expr *
             if (!resize_table( table, row + 1, sizeof(*rec) )) return FILL_STATUS_FAILED;
 
             rec = (struct record_diskdrive *)(table->data + offset);
+            rec->caption       = L"Wine Disk Drive";
             swprintf( device_id, ARRAY_SIZE( device_id ), fmtW, index );
-            rec->device_id     = heap_strdupW( device_id );
+            rec->device_id     = wcsdup( device_id );
             rec->index         = index++;
             rec->interfacetype = L"IDE";
             rec->manufacturer  = L"(Standard disk drives)";
@@ -2337,11 +2515,11 @@ static struct association *get_diskdrivetodiskpartition_pairs( UINT *count )
     for (i = 0; i < query->view->result_count; i++)
     {
         if ((hr = get_propval( query->view, i, L"__PATH", &val, NULL, NULL )) != S_OK) goto done;
-        if (!(ret[i].ref = heap_strdupW( V_BSTR(&val) ))) goto done;
+        if (!(ret[i].ref = wcsdup( V_BSTR(&val) ))) goto done;
         VariantClear( &val );
 
         if ((hr = get_propval( query2->view, i, L"__PATH", &val, NULL, NULL )) != S_OK) goto done;
-        if (!(ret[i].ref2 = heap_strdupW( V_BSTR(&val) ))) goto done;
+        if (!(ret[i].ref2 = wcsdup( V_BSTR(&val) ))) goto done;
         VariantClear( &val );
     }
 
@@ -2399,8 +2577,8 @@ static WCHAR *get_filesystem( const WCHAR *root )
     WCHAR buffer[MAX_PATH + 1];
 
     if (GetVolumeInformationW( root, NULL, 0, NULL, NULL, NULL, buffer, MAX_PATH + 1 ))
-        return heap_strdupW( buffer );
-    return heap_strdupW( L"NTFS" );
+        return wcsdup( buffer );
+    return wcsdup( L"NTFS" );
 }
 
 static enum fill_status fill_diskpartition( struct table *table, const struct expr *cond )
@@ -2429,13 +2607,11 @@ static enum fill_status fill_diskpartition( struct table *table, const struct ex
             rec->bootable       = (i == 2) ? -1 : 0;
             rec->bootpartition  = (i == 2) ? -1 : 0;
             swprintf( device_id, ARRAY_SIZE( device_id ), L"Disk #%u, Partition #0", index );
-            rec->device_id      = heap_strdupW( device_id );
+            rec->device_id      = wcsdup( device_id );
             rec->diskindex      = index++;
-            rec->index          = 0;
-            rec->pnpdevice_id   = heap_strdupW( device_id );
+            rec->pnpdevice_id   = wcsdup( device_id );
             get_freespace( root, &size );
             rec->size           = size;
-            rec->startingoffset = 0;
             rec->type           = get_filesystem( root );
             if (!match_row( table, row, cond, &status ))
             {
@@ -2499,7 +2675,8 @@ static WCHAR *get_ip4_string( DWORD addr )
 static enum fill_status fill_ip4routetable( struct table *table, const struct expr *cond )
 {
     struct record_ip4routetable *rec;
-    UINT i, row = 0, offset = 0, size = 0;
+    UINT i, row = 0, offset = 0;
+    ULONG size = 0;
     MIB_IPFORWARDTABLE *forwards;
     enum fill_status status = FILL_STATUS_UNFILTERED;
 
@@ -2543,7 +2720,7 @@ static WCHAR *get_volumename( const WCHAR *root )
 {
     WCHAR buf[MAX_PATH + 1] = {0};
     GetVolumeInformationW( root, buf, ARRAY_SIZE( buf ), NULL, NULL, NULL, NULL, 0 );
-    return heap_strdupW( buf );
+    return wcsdup( buf );
 }
 static WCHAR *get_volumeserialnumber( const WCHAR *root )
 {
@@ -2552,7 +2729,7 @@ static WCHAR *get_volumeserialnumber( const WCHAR *root )
 
     GetVolumeInformationW( root, NULL, 0, &serial, NULL, NULL, NULL, 0 );
     swprintf( buffer, ARRAY_SIZE( buffer ), L"%08X", serial );
-    return heap_strdupW( buffer );
+    return wcsdup( buffer );
 }
 
 static enum fill_status fill_logicaldisk( struct table *table, const struct expr *cond )
@@ -2579,12 +2756,12 @@ static enum fill_status fill_logicaldisk( struct table *table, const struct expr
 
             rec = (struct record_logicaldisk *)(table->data + offset);
             swprintf( device_id, ARRAY_SIZE( device_id ), L"%c:", 'A' + i );
-            rec->caption            = heap_strdupW( device_id );
-            rec->device_id          = heap_strdupW( device_id );
+            rec->caption            = wcsdup( device_id );
+            rec->device_id          = wcsdup( device_id );
             rec->drivetype          = type;
             rec->filesystem         = get_filesystem( root );
             rec->freespace          = get_freespace( root, &size );
-            rec->name               = heap_strdupW( device_id );
+            rec->name               = wcsdup( device_id );
             rec->size               = size;
             rec->volumename         = get_volumename( root );
             rec->volumeserialnumber = get_volumeserialnumber( root );
@@ -2627,11 +2804,11 @@ static struct association *get_logicaldisktopartition_pairs( UINT *count )
     for (i = 0; i < query->view->result_count; i++)
     {
         if ((hr = get_propval( query->view, i, L"__PATH", &val, NULL, NULL )) != S_OK) goto done;
-        if (!(ret[i].ref = heap_strdupW( V_BSTR(&val) ))) goto done;
+        if (!(ret[i].ref = wcsdup( V_BSTR(&val) ))) goto done;
         VariantClear( &val );
 
         if ((hr = get_propval( query2->view, i, L"__PATH", &val, NULL, NULL )) != S_OK) goto done;
-        if (!(ret[i].ref2 = heap_strdupW( V_BSTR(&val) ))) goto done;
+        if (!(ret[i].ref2 = wcsdup( V_BSTR(&val) ))) goto done;
         VariantClear( &val );
     }
 
@@ -2754,25 +2931,36 @@ static WCHAR *get_networkadapter_guid( const IF_LUID *luid )
     return guid_to_str( &guid );
 }
 
+static IP_ADAPTER_ADDRESSES *get_network_adapters(void)
+{
+    ULONG err, size = 4096;
+    IP_ADAPTER_ADDRESSES *tmp, *ret;
+
+    if (!(ret = malloc( size ))) return NULL;
+    err = GetAdaptersAddresses( AF_UNSPEC, GAA_FLAG_INCLUDE_GATEWAYS, NULL, ret, &size );
+    while (err == ERROR_BUFFER_OVERFLOW)
+    {
+        if (!(tmp = realloc( ret, size ))) break;
+        ret = tmp;
+        err = GetAdaptersAddresses( AF_UNSPEC, GAA_FLAG_INCLUDE_GATEWAYS, NULL, ret, &size );
+    }
+    if (err == ERROR_SUCCESS) return ret;
+    free( ret );
+    return NULL;
+}
+
 static enum fill_status fill_networkadapter( struct table *table, const struct expr *cond )
 {
     WCHAR device_id[11];
     struct record_networkadapter *rec;
     IP_ADAPTER_ADDRESSES *aa, *buffer;
     UINT row = 0, offset = 0, count = 0;
-    DWORD size = 0, ret;
     int adaptertypeid, physical;
+    UINT16 connection_status;
     enum fill_status status = FILL_STATUS_UNFILTERED;
 
-    ret = GetAdaptersAddresses( AF_UNSPEC, 0, NULL, NULL, &size );
-    if (ret != ERROR_BUFFER_OVERFLOW) return FILL_STATUS_FAILED;
+    if (!(buffer = get_network_adapters())) return FILL_STATUS_FAILED;
 
-    if (!(buffer = malloc( size ))) return FILL_STATUS_FAILED;
-    if (GetAdaptersAddresses( AF_UNSPEC, 0, NULL, buffer, &size ))
-    {
-        free( buffer );
-        return FILL_STATUS_FAILED;
-    }
     for (aa = buffer; aa; aa = aa->Next)
     {
         if (aa->IfType != IF_TYPE_SOFTWARE_LOOPBACK) count++;
@@ -2786,22 +2974,25 @@ static enum fill_status fill_networkadapter( struct table *table, const struct e
     {
         if (aa->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
 
+        connection_status = get_connection_status( aa->OperStatus );
+
         rec = (struct record_networkadapter *)(table->data + offset);
-        swprintf( device_id, ARRAY_SIZE( device_id ), L"%u", aa->u.s.IfIndex );
+        swprintf( device_id, ARRAY_SIZE( device_id ), L"%u", aa->IfIndex );
         rec->adaptertype          = get_adaptertype( aa->IfType, &adaptertypeid, &physical );
         rec->adaptertypeid        = adaptertypeid;
-        rec->description          = heap_strdupW( aa->Description );
-        rec->device_id            = heap_strdupW( device_id );
+        rec->description          = wcsdup( aa->Description );
+        rec->device_id            = wcsdup( device_id );
         rec->guid                 = get_networkadapter_guid( &aa->Luid );
-        rec->index                = aa->u.s.IfIndex;
-        rec->interface_index      = aa->u.s.IfIndex;
+        rec->index                = aa->IfIndex;
+        rec->interface_index      = aa->IfIndex;
         rec->mac_address          = get_mac_address( aa->PhysicalAddress, aa->PhysicalAddressLength );
         rec->manufacturer         = L"The Wine Project";
-        rec->name                 = heap_strdupW( aa->FriendlyName );
-        rec->netconnection_status = get_connection_status( aa->OperStatus );
+        rec->name                 = wcsdup( aa->FriendlyName );
+        rec->netenabled           = connection_status ? -1 : 0;
+        rec->netconnection_status = connection_status;
         rec->physicaladapter      = physical;
         rec->pnpdevice_id         = L"PCI\\VEN_8086&DEV_100E&SUBSYS_001E8086&REV_02\\3&267A616A&1&18";
-        rec->servicename          = heap_strdupW( aa->FriendlyName );
+        rec->servicename          = wcsdup( aa->FriendlyName );
         rec->speed                = 1000000;
         if (!match_row( table, row, cond, &status ))
         {
@@ -2826,7 +3017,7 @@ static WCHAR *get_dnshostname( IP_ADAPTER_UNICAST_ADDRESS *addr )
     if (!addr) return NULL;
     if (GetNameInfoW( sa->lpSockaddr, sa->iSockaddrLength, buf, ARRAY_SIZE( buf ), NULL,
                       0, NI_NAMEREQD )) return NULL;
-    return heap_strdupW( buf );
+    return wcsdup( buf );
 }
 static struct array *get_defaultipgateway( IP_ADAPTER_GATEWAY_ADDRESS *list )
 {
@@ -2848,7 +3039,7 @@ static struct array *get_defaultipgateway( IP_ADAPTER_GATEWAY_ADDRESS *list )
     {
         buflen = ARRAY_SIZE( buf );
         if (WSAAddressToStringW( gateway->Address.lpSockaddr, gateway->Address.iSockaddrLength,
-                                 NULL, buf, &buflen) || !(ptr[i++] = heap_strdupW( buf )))
+                                 NULL, buf, &buflen) || !(ptr[i++] = wcsdup( buf )))
         {
             for (; i > 0; i--) free( ptr[i - 1] );
             free( ptr );
@@ -2881,7 +3072,7 @@ static struct array *get_dnsserversearchorder( IP_ADAPTER_DNS_SERVER_ADDRESS *li
     {
         buflen = ARRAY_SIZE( buf );
         if (WSAAddressToStringW( server->Address.lpSockaddr, server->Address.iSockaddrLength,
-                                 NULL, buf, &buflen) || !(ptr[i++] = heap_strdupW( buf )))
+                                 NULL, buf, &buflen) || !(ptr[i++] = wcsdup( buf )))
         {
             for (; i > 0; i--) free( ptr[i - 1] );
             free( ptr );
@@ -2915,7 +3106,7 @@ static struct array *get_ipaddress( IP_ADAPTER_UNICAST_ADDRESS_LH *list )
     {
         buflen = ARRAY_SIZE( buf );
         if (WSAAddressToStringW( address->Address.lpSockaddr, address->Address.iSockaddrLength,
-                                 NULL, buf, &buflen) || !(ptr[i++] = heap_strdupW( buf )))
+                                 NULL, buf, &buflen) || !(ptr[i++] = wcsdup( buf )))
         {
             for (; i > 0; i--) free( ptr[i - 1] );
             free( ptr );
@@ -2958,13 +3149,13 @@ static struct array *get_ipsubnet( IP_ADAPTER_UNICAST_ADDRESS_LH *list )
                     || WSAAddressToStringW( (SOCKADDR*)&addr, sizeof(addr), NULL, buf, &buflen))
                 ptr[i] = NULL;
             else
-                ptr[i] = heap_strdupW( buf );
+                ptr[i] = wcsdup( buf );
         }
         else
         {
             WCHAR buf[11];
             swprintf( buf, ARRAY_SIZE( buf ), L"%u", address->OnLinkPrefixLength );
-            ptr[i] = heap_strdupW( buf );
+            ptr[i] = wcsdup( buf );
         }
         if (!ptr[i++])
         {
@@ -2992,18 +3183,10 @@ static enum fill_status fill_networkadapterconfig( struct table *table, const st
     struct record_networkadapterconfig *rec;
     IP_ADAPTER_ADDRESSES *aa, *buffer;
     UINT row = 0, offset = 0, count = 0;
-    DWORD size = 0, ret;
     enum fill_status status = FILL_STATUS_UNFILTERED;
 
-    ret = GetAdaptersAddresses( AF_UNSPEC, GAA_FLAG_INCLUDE_ALL_GATEWAYS, NULL, NULL, &size );
-    if (ret != ERROR_BUFFER_OVERFLOW) return FILL_STATUS_FAILED;
+    if (!(buffer = get_network_adapters())) return FILL_STATUS_FAILED;
 
-    if (!(buffer = malloc( size ))) return FILL_STATUS_FAILED;
-    if (GetAdaptersAddresses( AF_UNSPEC, GAA_FLAG_INCLUDE_ALL_GATEWAYS, NULL, buffer, &size ))
-    {
-        free( buffer );
-        return FILL_STATUS_FAILED;
-    }
     for (aa = buffer; aa; aa = aa->Next)
     {
         if (aa->IfType != IF_TYPE_SOFTWARE_LOOPBACK) count++;
@@ -3019,12 +3202,12 @@ static enum fill_status fill_networkadapterconfig( struct table *table, const st
 
         rec = (struct record_networkadapterconfig *)(table->data + offset);
         rec->defaultipgateway     = get_defaultipgateway( aa->FirstGatewayAddress );
-        rec->description          = heap_strdupW( aa->Description );
+        rec->description          = wcsdup( aa->Description );
         rec->dhcpenabled          = -1;
         rec->dnsdomain            = L"";
         rec->dnshostname          = get_dnshostname( aa->FirstUnicastAddress );
         rec->dnsserversearchorder = get_dnsserversearchorder( aa->FirstDnsServerAddress );
-        rec->index                = aa->u.s.IfIndex;
+        rec->index                = aa->IfIndex;
         rec->ipaddress            = get_ipaddress( aa->FirstUnicastAddress );
         rec->ipconnectionmetric   = 20;
         rec->ipenabled            = -1;
@@ -3072,52 +3255,142 @@ static enum fill_status fill_physicalmemory( struct table *table, const struct e
     return status;
 }
 
-static enum fill_status fill_pnpentity( struct table *table, const struct expr *cond )
+static WCHAR *get_reg_value( HKEY key, const WCHAR *value )
 {
-    struct record_pnpentity *rec;
-    enum fill_status status = FILL_STATUS_UNFILTERED;
-    HDEVINFO device_info_set;
-    SP_DEVINFO_DATA devinfo = {0};
-    DWORD idx;
+    DWORD size, type;
+    WCHAR *ret;
 
-    device_info_set = SetupDiGetClassDevsW( NULL, NULL, NULL, DIGCF_ALLCLASSES|DIGCF_PRESENT );
-
-    devinfo.cbSize = sizeof(devinfo);
-
-    idx = 0;
-    while (SetupDiEnumDeviceInfo( device_info_set, idx++, &devinfo ))
+    if (RegQueryValueExW( key, value, NULL, &type, NULL, &size ) || type != REG_SZ) return NULL;
+    size += sizeof(WCHAR);
+    if ((ret = malloc( size )))
     {
-        /* noop */
+        if (RegQueryValueExW( key, value, NULL, NULL, (BYTE *)ret, &size ))
+        {
+            free( ret );
+            ret = NULL;
+        }
+    }
+    return ret;
+}
+
+static WCHAR *build_pnp_device_id( const WCHAR *class, const WCHAR *product, const WCHAR *instance )
+{
+    static const WCHAR fmt[] = L"%s\\%s\\%s";
+    int len = wcslen(class) + 1 + wcslen(product) + 1 + wcslen(instance) + 1 + ARRAY_SIZE(fmt);
+    WCHAR *ret = malloc( len * sizeof(WCHAR) );
+    if (ret) swprintf( ret, len, fmt, class, product, instance );
+    return ret;
+}
+
+static struct record_pnpentity *get_pnp_entities( UINT *count )
+{
+    struct record_pnpentity *ret = malloc( 16 * sizeof(*ret) ), *tmp;
+    WCHAR class[MAX_PATH], product[MAX_PATH], instance[MAX_PATH];
+    DWORD nb_allocated = 16, i = 0, idx_enum = 0, idx_class = 0, idx_product = 0;
+    HKEY key_enum, key_class, key_product, key_instance;
+    LONG res;
+
+    if (RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"System\\CurrentControlSet\\Enum", 0, KEY_ENUMERATE_SUB_KEYS, &key_enum ))
+        return NULL;
+    if (!(ret = malloc( nb_allocated * sizeof(*ret) )))
+    {
+        RegCloseKey( key_enum );
+        return NULL;
     }
 
-    resize_table( table, idx, sizeof(*rec) );
-    table->num_rows = 0;
-    rec = (struct record_pnpentity *)table->data;
-
-    idx = 0;
-    while (SetupDiEnumDeviceInfo( device_info_set, idx++, &devinfo ))
+    while (RegEnumKeyW( key_enum, idx_enum++, class, ARRAY_SIZE(class) ) != ERROR_NO_MORE_ITEMS)
     {
-        WCHAR device_id[MAX_PATH];
-        if (SetupDiGetDeviceInstanceIdW( device_info_set, &devinfo, device_id,
-                    ARRAY_SIZE(device_id), NULL ))
+        if (!RegOpenKeyExW( key_enum, class, 0, KEY_ENUMERATE_SUB_KEYS, &key_class ))
         {
-            rec->device_id = heap_strdupW( device_id );
-            rec->manufacturer = L"The Wine Project";
-            rec->name = L"Wine PnP Device";
-
-            table->num_rows++;
-            if (!match_row( table, table->num_rows - 1, cond, &status ))
+            while ((res = RegEnumKeyW( key_class, idx_class++, product, ARRAY_SIZE(product) )) != ERROR_NO_MORE_ITEMS)
             {
-                free_row_values( table, table->num_rows - 1 );
-                table->num_rows--;
+                if (!RegOpenKeyExW( key_class, product, 0, KEY_ENUMERATE_SUB_KEYS, &key_product ))
+                {
+                    while (RegEnumKeyW( key_product, idx_product++, instance, ARRAY_SIZE(instance) ) != ERROR_NO_MORE_ITEMS)
+                    {
+                        if (!RegOpenKeyExW( key_product, instance, 0, KEY_READ, &key_instance ))
+                        {
+                            ret[i].caption = get_reg_value( key_instance, L"DeviceDesc" );
+                            ret[i].class_guid = wcslwr( get_reg_value( key_instance, L"ClassGUID" ) );
+                            ret[i].device_id = wcsupr( build_pnp_device_id( class, product, instance ) );
+                            ret[i].manufacturer = L"The Wine Project";
+                            ret[i].name = get_reg_value( key_instance, L"DeviceDesc" );
+                            ret[i].service = get_reg_value( key_instance, L"Service" );
+                            RegCloseKey( key_instance );
+                            if (++i > nb_allocated)
+                            {
+                                nb_allocated *= 2;
+                                if ((tmp = realloc( ret, nb_allocated * sizeof(*ret) ))) ret = tmp;
+                                else
+                                {
+                                    while (--i)
+                                    {
+                                        free( (void *)ret[i].caption );
+                                        free( (void *)ret[i].class_guid );
+                                        free( (void *)ret[i].device_id );
+                                        free( (void *)ret[i].name );
+                                        free( (void *)ret[i].service );
+                                    }
+                                    goto done;
+                                }
+                            }
+                        }
+                    }
+                    RegCloseKey( key_product );
+                    idx_product = 0;
+                }
             }
-            else
-                rec++;
+            RegCloseKey( key_class );
+            idx_class = 0;
         }
     }
 
-    SetupDiDestroyDeviceInfoList( device_info_set );
+done:
+    RegCloseKey( key_enum );
+    if (!i)
+    {
+        free( ret );
+        ret = NULL;
+    }
+    *count = i;
+    return ret;
+}
 
+static enum fill_status fill_pnpentity( struct table *table, const struct expr *cond )
+{
+    struct record_pnpentity *rec, *entities;
+    enum fill_status status = FILL_STATUS_UNFILTERED;
+    UINT offset = 0, row = 0, count = 0, i;
+
+    if (!(entities = get_pnp_entities( &count ))) return FILL_STATUS_FAILED;
+    if (!resize_table( table, count, sizeof(*rec) ))
+    {
+        free( entities );
+        return FILL_STATUS_FAILED;
+    }
+
+    for (i = 0; i < count; i++)
+    {
+        rec = (struct record_pnpentity *)(table->data + offset);
+        rec->caption      = entities[i].caption;
+        rec->class_guid   = entities[i].class_guid;
+        rec->device_id    = entities[i].device_id;
+        rec->manufacturer = entities[i].manufacturer;
+        rec->name         = entities[i].name;
+        rec->service      = entities[i].service;
+        if (!match_row( table, row, cond, &status ))
+        {
+            free_row_values( table, row );
+            continue;
+        }
+        offset += sizeof(*rec);
+        row++;
+    }
+
+    TRACE("created %u rows\n", row);
+    table->num_rows = row;
+
+    free( entities );
     return status;
 }
 
@@ -3126,7 +3399,8 @@ static enum fill_status fill_printer( struct table *table, const struct expr *co
     struct record_printer *rec;
     enum fill_status status = FILL_STATUS_UNFILTERED;
     PRINTER_INFO_2W *info;
-    DWORD i, offset = 0, count = 0, size = 0, num_rows = 0;
+    DWORD i, offset = 0, count = 0, size = 0;
+    UINT num_rows = 0;
     WCHAR id[20];
 
     EnumPrintersW( PRINTER_ENUM_LOCAL, NULL, 2, NULL, 0, &size, &count );
@@ -3149,14 +3423,13 @@ static enum fill_status fill_printer( struct table *table, const struct expr *co
         rec = (struct record_printer *)(table->data + offset);
         rec->attributes           = info[i].Attributes;
         swprintf( id, ARRAY_SIZE( id ), L"Printer%u", i );
-        rec->device_id            = heap_strdupW( id );
-        rec->drivername           = heap_strdupW( info[i].pDriverName );
-        rec->horizontalresolution = info[i].pDevMode->u1.s1.dmPrintQuality;
+        rec->device_id            = wcsdup( id );
+        rec->drivername           = wcsdup( info[i].pDriverName );
+        rec->horizontalresolution = info[i].pDevMode->dmPrintQuality;
         rec->local                = -1;
-        rec->location             = heap_strdupW( info[i].pLocation );
-        rec->name                 = heap_strdupW( info[i].pPrinterName );
-        rec->network              = 0;
-        rec->portname             = heap_strdupW( info[i].pPortName );
+        rec->location             = wcsdup( info[i].pLocation );
+        rec->name                 = wcsdup( info[i].pPrinterName );
+        rec->portname             = wcsdup( info[i].pPortName );
         if (!match_row( table, i, cond, &status ))
         {
             free_row_values( table, i );
@@ -3174,8 +3447,30 @@ static enum fill_status fill_printer( struct table *table, const struct expr *co
 
 static WCHAR *get_cmdline( DWORD process_id )
 {
-    if (process_id == GetCurrentProcessId()) return heap_strdupW( GetCommandLineW() );
+    if (process_id == GetCurrentProcessId()) return wcsdup( GetCommandLineW() );
     return NULL; /* FIXME handle different process case */
+}
+
+static WCHAR *get_executablepath( DWORD process_id )
+{
+    DWORD size = MAX_PATH;
+    HANDLE process = OpenProcess( PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process_id );
+    WCHAR *executable_path;
+
+    if (!process) return NULL;
+
+    for (;;)
+    {
+        if (!(executable_path = malloc( (size + 1) * sizeof(WCHAR) ))) break;
+        executable_path[0] = 0;
+        if (QueryFullProcessImageNameW( process, 0, executable_path, &size )) break;
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) break;
+        free( executable_path );
+        size *= 2;
+    }
+
+    CloseHandle( process );
+    return executable_path;
 }
 
 static enum fill_status fill_process( struct table *table, const struct expr *cond )
@@ -3203,16 +3498,16 @@ static enum fill_status fill_process( struct table *table, const struct expr *co
         }
 
         rec = (struct record_process *)(table->data + offset);
-        rec->caption        = heap_strdupW( entry.szExeFile );
+        rec->caption        = wcsdup( entry.szExeFile );
         rec->commandline    = get_cmdline( entry.th32ProcessID );
-        rec->description    = heap_strdupW( entry.szExeFile );
+        rec->description    = wcsdup( entry.szExeFile );
+        rec->executablepath = get_executablepath( entry.th32ProcessID  );
         swprintf( handle, ARRAY_SIZE( handle ), L"%u", entry.th32ProcessID );
-        rec->handle         = heap_strdupW( handle );
-        rec->name           = heap_strdupW( entry.szExeFile );
+        rec->handle         = wcsdup( handle );
+        rec->name           = wcsdup( entry.szExeFile );
         rec->process_id     = entry.th32ProcessID;
         rec->pprocess_id    = entry.th32ParentProcessID;
         rec->thread_count   = entry.cntThreads;
-        rec->workingsetsize = 0;
         /* methods */
         rec->create         = process_create;
         rec->get_owner      = process_get_owner;
@@ -3233,111 +3528,37 @@ done:
     return status;
 }
 
-void do_cpuid( unsigned int ax, int *p )
+static WCHAR *get_processor_manufacturer( UINT index, const char *buf, UINT len )
 {
-#if defined(__i386__) || defined(__x86_64__)
-    __cpuid( p, ax );
-#else
-    FIXME("\n");
-#endif
-}
-
-static unsigned int get_processor_model( unsigned int reg0, unsigned int *stepping, unsigned int *family )
-{
-    unsigned int model, family_id = (reg0 & (0x0f << 8)) >> 8;
-
-    model = (reg0 & (0x0f << 4)) >> 4;
-    if (family_id == 6 || family_id == 15) model |= (reg0 & (0x0f << 16)) >> 12;
-    if (family)
-    {
-        *family = family_id;
-        if (family_id == 15) *family += (reg0 & (0xff << 20)) >> 20;
-    }
-    *stepping = reg0 & 0x0f;
-    return model;
-}
-static void regs_to_str( int *regs, unsigned int len, WCHAR *buffer )
-{
-    unsigned int i;
-    unsigned char *p = (unsigned char *)regs;
-
-    for (i = 0; i < len; i++) { buffer[i] = *p++; }
-    buffer[i] = 0;
-}
-static void get_processor_manufacturer( WCHAR *manufacturer, UINT len )
-{
-    int tmp, regs[4] = {0, 0, 0, 0};
-
-    do_cpuid( 0, regs );
-    tmp = regs[2];      /* swap edx and ecx */
-    regs[2] = regs[3];
-    regs[3] = tmp;
-
-    regs_to_str( regs + 1, min( 12, len ), manufacturer );
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_PROCESSOR, index, offsetof(struct smbios_processor, vendor), buf, len );
+    if (!ret) ret = wcsdup( L"Unknown" );
+    return ret;
 }
 static const WCHAR *get_osarchitecture(void)
 {
-    SYSTEM_INFO info;
-    GetNativeSystemInfo( &info );
-    if (info.u.s.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64) return L"64-bit";
-    return L"32-bit";
-}
-static void get_processor_caption( WCHAR *caption, UINT len )
-{
-    const WCHAR *arch;
-    WCHAR manufacturer[13];
-    int regs[4] = {0, 0, 0, 0};
-    unsigned int family, model, stepping;
+    SYSTEM_CPU_INFORMATION info;
 
-    get_processor_manufacturer( manufacturer, ARRAY_SIZE( manufacturer ) );
-    if (!wcscmp( get_osarchitecture(), L"32-bit" )) arch = L"x86";
-    else if (!wcscmp( manufacturer, L"AuthenticAMD" )) arch = L"AMD64";
-    else arch = L"Intel64";
-
-    do_cpuid( 1, regs );
-
-    model = get_processor_model( regs[0], &stepping, &family );
-    swprintf( caption, len, L"%s Family %u Model %u Stepping %u", arch, family, model, stepping );
-}
-static void get_processor_version( WCHAR *version, UINT len )
-{
-    int regs[4] = {0, 0, 0, 0};
-    unsigned int model, stepping;
-
-    do_cpuid( 1, regs );
-
-    model = get_processor_model( regs[0], &stepping, NULL );
-    swprintf( version, len, L"Model %u Stepping %u", model, stepping );
-}
-static UINT16 get_processor_revision(void)
-{
-    int regs[4] = {0, 0, 0, 0};
-    do_cpuid( 1, regs );
-    return regs[0];
-}
-static void get_processor_id( WCHAR *processor_id, UINT len )
-{
-    int regs[4] = {0, 0, 0, 0};
-
-    do_cpuid( 1, regs );
-    swprintf( processor_id, len, L"%08X%08X", regs[3], regs[0] );
-}
-static void get_processor_name( WCHAR *name )
-{
-    int regs[4] = {0, 0, 0, 0};
-    int i;
-
-    do_cpuid( 0x80000000, regs );
-    if (regs[0] >= 0x80000004)
+    RtlGetNativeSystemInformation( SystemCpuInformation, &info, sizeof(info), NULL );
+    switch (info.ProcessorArchitecture)
     {
-        do_cpuid( 0x80000002, regs );
-        regs_to_str( regs, 16, name );
-        do_cpuid( 0x80000003, regs );
-        regs_to_str( regs, 16, name + 16 );
-        do_cpuid( 0x80000004, regs );
-        regs_to_str( regs, 16, name + 32 );
+    case PROCESSOR_ARCHITECTURE_INTEL:
+    case PROCESSOR_ARCHITECTURE_ARM:
+        return L"32-bit";
+    default:
+        return L"64-bit";
     }
-    for (i = lstrlenW(name) - 1; i >= 0 && name[i] == ' '; i--) name[i] = 0;
+}
+static WCHAR *get_processor_caption( UINT index )
+{
+    WCHAR name[64];
+    swprintf( name, ARRAY_SIZE(name), L"Hardware\\Description\\System\\CentralProcessor\\%u", index );
+    return get_reg_str( HKEY_LOCAL_MACHINE, name, L"Identifier" );
+}
+static WCHAR *get_processor_name( UINT index, const char *buf, UINT len )
+{
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_PROCESSOR, index, offsetof(struct smbios_processor, version), buf, len );
+    if (!ret) ret = wcsdup( L"Unknown CPU" );
+    return ret;
 }
 static UINT get_processor_currentclockspeed( UINT index )
 {
@@ -3370,45 +3591,59 @@ static UINT get_processor_maxclockspeed( UINT index )
 
 static enum fill_status fill_processor( struct table *table, const struct expr *cond )
 {
-    WCHAR caption[100], device_id[14], processor_id[17], manufacturer[13], name[49] = {0}, version[50];
+    WCHAR device_id[14], processor_id[17], version[50];
+    const struct smbios_header *hdr;
+    const struct smbios_processor *proc;
     struct record_processor *rec;
-    UINT i, offset = 0, num_rows = 0, num_logical, num_physical, num_packages;
+    UINT i, len, offset = 0, num_rows = 0, num_packages;
     enum fill_status status = FILL_STATUS_UNFILTERED;
+    SYSTEM_CPU_INFORMATION info;
+    char *buf;
 
-    num_logical = get_logical_processor_count( &num_physical, &num_packages );
+    len = GetSystemFirmwareTable( RSMB, 0, NULL, 0 );
+    if (!(buf = malloc( len ))) return FILL_STATUS_FAILED;
+    GetSystemFirmwareTable( RSMB, 0, buf, len );
 
-    if (!resize_table( table, num_packages, sizeof(*rec) )) return FILL_STATUS_FAILED;
+    num_packages = get_physical_processor_count( buf, len, NULL );
 
-    get_processor_caption( caption, ARRAY_SIZE( caption ) );
-    get_processor_id( processor_id, ARRAY_SIZE( processor_id ) );
-    get_processor_manufacturer( manufacturer, ARRAY_SIZE( manufacturer ) );
-    get_processor_name( name );
-    get_processor_version( version, ARRAY_SIZE( version ) );
+    if (!resize_table( table, num_packages, sizeof(*rec) ))
+    {
+        free( buf );
+        return FILL_STATUS_FAILED;
+    }
+
+    RtlGetNativeSystemInformation( SystemCpuInformation, &info, sizeof(info), NULL );
+    swprintf( version, sizeof(version), L"Model %u, Stepping %u",
+              HIBYTE(info.ProcessorRevision), LOBYTE(info.ProcessorRevision) );
 
     for (i = 0; i < num_packages; i++)
     {
+        if (!(hdr = find_smbios_entry( SMBIOS_TYPE_PROCESSOR, i, buf, len )) || hdr->length < sizeof(*proc))
+            continue;
+        proc = (const struct smbios_processor *)hdr;
+
         rec = (struct record_processor *)(table->data + offset);
-        rec->addresswidth           = !wcscmp( get_osarchitecture(), L"32-bit" ) ? 32 : 64;
-        rec->architecture           = !wcscmp( get_osarchitecture(), L"32-bit" ) ? 0 : 9;
-        rec->caption                = heap_strdupW( caption );
-        rec->cpu_status             = 1; /* CPU Enabled */
+        rec->addresswidth           = (proc->characteristics & 4) ? 64 : 32;
+        rec->architecture           = info.ProcessorArchitecture;
+        rec->caption                = get_processor_caption( i );
+        rec->cpu_status             = proc->status;
         rec->currentclockspeed      = get_processor_currentclockspeed( i );
-        rec->datawidth              = !wcscmp( get_osarchitecture(), L"32-bit" ) ? 32 : 64;
-        rec->description            = heap_strdupW( caption );
+        rec->datawidth              = rec->addresswidth;
+        rec->description            = get_processor_caption( i );
         swprintf( device_id, ARRAY_SIZE( device_id ), L"CPU%u", i );
-        rec->device_id              = heap_strdupW( device_id );
-        rec->family                 = 2; /* Unknown */
-        rec->level                  = 15;
-        rec->manufacturer           = heap_strdupW( manufacturer );
+        rec->device_id              = wcsdup( device_id );
+        rec->family                 = proc->family;
+        rec->level                  = info.ProcessorLevel;
+        rec->manufacturer           = get_processor_manufacturer( i, buf, len );
         rec->maxclockspeed          = get_processor_maxclockspeed( i );
-        rec->name                   = heap_strdupW( name );
-        rec->num_cores              = num_physical / num_packages;
-        rec->num_logical_processors = num_logical / num_packages;
-        rec->processor_id           = heap_strdupW( processor_id );
-        rec->processortype          = 3; /* central processor */
-        rec->revision               = get_processor_revision();
-        rec->unique_id              = NULL;
-        rec->version                = heap_strdupW( version );
+        rec->name                   = get_processor_name( i, buf, len );
+        rec->num_cores              = proc->core_count2;
+        rec->num_logical_processors = proc->thread_count2;
+        swprintf( processor_id, ARRAY_SIZE( processor_id ), L"%016I64X", proc->id );
+        rec->processor_id           = wcsdup( processor_id );
+        rec->processortype          = proc->type;
+        rec->revision               = info.ProcessorRevision;
+        rec->version                = wcsdup( version );
         if (!match_row( table, i, cond, &status ))
         {
             free_row_values( table, i );
@@ -3418,9 +3653,20 @@ static enum fill_status fill_processor( struct table *table, const struct expr *
         num_rows++;
     }
 
+    free( buf );
+
     TRACE("created %u rows\n", num_rows);
     table->num_rows = num_rows;
     return status;
+}
+
+static INT16 get_currenttimezone(void)
+{
+    TIME_ZONE_INFORMATION info;
+    DWORD status = GetTimeZoneInformation( &info );
+    if (status == TIME_ZONE_ID_INVALID) return 0;
+    if (status == TIME_ZONE_ID_DAYLIGHT) return -(info.Bias + info.DaylightBias);
+    return -(info.Bias + info.StandardBias);
 }
 
 static WCHAR *get_lastbootuptime(void)
@@ -3496,12 +3742,25 @@ static WCHAR *get_locale(void)
     if (ret) GetLocaleInfoW( LOCALE_SYSTEM_DEFAULT, LOCALE_ILANGUAGE, ret, 5 );
     return ret;
 }
+
+static WCHAR *get_organization(void)
+{
+    return get_reg_str( HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion",
+                        L"RegisteredOrganization" );
+}
+
 static WCHAR *get_osbuildnumber( OSVERSIONINFOEXW *ver )
 {
     WCHAR *ret = malloc( 11 * sizeof(WCHAR) );
     if (ret) swprintf( ret, 11, L"%u", ver->dwBuildNumber );
     return ret;
 }
+
+static WCHAR *get_osbuildtype(void)
+{
+    return get_reg_str( HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion", L"CurrentType" );
+}
+
 static WCHAR *get_oscaption( OSVERSIONINFOEXW *ver )
 {
     static const WCHAR windowsW[] = L"Microsoft Windows ";
@@ -3516,12 +3775,17 @@ static WCHAR *get_oscaption( OSVERSIONINFOEXW *ver )
     static const WCHAR win8W[] = L"8 Pro";
     static const WCHAR win81W[] = L"8.1 Pro";
     static const WCHAR win10W[] = L"10 Pro";
+    static const WCHAR win11W[] = L"11 Pro";
     int len = ARRAY_SIZE( windowsW ) - 1;
     WCHAR *ret;
 
     if (!(ret = malloc( len * sizeof(WCHAR) + sizeof(win2003W) ))) return NULL;
     memcpy( ret, windowsW, sizeof(windowsW) );
-    if (ver->dwMajorVersion == 10 && ver->dwMinorVersion == 0) memcpy( ret + len, win10W, sizeof(win10W) );
+    if (ver->dwMajorVersion == 10 && ver->dwMinorVersion == 0)
+    {
+        if (ver->dwBuildNumber >= 22000) memcpy( ret + len, win11W, sizeof(win11W) );
+        else memcpy( ret + len, win10W, sizeof(win10W) );
+    }
     else if (ver->dwMajorVersion == 6 && ver->dwMinorVersion == 3) memcpy( ret + len, win81W, sizeof(win81W) );
     else if (ver->dwMajorVersion == 6 && ver->dwMinorVersion == 2) memcpy( ret + len, win8W, sizeof(win8W) );
     else if (ver->dwMajorVersion == 6 && ver->dwMinorVersion == 1)
@@ -3543,6 +3807,7 @@ static WCHAR *get_oscaption( OSVERSIONINFOEXW *ver )
     else memcpy( ret + len, win2000W, sizeof(win2000W) );
     return ret;
 }
+
 static WCHAR *get_osname( const WCHAR *caption )
 {
     static const WCHAR partitionW[] = L"|C:\\WINDOWS|\\Device\\Harddisk0\\Partition1";
@@ -3554,46 +3819,61 @@ static WCHAR *get_osname( const WCHAR *caption )
     memcpy( ret + len, partitionW, sizeof(partitionW) );
     return ret;
 }
+
 static WCHAR *get_osserialnumber(void)
 {
-    HKEY hkey = 0;
-    DWORD size, type;
-    WCHAR *ret = NULL;
-
-    if (!RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_READ, &hkey ) &&
-        !RegQueryValueExW( hkey, L"ProductId", NULL, &type, NULL, &size ) && type == REG_SZ &&
-        (ret = malloc( size + sizeof(WCHAR) )))
-    {
-        size += sizeof(WCHAR);
-        if (RegQueryValueExW( hkey, L"ProductId", NULL, NULL, (BYTE *)ret, &size ))
-        {
-            free( ret );
-            ret = NULL;
-        }
-    }
-    if (hkey) RegCloseKey( hkey );
-    if (!ret) return heap_strdupW( L"12345-OEM-1234567-12345" );
+    WCHAR *ret = get_reg_str( HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion", L"ProductId" );
+    if (!ret) ret = wcsdup( L"12345-OEM-1234567-12345" );
     return ret;
 }
+
 static WCHAR *get_osversion( OSVERSIONINFOEXW *ver )
 {
     WCHAR *ret = malloc( 33 * sizeof(WCHAR) );
     if (ret) swprintf( ret, 33, L"%u.%u.%u", ver->dwMajorVersion, ver->dwMinorVersion, ver->dwBuildNumber );
     return ret;
 }
+
 static DWORD get_operatingsystemsku(void)
 {
     DWORD ret = PRODUCT_UNDEFINED;
     GetProductInfo( 6, 0, 0, 0, &ret );
     return ret;
 }
-static INT16 get_currenttimezone(void)
+
+static WCHAR *get_registereduser(void)
 {
-    TIME_ZONE_INFORMATION info;
-    DWORD status = GetTimeZoneInformation( &info );
-    if (status == TIME_ZONE_ID_INVALID) return 0;
-    if (status == TIME_ZONE_ID_DAYLIGHT) return -(info.Bias + info.DaylightBias);
-    return -(info.Bias + info.StandardBias);
+    return get_reg_str( HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion", L"RegisteredOwner" );
+}
+
+static WCHAR *get_windowsdirectory(void)
+{
+    WCHAR dir[MAX_PATH];
+    if (!GetWindowsDirectoryW( dir, ARRAY_SIZE(dir) )) return NULL;
+    return wcsdup( dir );
+}
+
+static WCHAR *get_osinstalldate(void)
+{
+    HANDLE handle = CreateFileW( L"c:\\", GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                                 FILE_FLAG_BACKUP_SEMANTICS, NULL );
+    if (handle != INVALID_HANDLE_VALUE)
+    {
+        FILETIME ft = { 0 };
+        WCHAR *ret;
+
+        GetFileTime( handle, &ft, NULL, NULL );
+        CloseHandle( handle );
+        if ((ret = malloc( 26 * sizeof(WCHAR) )))
+        {
+            SYSTEMTIME st = { 0 };
+            FileTimeToSystemTime( &ft, &st );
+            swprintf( ret, 26, L"%04u%02u%02u%02u%02u%02u.%06u+000", st.wYear, st.wMonth, st.wDay, st.wHour,
+                      st.wMinute, st.wSecond, st.wMilliseconds * 1000 );
+            return ret;
+        }
+    }
+    return wcsdup( L"20230101000000.000000+000" );
 }
 
 static enum fill_status fill_operatingsystem( struct table *table, const struct expr *cond )
@@ -3609,27 +3889,32 @@ static enum fill_status fill_operatingsystem( struct table *table, const struct 
     RtlGetVersion( &ver );
 
     rec = (struct record_operatingsystem *)table->data;
+    rec->bootdevice             = L"\\Device\\HarddiskVolume1";
     rec->buildnumber            = get_osbuildnumber( &ver );
+    rec->buildtype              = get_osbuildtype();
     rec->caption                = get_oscaption( &ver );
     rec->codeset                = get_codeset();
     rec->countrycode            = get_countrycode();
-    rec->csdversion             = ver.szCSDVersion[0] ? heap_strdupW( ver.szCSDVersion ) : NULL;
+    rec->csdversion             = ver.szCSDVersion[0] ? wcsdup( ver.szCSDVersion ) : NULL;
     rec->csname                 = get_computername();
     rec->currenttimezone        = get_currenttimezone();
     rec->freephysicalmemory     = get_available_physical_memory() / 1024;
-    rec->installdate            = L"20140101000000.000000+000";
+    rec->freevirtualmemory      = get_available_virtual_memory() / 1024;
+    rec->installdate            = get_osinstalldate();
     rec->lastbootuptime         = get_lastbootuptime();
     rec->localdatetime          = get_localdatetime();
     rec->locale                 = get_locale();
     rec->manufacturer           = L"The Wine Project";
     rec->name                   = get_osname( rec->caption );
     rec->operatingsystemsku     = get_operatingsystemsku();
+    rec->organization           = get_organization();
     rec->osarchitecture         = get_osarchitecture();
     rec->oslanguage             = GetSystemDefaultLangID();
     rec->osproductsuite         = 2461140; /* Windows XP Professional  */
     rec->ostype                 = 18;      /* WINNT */
     rec->primary                = -1;
     rec->producttype            = 1;
+    rec->registereduser         = get_registereduser();
     rec->serialnumber           = get_osserialnumber();
     rec->servicepackmajor       = ver.wServicePackMajor;
     rec->servicepackminor       = ver.wServicePackMinor;
@@ -3637,9 +3922,10 @@ static enum fill_status fill_operatingsystem( struct table *table, const struct 
     rec->suitemask              = 272;     /* Single User + Terminal */
     rec->systemdirectory        = get_systemdirectory();
     rec->systemdrive            = get_systemdrive();
-    rec->totalvirtualmemorysize = get_total_physical_memory() / 1024;
-    rec->totalvisiblememorysize = rec->totalvirtualmemorysize;
+    rec->totalvirtualmemorysize = get_total_virtual_memory() / 1024;
+    rec->totalvisiblememorysize = get_total_physical_memory() / 1024;
     rec->version                = get_osversion( &ver );
+    rec->windowsdirectory       = get_windowsdirectory();
     if (!match_row( table, row, cond, &status )) free_row_values( table, row );
     else row++;
 
@@ -3654,7 +3940,7 @@ static const WCHAR *get_service_type( DWORD type )
     else if (type & SERVICE_FILE_SYSTEM_DRIVER)  return L"File System Driver";
     else if (type & SERVICE_WIN32_OWN_PROCESS)   return L"Own Process";
     else if (type & SERVICE_WIN32_SHARE_PROCESS) return L"Share Process";
-    else ERR("unhandled type 0x%08x\n", type);
+    else ERR( "unhandled type %#lx\n", type );
     return NULL;
 }
 static const WCHAR *get_service_state( DWORD state )
@@ -3666,7 +3952,7 @@ static const WCHAR *get_service_state( DWORD state )
     case SERVICE_STOP_PENDING:  return L"Stop Pending";
     case SERVICE_RUNNING:       return L"Running";
     default:
-        ERR("unknown state %u\n", state);
+        ERR( "unknown state %lu\n", state );
         return L"Unknown";
     }
 }
@@ -3680,7 +3966,7 @@ static const WCHAR *get_service_startmode( DWORD mode )
     case SERVICE_DEMAND_START: return L"Manual";
     case SERVICE_DISABLED:     return L"Disabled";
     default:
-        ERR("unknown mode 0x%x\n", mode);
+        ERR( "unknown mode %#lx\n", mode );
         return L"Unknown";
     }
 }
@@ -3710,8 +3996,8 @@ static enum fill_status fill_service( struct table *table, const struct expr *co
     ENUM_SERVICE_STATUS_PROCESSW *tmp, *services = NULL;
     SERVICE_STATUS_PROCESS *status;
     WCHAR sysnameW[MAX_COMPUTERNAME_LENGTH + 1];
-    DWORD len = ARRAY_SIZE( sysnameW );
-    UINT i, row = 0, offset = 0, size = 256, needed, count;
+    DWORD len = ARRAY_SIZE( sysnameW ), needed, count;
+    UINT i, row = 0, offset = 0, size = 256;
     enum fill_status fill_status = FILL_STATUS_FAILED;
     BOOL ret;
 
@@ -3747,13 +4033,13 @@ static enum fill_status fill_service( struct table *table, const struct expr *co
         rec = (struct record_service *)(table->data + offset);
         rec->accept_pause   = (status->dwControlsAccepted & SERVICE_ACCEPT_PAUSE_CONTINUE) ? -1 : 0;
         rec->accept_stop    = (status->dwControlsAccepted & SERVICE_ACCEPT_STOP) ? -1 : 0;
-        rec->displayname    = heap_strdupW( services[i].lpDisplayName );
-        rec->name           = heap_strdupW( services[i].lpServiceName );
+        rec->displayname    = wcsdup( services[i].lpDisplayName );
+        rec->name           = wcsdup( services[i].lpServiceName );
         rec->process_id     = status->dwProcessId;
         rec->servicetype    = get_service_type( status->dwServiceType );
         rec->startmode      = get_service_startmode( config->dwStartType );
         rec->state          = get_service_state( status->dwCurrentState );
-        rec->systemname     = heap_strdupW( sysnameW );
+        rec->systemname     = wcsdup( sysnameW );
         rec->pause_service  = service_pause_service;
         rec->resume_service = service_resume_service;
         rec->start_service  = service_start_service;
@@ -3780,7 +4066,7 @@ done:
 static WCHAR *get_accountname( LSA_TRANSLATED_NAME *name )
 {
     if (!name || !name->Name.Buffer) return NULL;
-    return heap_strdupW( name->Name.Buffer );
+    return wcsdup( name->Name.Buffer );
 }
 static struct array *get_binaryrepresentation( PSID sid, UINT len )
 {
@@ -3802,7 +4088,7 @@ static struct array *get_binaryrepresentation( PSID sid, UINT len )
 static WCHAR *get_referenceddomainname( LSA_REFERENCED_DOMAIN_LIST *domain )
 {
     if (!domain || !domain->Domains || !domain->Domains->Name.Buffer) return NULL;
-    return heap_strdupW( domain->Domains->Name.Buffer );
+    return wcsdup( domain->Domains->Name.Buffer );
 }
 static const WCHAR *find_sid_str( const struct expr *cond )
 {
@@ -3834,6 +4120,7 @@ static enum fill_status fill_sid( struct table *table, const struct expr *cond )
     const WCHAR *str;
     struct record_sid *rec;
     UINT len;
+    NTSTATUS status;
 
     if (!(str = find_sid_str( cond ))) return FILL_STATUS_FAILED;
     if (!resize_table( table, 1, sizeof(*rec) )) return FILL_STATUS_FAILED;
@@ -3848,10 +4135,12 @@ static enum fill_status fill_sid( struct table *table, const struct expr *cond )
         LocalFree( sid );
         return FILL_STATUS_FAILED;
     }
-    if (LsaLookupSids( handle, 1, &sid, &domain, &name ))
+    if ((status = LsaLookupSids( handle, 1, &sid, &domain, &name )))
     {
         LocalFree( sid );
         LsaClose( handle );
+        if (status == STATUS_NONE_MAPPED || status == STATUS_SOME_NOT_MAPPED)
+            LsaFreeMemory( domain );
         return FILL_STATUS_FAILED;
     }
 
@@ -3859,7 +4148,7 @@ static enum fill_status fill_sid( struct table *table, const struct expr *cond )
     rec->accountname            = get_accountname( name );
     rec->binaryrepresentation   = get_binaryrepresentation( sid, len );
     rec->referenceddomainname   = get_referenceddomainname( domain );
-    rec->sid                    = heap_strdupW( str );
+    rec->sid                    = wcsdup( str );
     rec->sidlength              = len;
 
     TRACE("created 1 row\n");
@@ -3872,23 +4161,10 @@ static enum fill_status fill_sid( struct table *table, const struct expr *cond )
     return FILL_STATUS_FILTERED;
 }
 
-static WCHAR *get_systemenclosure_string( BYTE id, const char *buf, UINT len )
-{
-    const struct smbios_header *hdr;
-    const struct smbios_chassis *chassis;
-    UINT offset;
-
-    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_CHASSIS, buf, len ))) return NULL;
-
-    chassis = (const struct smbios_chassis *)hdr;
-    offset = (const char *)chassis - buf + chassis->hdr.length;
-    return get_smbios_string( id, buf, offset, len );
-}
-
 static WCHAR *get_systemenclosure_manufacturer( const char *buf, UINT len )
 {
-    WCHAR *ret = get_systemenclosure_string( 1, buf, len );
-    if (!ret) return heap_strdupW( L"Wine" );
+    WCHAR *ret = get_smbios_string( SMBIOS_TYPE_CHASSIS, 0, offsetof(struct smbios_chassis, vendor), buf, len );
+    if (!ret) return wcsdup( L"Wine" );
     return ret;
 }
 
@@ -3897,7 +4173,7 @@ static int get_systemenclosure_lockpresent( const char *buf, UINT len )
     const struct smbios_header *hdr;
     const struct smbios_chassis *chassis;
 
-    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_CHASSIS, buf, len )) || hdr->length < sizeof(*chassis)) return 0;
+    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_CHASSIS, 0, buf, len )) || hdr->length < sizeof(*chassis)) return 0;
 
     chassis = (const struct smbios_chassis *)hdr;
     return (chassis->type & 0x80) ? -1 : 0;
@@ -3925,7 +4201,7 @@ static struct array *get_systemenclosure_chassistypes( const char *buf, UINT len
     struct array *ret = NULL;
     UINT16 *types;
 
-    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_CHASSIS, buf, len )) || hdr->length < sizeof(*chassis)) goto done;
+    if (!(hdr = find_smbios_entry( SMBIOS_TYPE_CHASSIS, 0, buf, len )) || hdr->length < sizeof(*chassis)) goto done;
     chassis = (const struct smbios_chassis *)hdr;
 
     if (!(ret = malloc( sizeof(*ret) ))) goto done;
@@ -4048,28 +4324,80 @@ static enum fill_status fill_videocontroller( struct table *table, const struct 
     rec->adapter_dactype       = L"Integrated RAMDAC";
     rec->adapter_ram           = vidmem;
     rec->availability          = 3; /* Running or Full Power */
-    rec->config_errorcode      = 0; /* no error */
-    rec->caption               = heap_strdupW( name );
+    rec->caption               = wcsdup( name );
     rec->current_bitsperpixel  = get_bitsperpixel( &hres, &vres );
     rec->current_horizontalres = hres;
-    rec->current_refreshrate   = 0; /* default refresh rate */
     rec->current_scanmode      = 2; /* Unknown */
     rec->current_verticalres   = vres;
-    rec->description           = heap_strdupW( name );
+    rec->description           = wcsdup( name );
     rec->device_id             = L"VideoController1";
-    rec->driverdate            = L"20170101000000.000000+000";
-    rec->driverversion         = L"1.0";
+    rec->driverdate            = L"20230420000000.000000-000";
+    rec->driverversion         = L"31.0.14051.5006";
     rec->installeddriver       = get_videocontroller_installeddriver( desc.VendorId );
-    rec->name                  = heap_strdupW( name );
+    rec->name                  = wcsdup( name );
     rec->pnpdevice_id          = get_videocontroller_pnpdeviceid( &desc );
     rec->status                = L"OK";
     rec->videoarchitecture     = 2; /* Unknown */
     rec->videomemorytype       = 2; /* Unknown */
     swprintf( mode, ARRAY_SIZE( mode ), L"%u x %u x %I64u colors", hres, vres, (UINT64)1 << rec->current_bitsperpixel );
-    rec->videomodedescription  = heap_strdupW( mode );
-    rec->videoprocessor        = heap_strdupW( name );
+    rec->videomodedescription  = wcsdup( mode );
+    rec->videoprocessor        = wcsdup( name );
     if (!match_row( table, row, cond, &status )) free_row_values( table, row );
     else row++;
+
+    TRACE("created %u rows\n", row);
+    table->num_rows = row;
+    return status;
+}
+
+static WCHAR *get_volume_driveletter( const WCHAR *volume )
+{
+    DWORD len = 0;
+    WCHAR *ret;
+
+    if (!GetVolumePathNamesForVolumeNameW( volume, NULL, 0, &len ) && GetLastError() != ERROR_MORE_DATA) return NULL;
+    if (!(ret = malloc( len * sizeof(WCHAR) ))) return NULL;
+    if (!GetVolumePathNamesForVolumeNameW( volume, ret, len, &len ) || !wcschr( ret, ':' ))
+    {
+        free( ret );
+        return NULL;
+    }
+    wcschr( ret, ':' )[1] = 0;
+    return ret;
+}
+
+static enum fill_status fill_volume( struct table *table, const struct expr *cond )
+{
+    struct record_volume *rec;
+    enum fill_status status = FILL_STATUS_UNFILTERED;
+    UINT row = 0, offset = 0;
+    WCHAR path[MAX_PATH];
+    HANDLE handle;
+
+    if (!resize_table( table, 2, sizeof(*rec) )) return FILL_STATUS_FAILED;
+
+    handle = FindFirstVolumeW( path, ARRAY_SIZE(path) );
+    while (handle != INVALID_HANDLE_VALUE)
+    {
+        if (!resize_table( table, row + 1, sizeof(*rec) )) return FILL_STATUS_FAILED;
+
+        rec = (struct record_volume *)(table->data + offset);
+        rec->deviceid    = wcsdup( path );
+        rec->driveletter = get_volume_driveletter( path );
+
+        if (!match_row( table, row, cond, &status )) free_row_values( table, row );
+        else
+        {
+            offset += sizeof(*rec);
+            row++;
+        }
+
+        if (!FindNextVolumeW( handle, path, ARRAY_SIZE(path) ))
+        {
+            FindVolumeClose( handle );
+            handle = INVALID_HANDLE_VALUE;
+        }
+    }
 
     TRACE("created %u rows\n", row);
     table->num_rows = row;
@@ -4099,6 +4427,7 @@ static enum fill_status fill_sounddevice( struct table *table, const struct expr
     get_dxgi_adapter_desc( &desc );
 
     rec = (struct record_sounddevice *)table->data;
+    rec->caption = L"Wine Audio Device";
     rec->deviceid = get_sounddevice_pnpdeviceid( &desc );
     rec->manufacturer = L"The Wine Project";
     rec->name = L"Wine Audio Device";
@@ -4145,6 +4474,7 @@ static struct table cimv2_builtin_classes[] =
     { L"Win32_NetworkAdapter", C(col_networkadapter), 0, 0, NULL, fill_networkadapter },
     { L"Win32_NetworkAdapterConfiguration", C(col_networkadapterconfig), 0, 0, NULL, fill_networkadapterconfig },
     { L"Win32_OperatingSystem", C(col_operatingsystem), 0, 0, NULL, fill_operatingsystem },
+    { L"Win32_PageFileUsage", C(col_pagefileusage), D(data_pagefileusage) },
     { L"Win32_PhysicalMedia", C(col_physicalmedia), D(data_physicalmedia) },
     { L"Win32_PhysicalMemory", C(col_physicalmemory), 0, 0, NULL, fill_physicalmemory },
     { L"Win32_PnPEntity", C(col_pnpentity), 0, 0, NULL, fill_pnpentity },
@@ -4157,6 +4487,7 @@ static struct table cimv2_builtin_classes[] =
     { L"Win32_SoundDevice", C(col_sounddevice), 0, 0, NULL, fill_sounddevice },
     { L"Win32_SystemEnclosure", C(col_systemenclosure), 0, 0, NULL, fill_systemenclosure },
     { L"Win32_VideoController", C(col_videocontroller), 0, 0, NULL, fill_videocontroller },
+    { L"Win32_Volume", C(col_volume), 0, 0, NULL, fill_volume },
     { L"Win32_WinSAT", C(col_winsat), D(data_winsat) },
 };
 
@@ -4169,14 +4500,15 @@ static struct table wmi_builtin_classes[] =
 
 static const struct
 {
-    const WCHAR *name;
-    struct table *classes;
-    unsigned int table_count;
+    const WCHAR  *name;
+    struct table *tables;
+    unsigned int  table_count;
 }
 builtin_namespaces[WBEMPROX_NAMESPACE_LAST] =
 {
     {L"cimv2", cimv2_builtin_classes, ARRAY_SIZE(cimv2_builtin_classes)},
     {L"Microsoft\\Windows\\Storage", NULL, 0},
+    {L"StandardCimv2", NULL, 0},
     {L"wmi", wmi_builtin_classes, ARRAY_SIZE(wmi_builtin_classes)},
 };
 
@@ -4189,7 +4521,12 @@ void init_table_list( void )
     {
         list_init( &tables[ns] );
         for (i = 0; i < builtin_namespaces[ns].table_count; i++)
-            list_add_tail( &tables[ns], &builtin_namespaces[ns].classes[i].entry );
+        {
+            struct table *table = &builtin_namespaces[ns].tables[i];
+            InitializeCriticalSectionEx( &table->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
+            table->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": table.cs" );
+            list_add_tail( &tables[ns], &table->entry );
+        }
         table_list[ns] = &tables[ns];
     }
 }

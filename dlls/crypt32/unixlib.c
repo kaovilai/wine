@@ -29,7 +29,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <sys/stat.h>
-#ifdef HAVE_SECURITY_SECURITY_H
+#ifdef __APPLE__
 #include <Security/Security.h>
 #endif
 #ifdef SONAME_LIBGNUTLS
@@ -130,7 +130,9 @@ static NTSTATUS process_attach( void *args )
 
     if (TRACE_ON( crypt ))
     {
-        pgnutls_global_set_log_level( 4 );
+        char *env = getenv("GNUTLS_DEBUG_LEVEL");
+        int level = env ? atoi(env) : 4;
+        pgnutls_global_set_log_level(level);
         pgnutls_global_set_log_function( gnutls_log );
     }
 
@@ -623,9 +625,9 @@ static const char * const CRYPT_knownLocations[] = {
 
 static void load_root_certs(void)
 {
-    DWORD i;
+    unsigned int i;
 
-#ifdef HAVE_SECURITY_SECURITY_H
+#ifdef __APPLE__
     const SecTrustSettingsDomain domains[] = {
         kSecTrustSettingsDomainSystem,
         kSecTrustSettingsDomainAdmin,
@@ -651,7 +653,7 @@ static void load_root_certs(void)
                     CFRelease(certData);
                 }
                 else
-                    WARN("could not export certificate %d to X509 format: 0x%08x\n", i, (unsigned int)status);
+                    WARN("could not export certificate %u to X509 format: 0x%08x\n", i, (unsigned int)status);
             }
             CFRelease(certs);
         }
@@ -694,6 +696,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     close_cert_store,
     enum_root_certs,
 };
+
+C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
 
 #ifdef _WIN64
 
@@ -795,5 +799,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     close_cert_store,
     wow64_enum_root_certs,
 };
+
+C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count );
 
 #endif  /* _WIN64 */

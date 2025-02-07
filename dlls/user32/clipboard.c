@@ -23,41 +23,16 @@
  *
  */
 
+#define COBJMACROS
 #include <assert.h>
-#include <stdarg.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <fcntl.h>
-#include <string.h>
-
-#include "ntstatus.h"
-#define WIN32_NO_STATUS
-#include "windef.h"
-#include "winbase.h"
-#include "winnls.h"
-#include "wingdi.h"
-#include "winuser.h"
-#include "winerror.h"
 #include "user_private.h"
-#include "win.h"
-
-#include "wine/list.h"
-#include "wine/server.h"
+#include "winnls.h"
+#include "objidl.h"
+#include "shlobj.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(clipboard);
 
-
-struct cached_format
-{
-    struct list entry;       /* entry in cache list */
-    UINT        format;      /* format id */
-    UINT        seqno;       /* sequence number when the data was set */
-    HANDLE      handle;      /* original data handle */
-};
-
-static struct list cached_formats = LIST_INIT( cached_formats );
-static struct list formats_to_free = LIST_INIT( formats_to_free );
 
 static CRITICAL_SECTION clipboard_cs;
 static CRITICAL_SECTION_DEBUG critsect_debug =
@@ -67,6 +42,8 @@ static CRITICAL_SECTION_DEBUG critsect_debug =
       0, 0, { (DWORD_PTR)(__FILE__ ": clipboard_cs") }
 };
 static CRITICAL_SECTION clipboard_cs = { &critsect_debug, -1, 0, 0, 0, 0 };
+static IDataObject *dnd_data_object;
+
 
 /* platform-independent version of METAFILEPICT */
 struct metafile_pict
@@ -119,7 +96,7 @@ static const char *debugstr_format( UINT id )
 }
 
 /* build the data to send to the server in SetClipboardData */
-static HANDLE marshal_data( UINT format, HANDLE handle, data_size_t *ret_size )
+static HANDLE marshal_data( UINT format, HANDLE handle, size_t *ret_size )
 {
     SIZE_T size;
 
@@ -184,11 +161,13 @@ static HANDLE marshal_data( UINT format, HANDLE handle, data_size_t *ret_size )
         }
     case CF_UNICODETEXT:
         {
-            WCHAR *ptr;
+            char *ptr;
             if (!(size = GlobalSize( handle ))) return 0;
-            if ((data_size_t)size != size) return 0;
+            if ((UINT)size != size) return 0;
+            if (size < sizeof(WCHAR)) return 0;
             if (!(ptr = GlobalLock( handle ))) return 0;
-            ptr[(size + 1) / sizeof(WCHAR) - 1] = 0;  /* enforce null-termination */
+            /* enforce nul-termination the Windows way: ignoring alignment */
+            *((WCHAR *)(ptr + size) - 1) = 0;
             GlobalUnlock( handle );
             *ret_size = size;
             return handle;
@@ -198,7 +177,7 @@ static HANDLE marshal_data( UINT format, HANDLE handle, data_size_t *ret_size )
         {
             char *ptr;
             if (!(size = GlobalSize( handle ))) return 0;
-            if ((data_size_t)size != size) return 0;
+            if ((UINT)size != size) return 0;
             if (!(ptr = GlobalLock( handle ))) return 0;
             ptr[size - 1] = 0;  /* enforce null-termination */
             GlobalUnlock( handle );
@@ -207,16 +186,16 @@ static HANDLE marshal_data( UINT format, HANDLE handle, data_size_t *ret_size )
         }
     default:
         if (!(size = GlobalSize( handle ))) return 0;
-        if ((data_size_t)size != size) return 0;
+        if ((UINT)size != size) return 0;
         *ret_size = size;
         return handle;
     }
 }
 
 /* rebuild the target handle from the data received in GetClipboardData */
-static HANDLE unmarshal_data( UINT format, void *data, data_size_t size )
+static HANDLE unmarshal_data( UINT format, void *data, UINT size )
 {
-    HANDLE handle = GlobalReAlloc( data, size, 0 );  /* release unused space */
+    HANDLE handle = GlobalReAlloc( data, size, GMEM_MOVEABLE );  /* release unused space */
 
     switch (format)
     {
@@ -258,110 +237,35 @@ static HANDLE unmarshal_data( UINT format, void *data, data_size_t size )
     return handle;
 }
 
-/* retrieve a data format from the cache */
-static struct cached_format *get_cached_format( UINT format )
-{
-    struct cached_format *cache;
-
-    LIST_FOR_EACH_ENTRY( cache, &cached_formats, struct cached_format, entry )
-        if (cache->format == format) return cache;
-    return NULL;
-}
-
-/* store data in the cache, or reuse the existing one if available */
-static HANDLE cache_data( UINT format, HANDLE data, data_size_t size, UINT seqno,
-                          struct cached_format *cache )
-{
-    if (cache)
-    {
-        if (seqno == cache->seqno)  /* we can reuse the cached data */
-        {
-            GlobalFree( data );
-            return cache->handle;
-        }
-        /* cache entry is stale, remove it */
-        list_remove( &cache->entry );
-        list_add_tail( &formats_to_free, &cache->entry );
-    }
-
-    /* allocate new cache entry */
-    if (!(cache = HeapAlloc( GetProcessHeap(), 0, sizeof(*cache) )))
-    {
-        GlobalFree( data );
-        return 0;
-    }
-    cache->format = format;
-    cache->seqno  = seqno;
-    cache->handle = unmarshal_data( format, data, size );
-    list_add_tail( &cached_formats, &cache->entry );
-    return cache->handle;
-}
-
 /* free a single cached format */
-static void free_cached_data( struct cached_format *cache )
+void free_cached_data( UINT format, HANDLE handle )
 {
     void *ptr;
 
-    switch (cache->format)
+    switch (format)
     {
     case CF_BITMAP:
     case CF_DSPBITMAP:
     case CF_PALETTE:
-        DeleteObject( cache->handle );
+        DeleteObject( handle );
         break;
     case CF_ENHMETAFILE:
     case CF_DSPENHMETAFILE:
-        DeleteEnhMetaFile( cache->handle );
+        DeleteEnhMetaFile( handle );
         break;
     case CF_METAFILEPICT:
     case CF_DSPMETAFILEPICT:
-        if ((ptr = GlobalLock( cache->handle )))
+        if ((ptr = GlobalLock( handle )))
         {
             DeleteMetaFile( ((METAFILEPICT *)ptr)->hMF );
-            GlobalUnlock( cache->handle );
+            GlobalUnlock( handle );
         }
-        GlobalFree( cache->handle );
+        GlobalFree( handle );
         break;
     default:
-        GlobalFree( cache->handle );
+        GlobalFree( handle );
         break;
     }
-    list_remove( &cache->entry );
-    HeapFree( GetProcessHeap(), 0, cache );
-}
-
-/* clear global memory formats; special types are freed on EmptyClipboard */
-static void invalidate_memory_formats(void)
-{
-    struct cached_format *cache, *next;
-
-    LIST_FOR_EACH_ENTRY_SAFE( cache, next, &cached_formats, struct cached_format, entry )
-    {
-        switch (cache->format)
-        {
-        case CF_BITMAP:
-        case CF_DSPBITMAP:
-        case CF_PALETTE:
-        case CF_ENHMETAFILE:
-        case CF_DSPENHMETAFILE:
-        case CF_METAFILEPICT:
-        case CF_DSPMETAFILEPICT:
-            continue;
-        default:
-            free_cached_data( cache );
-            break;
-        }
-    }
-}
-
-/* free all the data in the cache */
-static void free_cached_formats(void)
-{
-    struct list *ptr;
-
-    list_move_tail( &formats_to_free, &cached_formats );
-    while ((ptr = list_head( &formats_to_free )))
-        free_cached_data( LIST_ENTRY( ptr, struct cached_format, entry ));
 }
 
 /* get the clipboard locale stored in the CF_LOCALE format */
@@ -451,7 +355,7 @@ static HANDLE render_synthesized_bitmap( HANDLE data, UINT from )
 {
     BITMAPINFO *bmi;
     HANDLE ret = 0;
-    HDC hdc = GetDC( 0 );
+    HDC hdc = NtUserGetDC( 0 );
 
     if ((bmi = GlobalLock( data )))
     {
@@ -461,7 +365,7 @@ static HANDLE render_synthesized_bitmap( HANDLE data, UINT from )
                               bmi, DIB_RGB_COLORS );
         GlobalUnlock( data );
     }
-    ReleaseDC( 0, hdc );
+    NtUserReleaseDC( 0, hdc );
     return ret;
 }
 
@@ -471,7 +375,7 @@ static HANDLE render_synthesized_dib( HANDLE data, UINT format, UINT from )
     BITMAPINFO *bmi, *src;
     DWORD src_size, header_size, bits_size;
     HANDLE ret = 0;
-    HDC hdc = GetDC( 0 );
+    HDC hdc = NtUserGetDC( 0 );
 
     if (from == CF_BITMAP)
     {
@@ -518,7 +422,7 @@ static HANDLE render_synthesized_dib( HANDLE data, UINT format, UINT from )
     }
 
 done:
-    ReleaseDC( 0, hdc );
+    NtUserReleaseDC( 0, hdc );
     return ret;
 }
 
@@ -530,7 +434,7 @@ static HANDLE render_synthesized_metafile( HANDLE data )
     void *bits;
     METAFILEPICT *pict;
     ENHMETAHEADER header;
-    HDC hdc = GetDC( 0 );
+    HDC hdc = NtUserGetDC( 0 );
 
     size = GetWinMetaFileBits( data, 0, NULL, MM_ISOTROPIC, hdc );
     if ((bits = HeapAlloc( GetProcessHeap(), 0, size )))
@@ -549,7 +453,7 @@ static HANDLE render_synthesized_metafile( HANDLE data )
         }
         HeapFree( GetProcessHeap(), 0, bits );
     }
-    ReleaseDC( 0, hdc );
+    NtUserReleaseDC( 0, hdc );
     return ret;
 }
 
@@ -576,7 +480,7 @@ static HANDLE render_synthesized_enhmetafile( HANDLE data )
 }
 
 /* render a synthesized format */
-static HANDLE render_synthesized_format( UINT format, UINT from )
+HANDLE render_synthesized_format( UINT format, UINT from )
 {
     HANDLE data = GetClipboardData( from );
 
@@ -616,29 +520,6 @@ static HANDLE render_synthesized_format( UINT format, UINT from )
     return data;
 }
 
-/**************************************************************************
- *	CLIPBOARD_ReleaseOwner
- */
-void CLIPBOARD_ReleaseOwner( HWND hwnd )
-{
-    HWND viewer = 0, owner = 0;
-
-    SendMessageW( hwnd, WM_RENDERALLFORMATS, 0, 0 );
-
-    SERVER_START_REQ( release_clipboard )
-    {
-        req->owner = wine_server_user_handle( hwnd );
-        if (!wine_server_call( req ))
-        {
-            viewer = wine_server_ptr_handle( reply->viewer );
-            owner = wine_server_ptr_handle( reply->owner );
-        }
-    }
-    SERVER_END_REQ;
-
-    if (viewer) SendNotifyMessageW( viewer, WM_DRAWCLIPBOARD, (WPARAM)owner, 0 );
-}
-
 
 /**************************************************************************
  *		RegisterClipboardFormatW (USER32.@)
@@ -673,132 +554,7 @@ INT WINAPI GetClipboardFormatNameA( UINT format, LPSTR buffer, INT maxlen )
  */
 BOOL WINAPI OpenClipboard( HWND hwnd )
 {
-    BOOL ret;
-    HWND owner;
-
-    TRACE( "%p\n", hwnd );
-
-    USER_Driver->pUpdateClipboard();
-
-    EnterCriticalSection( &clipboard_cs );
-
-    SERVER_START_REQ( open_clipboard )
-    {
-        req->window = wine_server_user_handle( hwnd );
-        ret = !wine_server_call_err( req );
-        owner = wine_server_ptr_handle( reply->owner );
-    }
-    SERVER_END_REQ;
-
-    if (ret && !WIN_IsCurrentProcess( owner )) invalidate_memory_formats();
-
-    LeaveCriticalSection( &clipboard_cs );
-    return ret;
-}
-
-
-/**************************************************************************
- *		CloseClipboard (USER32.@)
- */
-BOOL WINAPI CloseClipboard(void)
-{
-    HWND viewer = 0, owner = 0;
-    BOOL ret;
-
-    TRACE( "\n" );
-
-    SERVER_START_REQ( close_clipboard )
-    {
-        if ((ret = !wine_server_call_err( req )))
-        {
-            viewer = wine_server_ptr_handle( reply->viewer );
-            owner = wine_server_ptr_handle( reply->owner );
-        }
-    }
-    SERVER_END_REQ;
-
-    if (viewer) SendNotifyMessageW( viewer, WM_DRAWCLIPBOARD, (WPARAM)owner, 0 );
-    return ret;
-}
-
-
-/**************************************************************************
- *		EmptyClipboard (USER32.@)
- * Empties and acquires ownership of the clipboard
- */
-BOOL WINAPI EmptyClipboard(void)
-{
-    BOOL ret;
-    HWND owner = NtUserGetClipboardOwner();
-
-    TRACE( "owner %p\n", owner );
-
-    if (owner) SendMessageTimeoutW( owner, WM_DESTROYCLIPBOARD, 0, 0, SMTO_ABORTIFHUNG, 5000, NULL );
-
-    EnterCriticalSection( &clipboard_cs );
-
-    SERVER_START_REQ( empty_clipboard )
-    {
-        ret = !wine_server_call_err( req );
-    }
-    SERVER_END_REQ;
-
-    if (ret) free_cached_formats();
-
-    LeaveCriticalSection( &clipboard_cs );
-    return ret;
-}
-
-
-/**************************************************************************
- *		SetClipboardViewer (USER32.@)
- */
-HWND WINAPI SetClipboardViewer( HWND hwnd )
-{
-    HWND prev = 0, owner = 0;
-
-    SERVER_START_REQ( set_clipboard_viewer )
-    {
-        req->viewer = wine_server_user_handle( hwnd );
-        if (!wine_server_call_err( req ))
-        {
-            prev = wine_server_ptr_handle( reply->old_viewer );
-            owner = wine_server_ptr_handle( reply->owner );
-        }
-    }
-    SERVER_END_REQ;
-
-    if (hwnd) SendNotifyMessageW( hwnd, WM_DRAWCLIPBOARD, (WPARAM)owner, 0 );
-
-    TRACE( "%p returning %p\n", hwnd, prev );
-    return prev;
-}
-
-
-/**************************************************************************
- *              ChangeClipboardChain (USER32.@)
- */
-BOOL WINAPI ChangeClipboardChain( HWND hwnd, HWND next )
-{
-    NTSTATUS status;
-    HWND viewer;
-
-    if (!hwnd) return FALSE;
-
-    SERVER_START_REQ( set_clipboard_viewer )
-    {
-        req->viewer = wine_server_user_handle( next );
-        req->previous = wine_server_user_handle( hwnd );
-        status = wine_server_call( req );
-        viewer = wine_server_ptr_handle( reply->old_viewer );
-    }
-    SERVER_END_REQ;
-
-    if (status == STATUS_PENDING)
-        return !SendMessageW( viewer, WM_CHANGECBCHAIN, (WPARAM)hwnd, (LPARAM)next );
-
-    if (status) SetLastError( RtlNtStatusToDosError( status ));
-    return !status;
+    return NtUserOpenClipboard( hwnd, 0 );
 }
 
 
@@ -807,78 +563,28 @@ BOOL WINAPI ChangeClipboardChain( HWND hwnd, HWND next )
  */
 HANDLE WINAPI SetClipboardData( UINT format, HANDLE data )
 {
-    struct cached_format *cache = NULL;
-    void *ptr = NULL;
-    data_size_t size = 0;
-    HANDLE handle = data, retval = 0;
-    NTSTATUS status = STATUS_SUCCESS;
+    struct set_clipboard_params params = { .size = 0 };
+    HANDLE handle = data;
+    NTSTATUS status;
 
     TRACE( "%s %p\n", debugstr_format( format ), data );
 
     if (data)
     {
-        if (!(handle = marshal_data( format, data, &size ))) return 0;
-        if (!(ptr = GlobalLock( handle ))) goto done;
-        if (!(cache = HeapAlloc( GetProcessHeap(), 0, sizeof(*cache) ))) goto done;
-        cache->format = format;
-        cache->handle = data;
+        if (!(handle = marshal_data( format, data, &params.size ))) return 0;
+        if (!(params.data = GlobalLock( handle ))) return 0;
     }
 
-    EnterCriticalSection( &clipboard_cs );
+    status = NtUserSetClipboardData( format, data, &params );
 
-    SERVER_START_REQ( set_clipboard_data )
-    {
-        req->format = format;
-        req->lcid = GetUserDefaultLCID();
-        wine_server_add_data( req, ptr, size );
-        if (!(status = wine_server_call( req )))
-        {
-            if (cache) cache->seqno = reply->seqno;
-        }
-    }
-    SERVER_END_REQ;
-
-    if (!status)
-    {
-        /* free the previous entry if any */
-        struct cached_format *prev;
-
-        if ((prev = get_cached_format( format ))) free_cached_data( prev );
-        if (cache) list_add_tail( &cached_formats, &cache->entry );
-        retval = data;
-    }
-    else HeapFree( GetProcessHeap(), 0, cache );
-
-    LeaveCriticalSection( &clipboard_cs );
-
-done:
-    if (ptr) GlobalUnlock( handle );
+    if (params.data) GlobalUnlock( handle );
     if (handle != data) GlobalFree( handle );
-    if (status) SetLastError( RtlNtStatusToDosError( status ));
-    return retval;
-}
-
-
-/**************************************************************************
- *		EnumClipboardFormats (USER32.@)
- */
-UINT WINAPI EnumClipboardFormats( UINT format )
-{
-    UINT ret = 0;
-
-    SERVER_START_REQ( enum_clipboard_formats )
+    if (status)
     {
-        req->previous = format;
-        if (!wine_server_call_err( req ))
-        {
-            ret = reply->format;
-            SetLastError( ERROR_SUCCESS );
-        }
+        SetLastError( RtlNtStatusToDosError( status ));
+        return 0;
     }
-    SERVER_END_REQ;
-
-    TRACE( "%s -> %s\n", debugstr_format( format ), debugstr_format( ret ));
-    return ret;
+    return data;
 }
 
 
@@ -887,73 +593,704 @@ UINT WINAPI EnumClipboardFormats( UINT format )
  */
 HANDLE WINAPI GetClipboardData( UINT format )
 {
-    struct cached_format *cache;
-    NTSTATUS status;
-    UINT from, data_seqno;
-    HWND owner;
-    HANDLE data;
-    UINT size = 1024;
-    BOOL render = TRUE;
+    struct get_clipboard_params params = { .data_size = 1024 };
+    HANDLE ret = 0;
 
-    for (;;)
+    EnterCriticalSection( &clipboard_cs );
+
+    while (params.data_size)
     {
-        if (!(data = GlobalAlloc( GMEM_FIXED, size ))) return 0;
-
-        EnterCriticalSection( &clipboard_cs );
-        cache = get_cached_format( format );
-
-        SERVER_START_REQ( get_clipboard_data )
+        params.size = params.data_size;
+        params.data_size = 0;
+        if (!(params.data = GlobalAlloc( GMEM_FIXED, params.size ))) break;
+        ret = NtUserGetClipboardData( format, &params );
+        if (ret) break;
+        if (params.data_size == ~0) /* needs unmarshaling */
         {
-            req->format = format;
-            req->render = render;
-            if (cache)
+            struct set_clipboard_params set_params = { .cache_only = TRUE, .seqno = params.seqno };
+
+            ret = unmarshal_data( format, params.data, params.size );
+            if (!NtUserSetClipboardData( format, ret, &set_params )) break;
+
+            /* data changed, retry */
+            free_cached_data( format, ret );
+            ret = 0;
+            params.data_size = 1024;
+            continue;
+        }
+        GlobalFree( params.data );
+    }
+
+    LeaveCriticalSection( &clipboard_cs );
+    return ret;
+}
+
+static struct format_entry *next_format( struct format_entry *entry )
+{
+    return (struct format_entry *)&entry->data[(entry->size + 7) & ~7];
+}
+
+struct data_object
+{
+    IDataObject IDataObject_iface;
+    LONG refcount;
+
+    HWND target_hwnd; /* the last window the mouse was over */
+    POINT target_pos;
+    DWORD target_effect;
+    IDropTarget *drop_target;
+
+    struct format_entry *entries_end;
+    struct format_entry entries[];
+};
+
+static struct data_object *data_object_from_IDataObject( IDataObject *iface )
+{
+    return CONTAINING_RECORD( iface, struct data_object, IDataObject_iface );
+}
+
+struct format_iterator
+{
+    IEnumFORMATETC IEnumFORMATETC_iface;
+    LONG refcount;
+
+    struct format_entry *entry;
+    IDataObject *object;
+};
+
+static inline struct format_iterator *format_iterator_from_IEnumFORMATETC( IEnumFORMATETC *iface )
+{
+    return CONTAINING_RECORD(iface, struct format_iterator, IEnumFORMATETC_iface);
+}
+
+static HRESULT WINAPI format_iterator_QueryInterface( IEnumFORMATETC *iface, REFIID iid, void **obj )
+{
+    struct format_iterator *iterator = format_iterator_from_IEnumFORMATETC( iface );
+
+    TRACE( "iterator %p, iid %s, obj %p\n", iterator, debugstr_guid(iid), obj );
+
+    if (IsEqualIID( iid, &IID_IUnknown ) || IsEqualIID( iid, &IID_IEnumFORMATETC ))
+    {
+        IEnumFORMATETC_AddRef( &iterator->IEnumFORMATETC_iface );
+        *obj = &iterator->IEnumFORMATETC_iface;
+        return S_OK;
+    }
+
+    *obj = NULL;
+    WARN( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(iid) );
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI format_iterator_AddRef( IEnumFORMATETC *iface )
+{
+    struct format_iterator *iterator = format_iterator_from_IEnumFORMATETC( iface );
+    ULONG ref = InterlockedIncrement( &iterator->refcount );
+    TRACE( "iterator %p increasing refcount to %lu.\n", iterator, ref );
+    return ref;
+}
+
+static ULONG WINAPI format_iterator_Release(IEnumFORMATETC *iface)
+{
+    struct format_iterator *iterator = format_iterator_from_IEnumFORMATETC( iface );
+    ULONG ref = InterlockedDecrement( &iterator->refcount );
+
+    TRACE( "iterator %p increasing refcount to %lu.\n", iterator, ref );
+
+    if (!ref)
+    {
+        IDataObject_Release( iterator->object );
+        free( iterator );
+    }
+
+    return ref;
+}
+
+static HRESULT WINAPI format_iterator_Next( IEnumFORMATETC *iface, ULONG count, FORMATETC *formats, ULONG *ret )
+{
+    struct format_iterator *iterator = format_iterator_from_IEnumFORMATETC( iface );
+    struct data_object *object = data_object_from_IDataObject( iterator->object );
+    struct format_entry *entry;
+    UINT i;
+
+    TRACE( "iterator %p, count %lu, formats %p, ret %p\n", iterator, count, formats, ret );
+
+    for (entry = iterator->entry, i = 0; entry < object->entries_end && i < count; entry = next_format( entry ), i++)
+    {
+        formats[i].cfFormat = entry->format;
+        formats[i].ptd = NULL;
+        formats[i].dwAspect = DVASPECT_CONTENT;
+        formats[i].lindex = -1;
+        formats[i].tymed = TYMED_HGLOBAL;
+    }
+
+    iterator->entry = entry;
+    if (ret) *ret = i;
+    return (i == count) ? S_OK : S_FALSE;
+}
+
+static HRESULT WINAPI format_iterator_Skip( IEnumFORMATETC *iface, ULONG count )
+{
+    struct format_iterator *iterator = format_iterator_from_IEnumFORMATETC( iface );
+    struct data_object *object = data_object_from_IDataObject( iterator->object );
+    struct format_entry *entry;
+
+    TRACE( "iterator %p, count %lu\n", iterator, count );
+
+    for (entry = iterator->entry; entry < object->entries_end; entry = next_format( entry ))
+        if (!count--) break;
+
+    iterator->entry = entry;
+    return count ? S_FALSE : S_OK;
+}
+
+static HRESULT WINAPI format_iterator_Reset( IEnumFORMATETC *iface )
+{
+    struct format_iterator *iterator = format_iterator_from_IEnumFORMATETC( iface );
+    struct data_object *object = data_object_from_IDataObject( iterator->object );
+
+    TRACE( "iterator %p\n", iterator );
+    iterator->entry = object->entries;
+    return S_OK;
+}
+
+static HRESULT format_iterator_create( IDataObject *object, IEnumFORMATETC **out );
+
+static HRESULT WINAPI format_iterator_Clone( IEnumFORMATETC *iface, IEnumFORMATETC **out )
+{
+    HRESULT hr;
+    struct format_iterator *iterator = format_iterator_from_IEnumFORMATETC( iface );
+    TRACE( "iterator %p, out %p\n", iterator, out );
+    hr = format_iterator_create( iterator->object, out );
+    if (SUCCEEDED(hr))
+        format_iterator_from_IEnumFORMATETC( *out )->entry = iterator->entry;
+    return hr;
+}
+
+static const IEnumFORMATETCVtbl format_iterator_vtbl =
+{
+    format_iterator_QueryInterface,
+    format_iterator_AddRef,
+    format_iterator_Release,
+    format_iterator_Next,
+    format_iterator_Skip,
+    format_iterator_Reset,
+    format_iterator_Clone,
+};
+
+static HRESULT format_iterator_create( IDataObject *object, IEnumFORMATETC **out )
+{
+    struct format_iterator *iterator;
+
+    if (!(iterator = calloc( 1, sizeof(*iterator) ))) return E_OUTOFMEMORY;
+    iterator->IEnumFORMATETC_iface.lpVtbl = &format_iterator_vtbl;
+    iterator->refcount = 1;
+    IDataObject_AddRef( (iterator->object = object) );
+    iterator->entry = data_object_from_IDataObject(object)->entries;
+
+    *out = &iterator->IEnumFORMATETC_iface;
+    TRACE( "created object %p iterator %p\n", object, iterator );
+    return S_OK;
+}
+
+static HRESULT WINAPI data_object_QueryInterface( IDataObject *iface, REFIID iid, void **obj )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+
+    TRACE( "object %p, iid %s, obj %p\n", object, debugstr_guid(iid), obj );
+
+    if (IsEqualIID( iid, &IID_IUnknown ) || IsEqualIID( iid, &IID_IDataObject ))
+    {
+        IDataObject_AddRef( &object->IDataObject_iface );
+        *obj = &object->IDataObject_iface;
+        return S_OK;
+    }
+
+    *obj = NULL;
+    WARN( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(iid) );
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI data_object_AddRef( IDataObject *iface )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+    ULONG ref = InterlockedIncrement( &object->refcount );
+    TRACE( "object %p increasing refcount to %lu.\n", object, ref );
+    return ref;
+}
+
+static ULONG WINAPI data_object_Release( IDataObject *iface )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+    ULONG ref = InterlockedDecrement( &object->refcount );
+
+    TRACE( "object %p decreasing refcount to %lu.\n", object, ref );
+
+    if (!ref)
+    {
+        if (object->drop_target)
+        {
+            HRESULT hr = IDropTarget_DragLeave( object->drop_target );
+            if (FAILED(hr)) WARN( "IDropTarget_DragLeave returned %#lx\n", hr );
+            IDropTarget_Release( object->drop_target );
+        }
+
+        free( object );
+    }
+
+    return ref;
+}
+
+static HRESULT WINAPI data_object_GetData( IDataObject *iface, FORMATETC *format, STGMEDIUM *medium )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+    struct format_entry *iter;
+    HRESULT hr;
+
+    TRACE( "object %p, format %p (%s), medium %p\n", object, format, debugstr_format(format->cfFormat), medium );
+
+    if (FAILED(hr = IDataObject_QueryGetData( iface, format ))) return hr;
+
+    for (iter = object->entries; iter < object->entries_end; iter = next_format( iter ))
+    {
+        if (iter->format == format->cfFormat)
+        {
+            medium->tymed = TYMED_HGLOBAL;
+            medium->hGlobal = GlobalAlloc( GMEM_FIXED | GMEM_ZEROINIT, iter->size );
+            if (medium->hGlobal == NULL) return E_OUTOFMEMORY;
+            memcpy( GlobalLock( medium->hGlobal ), iter->data, iter->size );
+            GlobalUnlock( medium->hGlobal );
+            medium->pUnkForRelease = 0;
+            return S_OK;
+        }
+    }
+
+    return DATA_E_FORMATETC;
+}
+
+static HRESULT WINAPI data_object_GetDataHere( IDataObject *iface, FORMATETC *format, STGMEDIUM *medium )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+    FIXME( "object %p, format %p, medium %p stub!\n", object, format, medium );
+    return DATA_E_FORMATETC;
+}
+
+static HRESULT WINAPI data_object_QueryGetData( IDataObject *iface, FORMATETC *format )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+    struct format_entry *iter;
+
+    TRACE( "object %p, format %p (%s)\n", object, format, debugstr_format(format->cfFormat) );
+
+    if (format->tymed && !(format->tymed & TYMED_HGLOBAL))
+    {
+        FIXME("only HGLOBAL medium types supported right now\n");
+        return DV_E_TYMED;
+    }
+    /* Windows Explorer ignores .dwAspect and .lindex for CF_HDROP,
+     * and we have no way to implement them on XDnD anyway, so ignore them too.
+     */
+
+    for (iter = object->entries; iter < object->entries_end; iter = next_format( iter ))
+    {
+        if (iter->format == format->cfFormat)
+        {
+            TRACE("application found %s\n", debugstr_format(format->cfFormat));
+            return S_OK;
+        }
+    }
+    TRACE("application didn't find %s\n", debugstr_format(format->cfFormat));
+    return DV_E_FORMATETC;
+}
+
+static HRESULT WINAPI data_object_GetCanonicalFormatEtc( IDataObject *iface, FORMATETC *format, FORMATETC *out )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+    FIXME( "object %p, format %p, out %p stub!\n", object, format, out );
+    out->ptd = NULL;
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI data_object_SetData( IDataObject *iface, FORMATETC *format, STGMEDIUM *medium, BOOL release )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+    FIXME( "object %p, format %p, medium %p, release %u stub!\n", object, format, medium, release );
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI data_object_EnumFormatEtc( IDataObject *iface, DWORD direction, IEnumFORMATETC **out )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+
+    TRACE( "object %p, direction %lu, out %p\n", object, direction, out );
+
+    if (direction != DATADIR_GET)
+    {
+        FIXME("only the get direction is implemented\n");
+        return E_NOTIMPL;
+    }
+
+    return format_iterator_create( iface, out );
+}
+
+static HRESULT WINAPI data_object_DAdvise( IDataObject *iface, FORMATETC *format, DWORD flags,
+                                           IAdviseSink *sink, DWORD *connection )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+    FIXME( "object %p, format %p, flags %#lx, sink %p, connection %p stub!\n",
+           object, format, flags, sink, connection );
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+
+static HRESULT WINAPI data_object_DUnadvise( IDataObject *iface, DWORD connection )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+    FIXME( "object %p, connection %lu stub!\n", object, connection );
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+
+static HRESULT WINAPI data_object_EnumDAdvise( IDataObject *iface, IEnumSTATDATA **advise )
+{
+    struct data_object *object = data_object_from_IDataObject( iface );
+    FIXME( "object %p, advise %p stub!\n", object, advise );
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+
+static IDataObjectVtbl data_object_vtbl =
+{
+    data_object_QueryInterface,
+    data_object_AddRef,
+    data_object_Release,
+    data_object_GetData,
+    data_object_GetDataHere,
+    data_object_QueryGetData,
+    data_object_GetCanonicalFormatEtc,
+    data_object_SetData,
+    data_object_EnumFormatEtc,
+    data_object_DAdvise,
+    data_object_DUnadvise,
+    data_object_EnumDAdvise,
+};
+
+static HRESULT data_object_create( UINT entries_size, const struct format_entry *entries, IDataObject **out )
+{
+    struct data_object *object;
+
+    if (!(object = calloc( 1, sizeof(*object) + entries_size ))) return E_OUTOFMEMORY;
+    object->IDataObject_iface.lpVtbl = &data_object_vtbl;
+    object->refcount = 1;
+
+    object->entries_end = (struct format_entry *)((char *)object->entries + entries_size);
+    memcpy( object->entries, entries, entries_size );
+    *out = &object->IDataObject_iface;
+
+    return S_OK;
+}
+
+static struct data_object *get_data_object( BOOL clear )
+{
+    IDataObject *iface;
+
+    EnterCriticalSection( &clipboard_cs );
+    if ((iface = dnd_data_object))
+    {
+        if (clear) dnd_data_object = NULL;
+        else IDataObject_AddRef( iface );
+    }
+    LeaveCriticalSection( &clipboard_cs );
+
+    if (!iface) return NULL;
+    return data_object_from_IDataObject( iface );
+}
+
+/* Based on functions in dlls/ole32/ole2.c */
+static HANDLE get_droptarget_local_handle(HWND hwnd)
+{
+    static const WCHAR prop_marshalleddroptarget[] =
+        {'W','i','n','e','M','a','r','s','h','a','l','l','e','d','D','r','o','p','T','a','r','g','e','t',0};
+    HANDLE handle;
+    HANDLE local_handle = 0;
+
+    handle = GetPropW(hwnd, prop_marshalleddroptarget);
+    if (handle)
+    {
+        DWORD pid;
+        HANDLE process;
+
+        GetWindowThreadProcessId(hwnd, &pid);
+        process = OpenProcess(PROCESS_DUP_HANDLE, FALSE, pid);
+        if (process)
+        {
+            DuplicateHandle(process, handle, GetCurrentProcess(), &local_handle, 0, FALSE, DUPLICATE_SAME_ACCESS);
+            CloseHandle(process);
+        }
+    }
+    return local_handle;
+}
+
+static HRESULT create_stream_from_map(HANDLE map, IStream **stream)
+{
+    HRESULT hr = E_OUTOFMEMORY;
+    HGLOBAL hmem;
+    void *data;
+    MEMORY_BASIC_INFORMATION info;
+
+    data = MapViewOfFile(map, FILE_MAP_READ, 0, 0, 0);
+    if(!data) return hr;
+
+    VirtualQuery(data, &info, sizeof(info));
+    TRACE("size %d\n", (int)info.RegionSize);
+
+    hmem = GlobalAlloc(GMEM_MOVEABLE, info.RegionSize);
+    if(hmem)
+    {
+        memcpy(GlobalLock(hmem), data, info.RegionSize);
+        GlobalUnlock(hmem);
+        hr = CreateStreamOnHGlobal(hmem, TRUE, stream);
+    }
+    UnmapViewOfFile(data);
+    return hr;
+}
+
+static IDropTarget* get_droptarget_pointer(HWND hwnd)
+{
+    IDropTarget *droptarget = NULL;
+    HANDLE map;
+    IStream *stream;
+
+    map = get_droptarget_local_handle(hwnd);
+    if(!map) return NULL;
+
+    if(SUCCEEDED(create_stream_from_map(map, &stream)))
+    {
+        CoUnmarshalInterface(stream, &IID_IDropTarget, (void**)&droptarget);
+        IStream_Release(stream);
+    }
+    CloseHandle(map);
+    return droptarget;
+}
+
+/* Recursively searches for a window on given coordinates in a drag&drop specific manner.
+ *
+ * Don't use WindowFromPoint instead, because it omits the STATIC and transparent
+ * windows, but they can be a valid drop targets if have WS_EX_ACCEPTFILES set.
+ */
+static HWND window_from_point_dnd( HWND hwnd, POINT point )
+{
+    HWND child;
+
+    ScreenToClient( hwnd, &point );
+
+    while ((child = ChildWindowFromPointEx( hwnd, point, CWP_SKIPDISABLED | CWP_SKIPINVISIBLE )) && child != hwnd)
+    {
+       MapWindowPoints( hwnd, child, &point, 1 );
+       hwnd = child;
+    }
+
+    return hwnd;
+}
+
+/* Returns the first window down the hierarchy that has WS_EX_ACCEPTFILES set or
+ * returns NULL, if such window does not exists.
+ */
+static HWND window_accepting_files( HWND hwnd )
+{
+    /* MUST to be GetParent, not GetAncestor, because the owner window (with WS_EX_ACCEPTFILES)
+     * of a window with WS_POPUP is a valid drop target. GetParent works exactly this way! */
+    while (hwnd && !(GetWindowLongW( hwnd, GWL_EXSTYLE ) & WS_EX_ACCEPTFILES)) hwnd = GetParent( hwnd );
+    return hwnd;
+}
+
+BOOL drag_drop_enter( UINT entries_size, const struct format_entry *entries )
+{
+    IDataObject *object, *previous;
+
+    TRACE( "entries_size %u, entries %p\n", entries_size, entries );
+
+    if (FAILED(data_object_create( entries_size, entries, &object ))) return FALSE;
+
+    EnterCriticalSection( &clipboard_cs );
+    previous = dnd_data_object;
+    dnd_data_object = object;
+    LeaveCriticalSection( &clipboard_cs );
+
+    if (previous) IDataObject_Release( previous );
+    return TRUE;
+}
+
+void drag_drop_leave(void)
+{
+    struct data_object *object;
+
+    TRACE("DND Operation canceled\n");
+
+    if ((object = get_data_object( TRUE ))) IDataObject_Release( &object->IDataObject_iface );
+}
+
+DWORD drag_drop_drag( HWND hwnd, POINT point, DWORD effect )
+{
+    int accept = 0; /* Assume we're not accepting */
+    POINTL pointl = {.x = point.x, .y = point.y};
+    struct data_object *object;
+    HRESULT hr;
+
+    TRACE( "hwnd %p, point %s, effect %#lx\n", hwnd, wine_dbgstr_point(&point), effect );
+
+    if (!(object = get_data_object( FALSE ))) return DROPEFFECT_NONE;
+    object->target_pos = point;
+    hwnd = window_from_point_dnd( hwnd, object->target_pos );
+
+    if (!object->drop_target || object->target_hwnd != hwnd)
+    {
+        /* Notify OLE of DragEnter. Result determines if we accept */
+        HWND dropTargetWindow;
+
+        if (object->drop_target)
+        {
+            hr = IDropTarget_DragLeave( object->drop_target );
+            if (FAILED(hr)) WARN( "IDropTarget_DragLeave returned %#lx\n", hr );
+            IDropTarget_Release( object->drop_target );
+            object->drop_target = NULL;
+        }
+
+        dropTargetWindow = hwnd;
+        do { object->drop_target = get_droptarget_pointer( dropTargetWindow ); }
+        while (!object->drop_target && !!(dropTargetWindow = GetParent( dropTargetWindow )));
+        object->target_hwnd = hwnd;
+
+        if (object->drop_target)
+        {
+            DWORD effect_ignore = effect;
+            hr = IDropTarget_DragEnter( object->drop_target, &object->IDataObject_iface,
+                                        MK_LBUTTON, pointl, &effect_ignore );
+            if (hr == S_OK) TRACE( "the application accepted the drop (effect = %ld)\n", effect_ignore );
+            else
             {
-                req->cached = 1;
-                req->seqno = cache->seqno;
+                WARN( "IDropTarget_DragEnter returned %#lx\n", hr );
+                IDropTarget_Release( object->drop_target );
+                object->drop_target = NULL;
             }
-            wine_server_set_reply( req, data, size );
-            status = wine_server_call( req );
-            from = reply->from;
-            size = reply->total;
-            data_seqno = reply->seqno;
-            owner = wine_server_ptr_handle( reply->owner );
         }
-        SERVER_END_REQ;
+    }
+    else if (object->drop_target)
+    {
+        hr = IDropTarget_DragOver( object->drop_target, MK_LBUTTON, pointl, &effect );
+        if (hr == S_OK) object->target_effect = effect;
+        else WARN( "IDropTarget_DragOver returned %#lx\n", hr );
+    }
 
-        if (!status && size)
-        {
-            data = cache_data( format, data, size, data_seqno, cache );
-            LeaveCriticalSection( &clipboard_cs );
-            TRACE( "%s returning %p\n", debugstr_format( format ), data );
-            return data;
-        }
-        LeaveCriticalSection( &clipboard_cs );
-        GlobalFree( data );
+    if (object->drop_target && object->target_effect != DROPEFFECT_NONE)
+        accept = 1;
+    else
+    {
+        /* fallback search for window able to accept these files. */
+        FORMATETC format = {.cfFormat = CF_HDROP};
 
-        if (status == STATUS_BUFFER_OVERFLOW) continue;  /* retry with the new size */
-        if (status == STATUS_OBJECT_NAME_NOT_FOUND) return 0; /* no such format */
-        if (status)
+        if (window_accepting_files(hwnd) && SUCCEEDED(IDataObject_QueryGetData( &object->IDataObject_iface, &format )))
         {
-            SetLastError( RtlNtStatusToDosError( status ));
-            TRACE( "%s error %08x\n", debugstr_format( format ), status );
-            return 0;
+            accept = 1;
+            effect = DROPEFFECT_COPY;
         }
-        if (render)  /* try rendering it */
+    }
+
+    if (!accept) effect = DROPEFFECT_NONE;
+    IDataObject_Release( &object->IDataObject_iface );
+
+    return effect;
+}
+
+DWORD drag_drop_drop( HWND hwnd )
+{
+    DWORD effect;
+    int accept = 0; /* Assume we're not accepting */
+    struct data_object *object;
+    BOOL drop_file = TRUE;
+
+    TRACE( "hwnd %p\n", hwnd );
+
+    if (!(object = get_data_object( TRUE ))) return DROPEFFECT_NONE;
+    effect = object->target_effect;
+
+    /* Notify OLE of Drop */
+    if (object->drop_target && effect != DROPEFFECT_NONE)
+    {
+        POINTL pointl = {object->target_pos.x, object->target_pos.y};
+        HRESULT hr;
+
+        hr = IDropTarget_Drop( object->drop_target, &object->IDataObject_iface,
+                               MK_LBUTTON, pointl, &effect );
+        if (hr == S_OK)
         {
-            render = FALSE;
-            if (from)
+            if (effect != DROPEFFECT_NONE)
             {
-                render_synthesized_format( format, from );
-                continue;
+                TRACE("drop succeeded\n");
+                accept = 1;
+                drop_file = FALSE;
             }
-            else if (owner)
-            {
-                TRACE( "%s sending WM_RENDERFORMAT to %p\n", debugstr_format( format ), owner );
-                SendMessageW( owner, WM_RENDERFORMAT, format, 0 );
-                continue;
-            }
+            else
+                TRACE("the application refused the drop\n");
         }
-        TRACE( "%s returning 0\n", debugstr_format( format ));
-        return 0;
+        else if (FAILED(hr))
+            WARN("drop failed, error 0x%08lx\n", hr);
+        else
+        {
+            WARN("drop returned 0x%08lx\n", hr);
+            drop_file = FALSE;
+        }
+    }
+    else if (object->drop_target)
+    {
+        HRESULT hr = IDropTarget_DragLeave( object->drop_target );
+        if (FAILED(hr)) WARN( "IDropTarget_DragLeave returned %#lx\n", hr );
+        IDropTarget_Release( object->drop_target );
+        object->drop_target = NULL;
+    }
+
+    if (drop_file)
+    {
+        /* Only send WM_DROPFILES if Drop didn't succeed or DROPEFFECT_NONE was set.
+         * Doing both causes winamp to duplicate the dropped files (#29081) */
+        HWND hwnd_drop = window_accepting_files(window_from_point_dnd( hwnd, object->target_pos ));
+        FORMATETC format = {.cfFormat = CF_HDROP};
+        STGMEDIUM medium;
+
+        if (hwnd_drop && SUCCEEDED(IDataObject_GetData( &object->IDataObject_iface, &format, &medium )))
+        {
+            DROPFILES *drop = GlobalLock( medium.hGlobal );
+            void *files = (char *)drop + drop->pFiles;
+            RECT rect;
+
+            drop->pt = object->target_pos;
+            drop->fNC = !ScreenToClient( hwnd, &drop->pt ) || !GetClientRect( hwnd, &rect ) || !PtInRect( &rect, drop->pt );
+            TRACE( "Sending WM_DROPFILES: hwnd %p, pt %s, fNC %u, files %p (%s)\n", hwnd,
+                   wine_dbgstr_point( &drop->pt), drop->fNC, files, debugstr_w(files) );
+            GlobalUnlock( medium.hGlobal );
+
+            PostMessageW( hwnd, WM_DROPFILES, (WPARAM)medium.hGlobal, 0 );
+            accept = 1;
+            effect = DROPEFFECT_COPY;
+        }
+    }
+
+    TRACE("effectRequested(0x%lx) accept(%d) performed(0x%lx) at x(%ld),y(%ld)\n",
+          object->target_effect, accept, effect, object->target_pos.x, object->target_pos.y);
+
+    if (!accept) effect = DROPEFFECT_NONE;
+    IDataObject_Release( &object->IDataObject_iface );
+
+    return effect;
+}
+
+void drag_drop_post( HWND hwnd, UINT drop_size, const DROPFILES *drop )
+{
+    POINT point = drop->pt;
+    HDROP handle;
+
+    hwnd = window_accepting_files( window_from_point_dnd( hwnd, point ) );
+    if ((handle = GlobalAlloc( GMEM_SHARE, drop_size )))
+    {
+        DROPFILES *ptr = GlobalLock( handle );
+        memcpy( ptr, drop, drop_size );
+        GlobalUnlock( handle );
+        PostMessageW( hwnd, WM_DROPFILES, (WPARAM)handle, 0 );
     }
 }

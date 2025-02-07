@@ -1,6 +1,7 @@
 /* Unit test suite for Rtl* API functions
  *
  * Copyright 2003 Thomas Mertes
+ * Copyright 2025 Zhiyi Zhang for CodeWeavers
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -22,11 +23,21 @@
  */
 
 #include <stdlib.h>
+#include <stdarg.h>
 
-#include "ntdll_test.h"
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
+#include "windef.h"
+#include "winbase.h"
+#include "winreg.h"
+#include "winternl.h"
 #include "in6addr.h"
 #include "inaddr.h"
 #include "ip2string.h"
+#include "ddk/ntifs.h"
+#include "wine/test.h"
+#include "wine/asm.h"
+#include "wine/rbtree.h"
 
 #ifndef __WINE_WINTERNL_H
 
@@ -48,6 +59,8 @@ typedef struct _RTL_HANDLE_TABLE
 
 #endif
 
+static BOOL is_win64 = (sizeof(void *) > sizeof(int));
+
 /* avoid #include <winsock2.h> */
 #undef htons
 #ifdef WORDS_BIGENDIAN
@@ -61,16 +74,34 @@ static inline USHORT __my_ushort_swap(USHORT s)
 #endif  /* WORDS_BIGENDIAN */
 
 
+#ifdef __ASM_USE_FASTCALL_WRAPPER
+extern ULONG WINAPI wrap_fastcall_func1( void *func, ULONG a );
+__ASM_STDCALL_FUNC( wrap_fastcall_func1, 8,
+                   "popl %ecx\n\t"
+                   "popl %eax\n\t"
+                   "xchgl (%esp),%ecx\n\t"
+                   "jmp *%eax" )
+#define call_fastcall_func1(func,a) wrap_fastcall_func1(func,a)
+#else
+#define call_fastcall_func1(func,a) func(a)
+#endif
+
 
 /* Function ptrs for ntdll calls */
 static HMODULE hntdll = 0;
+static PRTL_SPLAY_LINKS (WINAPI *pRtlDelete)(PRTL_SPLAY_LINKS);
+static void      (WINAPI  *pRtlDeleteNoSplay)(PRTL_SPLAY_LINKS, PRTL_SPLAY_LINKS *);
+static BOOLEAN   (WINAPI  *pRtlDeleteElementGenericTable)(PRTL_GENERIC_TABLE,PVOID);
 static VOID      (WINAPI  *pRtlMoveMemory)(LPVOID,LPCVOID,SIZE_T);
 static VOID      (WINAPI  *pRtlFillMemory)(LPVOID,SIZE_T,BYTE);
 static VOID      (WINAPI  *pRtlFillMemoryUlong)(LPVOID,SIZE_T,ULONG);
 static VOID      (WINAPI  *pRtlZeroMemory)(LPVOID,SIZE_T);
-static ULONGLONG (WINAPIV *pRtlUlonglongByteSwap)(ULONGLONG source);
+static USHORT    (FASTCALL *pRtlUshortByteSwap)(USHORT source);
+static ULONG     (FASTCALL *pRtlUlongByteSwap)(ULONG source);
+static ULONGLONG (FASTCALL *pRtlUlonglongByteSwap)(ULONGLONG source);
 static DWORD     (WINAPI *pRtlGetThreadErrorMode)(void);
 static NTSTATUS  (WINAPI *pRtlSetThreadErrorMode)(DWORD, LPDWORD);
+static PVOID     (WINAPI *pRtlInsertElementGenericTable)(PRTL_GENERIC_TABLE, PVOID, CLONG, PBOOLEAN);
 static NTSTATUS  (WINAPI *pRtlIpv4AddressToStringExA)(const IN_ADDR *, USHORT, LPSTR, PULONG);
 static NTSTATUS  (WINAPI *pRtlIpv4StringToAddressExA)(PCSTR, BOOLEAN, IN_ADDR *, PUSHORT);
 static NTSTATUS  (WINAPI *pRtlIpv6AddressToStringExA)(struct in6_addr *, ULONG, USHORT, PCHAR, PULONG);
@@ -78,10 +109,33 @@ static NTSTATUS  (WINAPI *pRtlIpv6StringToAddressExA)(PCSTR, struct in6_addr *, 
 static NTSTATUS  (WINAPI *pRtlIpv6StringToAddressExW)(PCWSTR, struct in6_addr *, PULONG, PUSHORT);
 static BOOL      (WINAPI *pRtlIsCriticalSectionLocked)(CRITICAL_SECTION *);
 static BOOL      (WINAPI *pRtlIsCriticalSectionLockedByThread)(CRITICAL_SECTION *);
+static BOOLEAN   (WINAPI *pRtlIsGenericTableEmpty)(PRTL_GENERIC_TABLE);
 static NTSTATUS  (WINAPI *pRtlInitializeCriticalSectionEx)(CRITICAL_SECTION *, ULONG, ULONG);
+static void      (WINAPI *pRtlInitializeGenericTable)(RTL_GENERIC_TABLE *, PRTL_GENERIC_COMPARE_ROUTINE,
+                                                      PRTL_GENERIC_ALLOCATE_ROUTINE, PRTL_GENERIC_FREE_ROUTINE,
+                                                      void *);
+static void *    (WINAPI *pRtlFindExportedRoutineByName)(HMODULE,const char *);
+static void *    (WINAPI *pRtlLookupElementGenericTable)(PRTL_GENERIC_TABLE, void *);
+static ULONG     (WINAPI *pRtlNumberGenericTableElements)(PRTL_GENERIC_TABLE);
 static NTSTATUS  (WINAPI *pLdrEnumerateLoadedModules)(void *, void *, void *);
 static NTSTATUS  (WINAPI *pLdrRegisterDllNotification)(ULONG, PLDR_DLL_NOTIFICATION_FUNCTION, void *, void **);
 static NTSTATUS  (WINAPI *pLdrUnregisterDllNotification)(void *);
+static VOID      (WINAPI *pRtlGetDeviceFamilyInfoEnum)(ULONGLONG *,DWORD *,DWORD *);
+static void      (WINAPI *pRtlRbInsertNodeEx)(RTL_RB_TREE *, RTL_BALANCED_NODE *, BOOLEAN, RTL_BALANCED_NODE *);
+static void      (WINAPI *pRtlRbRemoveNode)(RTL_RB_TREE *, RTL_BALANCED_NODE *);
+static DWORD     (WINAPI *pRtlConvertDeviceFamilyInfoToString)(DWORD *, DWORD *, WCHAR *, WCHAR *);
+static NTSTATUS  (WINAPI *pRtlInitializeNtUserPfn)( const UINT64 *client_procsA, ULONG procsA_size,
+                                                    const UINT64 *client_procsW, ULONG procsW_size,
+                                                    const void *client_workers, ULONG workers_size );
+static PRTL_SPLAY_LINKS (WINAPI *pRtlRealPredecessor)(PRTL_SPLAY_LINKS);
+static PRTL_SPLAY_LINKS (WINAPI *pRtlRealSuccessor)(PRTL_SPLAY_LINKS);
+static NTSTATUS  (WINAPI *pRtlRetrieveNtUserPfn)( const UINT64 **client_procsA,
+                                                  const UINT64 **client_procsW,
+                                                  const UINT64 **client_workers );
+static NTSTATUS  (WINAPI *pRtlResetNtUserPfn)(void);
+static PRTL_SPLAY_LINKS (WINAPI *pRtlSubtreePredecessor)(PRTL_SPLAY_LINKS);
+static PRTL_SPLAY_LINKS (WINAPI *pRtlSubtreeSuccessor)(PRTL_SPLAY_LINKS);
+static PRTL_SPLAY_LINKS (WINAPI *pRtlSplay)(PRTL_SPLAY_LINKS);
 
 static HMODULE hkernel32 = 0;
 static BOOL      (WINAPI *pIsWow64Process)(HANDLE, PBOOL);
@@ -104,13 +158,19 @@ static void InitFunctionPtrs(void)
     hntdll = LoadLibraryA("ntdll.dll");
     ok(hntdll != 0, "LoadLibrary failed\n");
     if (hntdll) {
+        pRtlDelete = (void *)GetProcAddress(hntdll, "RtlDelete");
+        pRtlDeleteElementGenericTable = (void *)GetProcAddress(hntdll, "RtlDeleteElementGenericTable");
+        pRtlDeleteNoSplay = (void *)GetProcAddress(hntdll, "RtlDeleteNoSplay");
 	pRtlMoveMemory = (void *)GetProcAddress(hntdll, "RtlMoveMemory");
 	pRtlFillMemory = (void *)GetProcAddress(hntdll, "RtlFillMemory");
 	pRtlFillMemoryUlong = (void *)GetProcAddress(hntdll, "RtlFillMemoryUlong");
 	pRtlZeroMemory = (void *)GetProcAddress(hntdll, "RtlZeroMemory");
-	pRtlUlonglongByteSwap = (void *)GetProcAddress(hntdll, "RtlUlonglongByteSwap");
+        pRtlUshortByteSwap = (void *)GetProcAddress(hntdll, "RtlUshortByteSwap");
+        pRtlUlongByteSwap = (void *)GetProcAddress(hntdll, "RtlUlongByteSwap");
+        pRtlUlonglongByteSwap = (void *)GetProcAddress(hntdll, "RtlUlonglongByteSwap");
         pRtlGetThreadErrorMode = (void *)GetProcAddress(hntdll, "RtlGetThreadErrorMode");
         pRtlSetThreadErrorMode = (void *)GetProcAddress(hntdll, "RtlSetThreadErrorMode");
+        pRtlInsertElementGenericTable = (void *)GetProcAddress(hntdll, "RtlInsertElementGenericTable");
         pRtlIpv4AddressToStringExA = (void *)GetProcAddress(hntdll, "RtlIpv4AddressToStringExA");
         pRtlIpv4StringToAddressExA = (void *)GetProcAddress(hntdll, "RtlIpv4StringToAddressExA");
         pRtlIpv6AddressToStringExA = (void *)GetProcAddress(hntdll, "RtlIpv6AddressToStringExA");
@@ -118,10 +178,27 @@ static void InitFunctionPtrs(void)
         pRtlIpv6StringToAddressExW = (void *)GetProcAddress(hntdll, "RtlIpv6StringToAddressExW");
         pRtlIsCriticalSectionLocked = (void *)GetProcAddress(hntdll, "RtlIsCriticalSectionLocked");
         pRtlIsCriticalSectionLockedByThread = (void *)GetProcAddress(hntdll, "RtlIsCriticalSectionLockedByThread");
+        pRtlIsGenericTableEmpty = (void *)GetProcAddress(hntdll, "RtlIsGenericTableEmpty");
         pRtlInitializeCriticalSectionEx = (void *)GetProcAddress(hntdll, "RtlInitializeCriticalSectionEx");
+        pRtlInitializeGenericTable = (void *)GetProcAddress(hntdll, "RtlInitializeGenericTable");
+        pRtlFindExportedRoutineByName = (void *)GetProcAddress(hntdll, "RtlFindExportedRoutineByName");
+        pRtlLookupElementGenericTable = (void *)GetProcAddress(hntdll, "RtlLookupElementGenericTable");
+        pRtlNumberGenericTableElements = (void *)GetProcAddress(hntdll, "RtlNumberGenericTableElements");
         pLdrEnumerateLoadedModules = (void *)GetProcAddress(hntdll, "LdrEnumerateLoadedModules");
         pLdrRegisterDllNotification = (void *)GetProcAddress(hntdll, "LdrRegisterDllNotification");
         pLdrUnregisterDllNotification = (void *)GetProcAddress(hntdll, "LdrUnregisterDllNotification");
+        pRtlGetDeviceFamilyInfoEnum = (void *)GetProcAddress(hntdll, "RtlGetDeviceFamilyInfoEnum");
+        pRtlRbInsertNodeEx = (void *)GetProcAddress(hntdll, "RtlRbInsertNodeEx");
+        pRtlRbRemoveNode = (void *)GetProcAddress(hntdll, "RtlRbRemoveNode");
+        pRtlConvertDeviceFamilyInfoToString = (void *)GetProcAddress(hntdll, "RtlConvertDeviceFamilyInfoToString");
+        pRtlInitializeNtUserPfn = (void *)GetProcAddress(hntdll, "RtlInitializeNtUserPfn");
+        pRtlRealPredecessor = (void *)GetProcAddress(hntdll, "RtlRealPredecessor");
+        pRtlRealSuccessor = (void *)GetProcAddress(hntdll, "RtlRealSuccessor");
+        pRtlRetrieveNtUserPfn = (void *)GetProcAddress(hntdll, "RtlRetrieveNtUserPfn");
+        pRtlResetNtUserPfn = (void *)GetProcAddress(hntdll, "RtlResetNtUserPfn");
+        pRtlSubtreePredecessor = (void *)GetProcAddress(hntdll, "RtlSubtreePredecessor");
+        pRtlSubtreeSuccessor = (void *)GetProcAddress(hntdll, "RtlSubtreeSuccessor");
+        pRtlSplay = (void *)GetProcAddress(hntdll, "RtlSplay");
     }
     hkernel32 = LoadLibraryA("kernel32.dll");
     ok(hkernel32 != 0, "LoadLibrary failed\n");
@@ -137,21 +214,36 @@ static void test_RtlQueryProcessDebugInformation(void)
     DEBUG_BUFFER *buffer;
     NTSTATUS status;
 
+    /* PDI_HEAPS | PDI_HEAP_BLOCKS */
     buffer = RtlCreateQueryDebugBuffer( 0, 0 );
     ok( buffer != NULL, "RtlCreateQueryDebugBuffer returned NULL" );
 
     status = RtlQueryProcessDebugInformation( GetCurrentThreadId(), PDI_HEAPS | PDI_HEAP_BLOCKS, buffer );
-    ok( status == STATUS_INVALID_CID, "RtlQueryProcessDebugInformation returned %x\n", status );
+    ok( status == STATUS_INVALID_CID, "RtlQueryProcessDebugInformation returned %lx\n", status );
 
     status = RtlQueryProcessDebugInformation( GetCurrentProcessId(), PDI_HEAPS | PDI_HEAP_BLOCKS, buffer );
-    ok( !status, "RtlQueryProcessDebugInformation returned %x\n", status );
+    ok( !status, "RtlQueryProcessDebugInformation returned %lx\n", status );
+    ok( buffer->InfoClassMask == (PDI_HEAPS | PDI_HEAP_BLOCKS), "unexpected InfoClassMask %ld\n", buffer->InfoClassMask);
+    ok( buffer->HeapInformation != NULL, "unexpected HeapInformation %p\n", buffer->HeapInformation);
 
     status = RtlDestroyQueryDebugBuffer( buffer );
-    ok( !status, "RtlDestroyQueryDebugBuffer returned %x\n", status );
+    ok( !status, "RtlDestroyQueryDebugBuffer returned %lx\n", status );
+
+    /* PDI_MODULES */
+    buffer = RtlCreateQueryDebugBuffer( 0, 0 );
+    ok( buffer != NULL, "RtlCreateQueryDebugBuffer returned NULL" );
+
+    status = RtlQueryProcessDebugInformation( GetCurrentProcessId(), PDI_MODULES, buffer );
+    ok( !status, "RtlQueryProcessDebugInformation returned %lx\n", status );
+    ok( buffer->InfoClassMask == PDI_MODULES, "unexpected InfoClassMask %ld\n", buffer->InfoClassMask);
+    ok( buffer->ModuleInformation != NULL, "unexpected ModuleInformation %p\n", buffer->ModuleInformation);
+
+    status = RtlDestroyQueryDebugBuffer( buffer );
+    ok( !status, "RtlDestroyQueryDebugBuffer returned %lx\n", status );
 }
 
 #define COMP(str1,str2,cmplen,len) size = RtlCompareMemory(str1, str2, cmplen); \
-  ok(size == len, "Expected %ld, got %ld\n", size, (SIZE_T)len)
+  ok(size == len, "Expected %Id, got %Id\n", size, (SIZE_T)len)
 
 static void test_RtlCompareMemory(void)
 {
@@ -175,39 +267,39 @@ static void test_RtlCompareMemoryUlong(void)
     a[2]= 0x89ab;
     a[3]= 0xcdef;
     result = RtlCompareMemoryUlong(a, 0, 0x0123);
-    ok(result == 0, "RtlCompareMemoryUlong(%p, 0, 0x0123) returns %u, expected 0\n", a, result);
+    ok(result == 0, "RtlCompareMemoryUlong(%p, 0, 0x0123) returns %lu, expected 0\n", a, result);
     result = RtlCompareMemoryUlong(a, 3, 0x0123);
-    ok(result == 0, "RtlCompareMemoryUlong(%p, 3, 0x0123) returns %u, expected 0\n", a, result);
+    ok(result == 0, "RtlCompareMemoryUlong(%p, 3, 0x0123) returns %lu, expected 0\n", a, result);
     result = RtlCompareMemoryUlong(a, 4, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 4, 0x0123) returns %u, expected 4\n", a, result);
+    ok(result == 4, "RtlCompareMemoryUlong(%p, 4, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 5, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 5, 0x0123) returns %u, expected 4\n", a, result);
+    ok(result == 4 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 5, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 7, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 7, 0x0123) returns %u, expected 4\n", a, result);
+    ok(result == 4 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 7, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 8, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 8, 0x0123) returns %u, expected 4\n", a, result);
+    ok(result == 4, "RtlCompareMemoryUlong(%p, 8, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 9, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 9, 0x0123) returns %u, expected 4\n", a, result);
+    ok(result == 4 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 9, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 4, 0x0127);
-    ok(result == 0, "RtlCompareMemoryUlong(%p, 4, 0x0127) returns %u, expected 0\n", a, result);
+    ok(result == 0, "RtlCompareMemoryUlong(%p, 4, 0x0127) returns %lu, expected 0\n", a, result);
     result = RtlCompareMemoryUlong(a, 4, 0x7123);
-    ok(result == 0, "RtlCompareMemoryUlong(%p, 4, 0x7123) returns %u, expected 0\n", a, result);
+    ok(result == 0 || result == 1 /* arm64 */, "RtlCompareMemoryUlong(%p, 4, 0x7123) returns %lu, expected 0\n", a, result);
     result = RtlCompareMemoryUlong(a, 16, 0x4567);
-    ok(result == 0, "RtlCompareMemoryUlong(%p, 16, 0x4567) returns %u, expected 0\n", a, result);
+    ok(result == 0, "RtlCompareMemoryUlong(%p, 16, 0x4567) returns %lu, expected 0\n", a, result);
 
     a[1]= 0x0123;
     result = RtlCompareMemoryUlong(a, 3, 0x0123);
-    ok(result == 0, "RtlCompareMemoryUlong(%p, 3, 0x0123) returns %u, expected 0\n", a, result);
+    ok(result == 0, "RtlCompareMemoryUlong(%p, 3, 0x0123) returns %lu, expected 0\n", a, result);
     result = RtlCompareMemoryUlong(a, 4, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 4, 0x0123) returns %u, expected 4\n", a, result);
+    ok(result == 4, "RtlCompareMemoryUlong(%p, 4, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 5, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 5, 0x0123) returns %u, expected 4\n", a, result);
+    ok(result == 4 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 5, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 7, 0x0123);
-    ok(result == 4, "RtlCompareMemoryUlong(%p, 7, 0x0123) returns %u, expected 4\n", a, result);
+    ok(result == 4 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 7, 0x0123) returns %lu, expected 4\n", a, result);
     result = RtlCompareMemoryUlong(a, 8, 0x0123);
-    ok(result == 8, "RtlCompareMemoryUlong(%p, 8, 0x0123) returns %u, expected 8\n", a, result);
+    ok(result == 8, "RtlCompareMemoryUlong(%p, 8, 0x0123) returns %lu, expected 8\n", a, result);
     result = RtlCompareMemoryUlong(a, 9, 0x0123);
-    ok(result == 8, "RtlCompareMemoryUlong(%p, 9, 0x0123) returns %u, expected 8\n", a, result);
+    ok(result == 8 || !result /* arm64 */, "RtlCompareMemoryUlong(%p, 9, 0x0123) returns %lu, expected 8\n", a, result);
 }
 
 #define COPY(len) memset(dest,0,sizeof(dest_aligned_block)); pRtlMoveMemory(dest, src, len)
@@ -317,312 +409,160 @@ static void test_RtlZeroMemory(void)
   ZERO(9); MCMP("\0\0\0\0\0\0\0\0\0 test!");
 }
 
-static void test_RtlUlonglongByteSwap(void)
+static void test_RtlByteSwap(void)
 {
-    ULONGLONG result;
+    ULONGLONG llresult;
+    ULONG     lresult;
+    USHORT    sresult;
 
-    if ( !pRtlUlonglongByteSwap )
+#ifdef _WIN64
+    /* the Rtl*ByteSwap() are always inlined and not exported from ntdll on 64bit */
+    sresult = RtlUshortByteSwap( 0x1234 );
+    ok( 0x3412 == sresult,
+        "inlined RtlUshortByteSwap() returns 0x%x\n", sresult );
+    lresult = RtlUlongByteSwap( 0x87654321 );
+    ok( 0x21436587 == lresult,
+        "inlined RtlUlongByteSwap() returns 0x%lx\n", lresult );
+    llresult = RtlUlonglongByteSwap( 0x7654321087654321ull );
+    ok( 0x2143658710325476 == llresult,
+        "inlined RtlUlonglongByteSwap() returns %#I64x\n", llresult );
+#else
+    ok( pRtlUshortByteSwap != NULL, "RtlUshortByteSwap is not available\n" );
+    if ( pRtlUshortByteSwap )
     {
-        win_skip("RtlUlonglongByteSwap is not available\n");
-        return;
+        sresult = call_fastcall_func1( pRtlUshortByteSwap, 0x1234u );
+        ok( 0x3412u == sresult,
+            "ntdll.RtlUshortByteSwap() returns %#x\n", sresult );
     }
 
-    result = pRtlUlonglongByteSwap( ((ULONGLONG)0x76543210 << 32) | 0x87654321 );
-    ok( (((ULONGLONG)0x21436587 << 32) | 0x10325476) == result,
-       "RtlUlonglongByteSwap(0x7654321087654321) returns 0x%s, expected 0x2143658710325476\n",
-       wine_dbgstr_longlong(result));
+    ok( pRtlUlongByteSwap != NULL, "RtlUlongByteSwap is not available\n" );
+    if ( pRtlUlongByteSwap )
+    {
+        lresult = call_fastcall_func1( pRtlUlongByteSwap, 0x87654321ul );
+        ok( 0x21436587ul == lresult,
+            "ntdll.RtlUlongByteSwap() returns %#lx\n", lresult );
+    }
+
+    ok( pRtlUlonglongByteSwap != NULL, "RtlUlonglongByteSwap is not available\n");
+    if ( pRtlUlonglongByteSwap )
+    {
+        llresult = pRtlUlonglongByteSwap( 0x7654321087654321ull );
+        ok( 0x2143658710325476ull == llresult,
+            "ntdll.RtlUlonglongByteSwap() returns %#I64x\n", llresult );
+    }
+#endif
 }
 
 
 static void test_RtlUniform(void)
 {
-    ULONGLONG num;
+    const ULONG step = 0x7fff;
+    ULONG num;
     ULONG seed;
     ULONG seed_bak;
     ULONG expected;
     ULONG result;
 
-/*
- * According to the documentation RtlUniform is using D.H. Lehmer's 1948
- * algorithm. This algorithm is:
- *
- * seed = (seed * const_1 + const_2) % const_3;
- *
- * According to the documentation the random number is distributed over
- * [0..MAXLONG]. Therefore const_3 is MAXLONG + 1:
- *
- * seed = (seed * const_1 + const_2) % (MAXLONG + 1);
- *
- * Because MAXLONG is 0x7fffffff (and MAXLONG + 1 is 0x80000000) the
- * algorithm can be expressed without division as:
- *
- * seed = (seed * const_1 + const_2) & MAXLONG;
- *
- * To find out const_2 we just call RtlUniform with seed set to 0:
- */
+    /*
+     * According to the documentation RtlUniform is using D.H. Lehmer's 1948
+     * algorithm.  We assume a more generic version of this algorithm,
+     * which is the linear congruential generator (LCG).  Its formula is:
+     *
+     *   X_(n+1) = (a * X_n + c) % m
+     *
+     * where a is the multiplier, c is the increment, and m is the modulus.
+     *
+     * According to the documentation, the random numbers are distributed over
+     * [0..MAXLONG].  Therefore, the modulus is MAXLONG + 1:
+     *
+     *   X_(n+1) = (a * X_n + c) % (MAXLONG + 1)
+     *
+     * To find out the increment, we just call RtlUniform with seed set to 0.
+     * This reveals c = 0x7fffffc3.
+     */
     seed = 0;
     expected = 0x7fffffc3;
     result = RtlUniform(&seed);
     ok(result == expected,
-        "RtlUniform(&seed (seed == 0)) returns %x, expected %x\n",
+        "RtlUniform(&seed (seed == 0)) returns %lx, expected %lx\n",
         result, expected);
-/*
- * The algorithm is now:
- *
- * seed = (seed * const_1 + 0x7fffffc3) & MAXLONG;
- *
- * To find out const_1 we can use:
- *
- * const_1 = RtlUniform(1) - 0x7fffffc3;
- *
- * If that does not work a search loop can try all possible values of
- * const_1 and compare to the result to RtlUniform(1).
- * This way we find out that const_1 is 0xffffffed.
- *
- * For seed = 1 the const_2 is 0x7fffffc4:
- */
+
+    /*
+     * The formula is now:
+     *
+     *   X_(n+1) = (a * X_n + 0x7fffffc3) % (MAXLONG + 1)
+     *
+     * If the modulus is correct, RtlUniform(0) shall equal RtlUniform(MAXLONG + 1).
+     * However, testing reveals that this is not the case.
+     * That is, the modulus in the documentation is incorrect.
+     */
+    seed = 0x80000000U;
+    expected = 0x7fffffb1;
+    result = RtlUniform(&seed);
+
+    ok(result == expected,
+        "RtlUniform(&seed (seed == 0x80000000)) returns %lx, expected %lx\n",
+        result, expected);
+
+    /*
+     * We try another value for modulus, say MAXLONG.
+     * We discover that RtlUniform(0) equals RtlUniform(MAXLONG), which means
+     * the correct value for the modulus is actually MAXLONG.
+     */
+    seed = 0x7fffffff;
+    expected = 0x7fffffc3;
+    result = RtlUniform(&seed);
+    ok(result == expected,
+        "RtlUniform(&seed (seed == 0x7fffffff)) returns %lx, expected %lx\n",
+        result, expected);
+
+    /*
+     * The formula is now:
+     *
+     *   X_(n+1) = (a * X_n + 0x7fffffc3) % MAXLONG
+     *
+     * To find out the multiplier we can use:
+     *
+     *   a = RtlUniform(1) - 0x7fffffc3 (mod MAXLONG)
+     *
+     * This way, we find out that a = -18 (mod MAXLONG),
+     * which is congruent to 0x7fffffed (MAXLONG - 18).
+     */
     seed = 1;
-    expected = seed * 0xffffffed + 0x7fffffc3 + 1;
+    expected = ((ULONGLONG)seed * 0x7fffffed + 0x7fffffc3) % MAXLONG;
     result = RtlUniform(&seed);
     ok(result == expected,
-        "RtlUniform(&seed (seed == 1)) returns %x, expected %x\n",
-        result, expected);
-/*
- * For seed = 2 the const_2 is 0x7fffffc3:
- */
-    seed = 2;
-    expected = seed * 0xffffffed + 0x7fffffc3;
-    result = RtlUniform(&seed);
-
-/*
- * Windows Vista uses different algorithms, so skip the rest of the tests
- * until that is figured out. Trace output for the failures is about 10.5 MB!
- */
-
-    if (result == 0x7fffff9f) {
-        skip("Most likely running on Windows Vista which uses a different algorithm\n");
-        return;
-    }
-
-    ok(result == expected,
-        "RtlUniform(&seed (seed == 2)) returns %x, expected %x\n",
+        "RtlUniform(&seed (seed == 1)) returns %lx, expected %lx\n",
         result, expected);
 
-/*
- * More tests show that if seed is odd the result must be incremented by 1:
- */
-    seed = 3;
-    expected = seed * 0xffffffed + 0x7fffffc3 + (seed & 1);
-    result = RtlUniform(&seed);
-    ok(result == expected,
-        "RtlUniform(&seed (seed == 3)) returns %x, expected %x\n",
-        result, expected);
+    num = 2;
+    do
+    {
+        seed = num;
+        expected = ((ULONGLONG)seed * 0x7fffffed + 0x7fffffc3) % 0x7fffffff;
+        result = RtlUniform(&seed);
+        ok(result == expected,
+                "test: RtlUniform(&seed (seed == %lx)) returns %lx, expected %lx\n",
+                num, result, expected);
+        ok(seed == expected,
+                "test: RtlUniform(&seed (seed == %lx)) sets seed to %lx, expected %lx\n",
+                num, result, expected);
 
-    seed = 0x6bca1aa;
-    expected = seed * 0xffffffed + 0x7fffffc3;
-    result = RtlUniform(&seed);
-    ok(result == expected,
-        "RtlUniform(&seed (seed == 0x6bca1aa)) returns %x, expected %x\n",
-        result, expected);
+        num += step;
+    } while (num >= 2 + step);
 
-    seed = 0x6bca1ab;
-    expected = seed * 0xffffffed + 0x7fffffc3 + 1;
-    result = RtlUniform(&seed);
-    ok(result == expected,
-        "RtlUniform(&seed (seed == 0x6bca1ab)) returns %x, expected %x\n",
-        result, expected);
-/*
- * When seed is 0x6bca1ac there is an exception:
- */
-    seed = 0x6bca1ac;
-    expected = seed * 0xffffffed + 0x7fffffc3 + 2;
-    result = RtlUniform(&seed);
-    ok(result == expected,
-        "RtlUniform(&seed (seed == 0x6bca1ac)) returns %x, expected %x\n",
-        result, expected);
-/*
- * Note that up to here const_3 is not used
- * (the highest bit of the result is not set).
- *
- * Starting with 0x6bca1ad: If seed is even the result must be incremented by 1:
- */
-    seed = 0x6bca1ad;
-    expected = (seed * 0xffffffed + 0x7fffffc3) & MAXLONG;
-    result = RtlUniform(&seed);
-    ok(result == expected,
-        "RtlUniform(&seed (seed == 0x6bca1ad)) returns %x, expected %x\n",
-        result, expected);
-
-    seed = 0x6bca1ae;
-    expected = (seed * 0xffffffed + 0x7fffffc3 + 1) & MAXLONG;
-    result = RtlUniform(&seed);
-    ok(result == expected,
-        "RtlUniform(&seed (seed == 0x6bca1ae)) returns %x, expected %x\n",
-        result, expected);
-/*
- * There are several ranges where for odd or even seed the result must be
- * incremented by 1. You can see this ranges in the following test.
- *
- * For a full test use one of the following loop heads:
- *
- *  for (num = 0; num <= 0xffffffff; num++) {
- *      seed = num;
- *      ...
- *
- *  seed = 0;
- *  for (num = 0; num <= 0xffffffff; num++) {
- *      ...
- */
     seed = 0;
     for (num = 0; num <= 100000; num++) {
-
-	expected = seed * 0xffffffed + 0x7fffffc3;
-	if (seed < 0x6bca1ac) {
-	    expected = expected + (seed & 1);
-	} else if (seed == 0x6bca1ac) {
-	    expected = (expected + 2) & MAXLONG;
-	} else if (seed < 0xd79435c) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0x1435e50b) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0x1af286ba) { 
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0x21af2869) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0x286bca18) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0x2f286bc7) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0x35e50d77) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0x3ca1af26) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0x435e50d5) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0x4a1af284) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0x50d79433) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0x579435e2) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0x5e50d792) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0x650d7941) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0x6bca1af0) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0x7286bc9f) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0x79435e4e) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0x7ffffffd) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0x86bca1ac) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed == 0x86bca1ac) {
-	    expected = (expected + 1) & MAXLONG;
-	} else if (seed < 0x8d79435c) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0x9435e50b) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0x9af286ba) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0xa1af2869) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0xa86bca18) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0xaf286bc7) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed == 0xaf286bc7) {
-	    expected = (expected + 2) & MAXLONG;
-	} else if (seed < 0xb5e50d77) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0xbca1af26) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0xc35e50d5) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0xca1af284) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0xd0d79433) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0xd79435e2) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0xde50d792) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0xe50d7941) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0xebca1af0) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0xf286bc9f) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else if (seed < 0xf9435e4e) {
-	    expected = expected + (seed & 1);
-	} else if (seed < 0xfffffffd) {
-	    expected = (expected + (~seed & 1)) & MAXLONG;
-	} else {
-	    expected = expected + (seed & 1);
-	} /* if */
+        expected = ((ULONGLONG)seed * 0x7fffffed + 0x7fffffc3) % 0x7fffffff;
         seed_bak = seed;
         result = RtlUniform(&seed);
         ok(result == expected,
-                "test: 0x%s RtlUniform(&seed (seed == %x)) returns %x, expected %x\n",
-                wine_dbgstr_longlong(num), seed_bak, result, expected);
+                "test: %ld RtlUniform(&seed (seed == %lx)) returns %lx, expected %lx\n",
+                num, seed_bak, result, expected);
         ok(seed == expected,
-                "test: 0x%s RtlUniform(&seed (seed == %x)) sets seed to %x, expected %x\n",
-                wine_dbgstr_longlong(num), seed_bak, result, expected);
+                "test: %ld RtlUniform(&seed (seed == %lx)) sets seed to %lx, expected %lx\n",
+                num, seed_bak, result, expected);
     } /* for */
-/*
- * Further investigation shows: In the different regions the highest bit
- * is set or cleared when even or odd seeds need an increment by 1.
- * This leads to a simplified algorithm:
- *
- * seed = seed * 0xffffffed + 0x7fffffc3;
- * if (seed == 0xffffffff || seed == 0x7ffffffe) {
- *     seed = (seed + 2) & MAXLONG;
- * } else if (seed == 0x7fffffff) {
- *     seed = 0;
- * } else if ((seed & 0x80000000) == 0) {
- *     seed = seed + (~seed & 1);
- * } else {
- *     seed = (seed + (seed & 1)) & MAXLONG;
- * }
- *
- * This is also the algorithm used for RtlUniform of wine (see dlls/ntdll/rtl.c).
- *
- * Now comes the funny part:
- * It took me one weekend, to find the complicated algorithm and one day more,
- * to find the simplified algorithm. Several weeks later I found out: The value
- * MAXLONG (=0x7fffffff) is never returned, neither with the native function
- * nor with the simplified algorithm. In reality the native function and our
- * function return a random number distributed over [0..MAXLONG-1]. Note
- * that this is different from what native documentation states [0..MAXLONG].
- * Expressed with D.H. Lehmer's 1948 algorithm it looks like:
- *
- * seed = (seed * const_1 + const_2) % MAXLONG;
- *
- * Further investigations show that the real algorithm is:
- *
- * seed = (seed * 0x7fffffed + 0x7fffffc3) % MAXLONG;
- *
- * This is checked with the test below:
- */
-    seed = 0;
-    for (num = 0; num <= 100000; num++) {
-	expected = (seed * 0x7fffffed + 0x7fffffc3) % 0x7fffffff;
-        seed_bak = seed;
-        result = RtlUniform(&seed);
-        ok(result == expected,
-                "test: 0x%s RtlUniform(&seed (seed == %x)) returns %x, expected %x\n",
-                wine_dbgstr_longlong(num), seed_bak, result, expected);
-        ok(seed == expected,
-                "test: 0x%s RtlUniform(&seed (seed == %x)) sets seed to %x, expected %x\n",
-                wine_dbgstr_longlong(num), seed_bak, result, expected);
-    } /* for */
-/*
- * More tests show that RtlUniform does not return 0x7ffffffd for seed values
- * in the range [0..MAXLONG-1]. Additionally 2 is returned twice. This shows
- * that there is more than one cycle of generated randon numbers ...
- */
 }
 
 
@@ -636,9 +576,9 @@ static void test_RtlRandom(void)
     for (i = 0; i < ARRAY_SIZE(res); i++)
     {
         res[i] = RtlRandom(&seed);
-        ok(seed != res[i], "%i: seed is same as res %x\n", i, seed);
+        ok(seed != res[i], "%i: seed is same as res %lx\n", i, seed);
         for (j = 0; j < i; j++)
-            ok(res[i] != res[j], "res[%i] (%x) is same as res[%i] (%x)\n", j, res[j], i, res[i]);
+            ok(res[i] != res[j], "res[%i] (%lx) is same as res[%i] (%lx)\n", j, res[j], i, res[i]);
     }
 }
 
@@ -672,7 +612,7 @@ static void test_RtlAreAllAccessesGranted(void)
 	result = RtlAreAllAccessesGranted(all_accesses[test_num].GrantedAccess,
 					  all_accesses[test_num].DesiredAccess);
 	ok(all_accesses[test_num].result == result,
-           "(test %d): RtlAreAllAccessesGranted(%08x, %08x) returns %d, expected %d\n",
+           "(test %d): RtlAreAllAccessesGranted(%08lx, %08lx) returns %d, expected %d\n",
 	   test_num, all_accesses[test_num].GrantedAccess,
 	   all_accesses[test_num].DesiredAccess,
 	   result, all_accesses[test_num].result);
@@ -708,7 +648,7 @@ static void test_RtlAreAnyAccessesGranted(void)
 	result = RtlAreAnyAccessesGranted(any_accesses[test_num].GrantedAccess,
 					  any_accesses[test_num].DesiredAccess);
 	ok(any_accesses[test_num].result == result,
-           "(test %d): RtlAreAnyAccessesGranted(%08x, %08x) returns %d, expected %d\n",
+           "(test %d): RtlAreAnyAccessesGranted(%08lx, %08lx) returns %d, expected %d\n",
 	   test_num, any_accesses[test_num].GrantedAccess,
 	   any_accesses[test_num].DesiredAccess,
 	   result, any_accesses[test_num].result);
@@ -720,7 +660,7 @@ static void test_RtlComputeCrc32(void)
   DWORD crc = 0;
 
   crc = RtlComputeCrc32(crc, (const BYTE *)src, LEN);
-  ok(crc == 0x40861dc2,"Expected 0x40861dc2, got %8x\n", crc);
+  ok(crc == 0x40861dc2,"Expected 0x40861dc2, got %8lx\n", crc);
 }
 
 
@@ -754,7 +694,7 @@ static void test_HandleTables(void)
     result = RtlFreeHandle(&HandleTable, &MyHandle->RtlHandle);
     ok(result, "Couldn't free handle %p\n", MyHandle);
     status = RtlDestroyHandleTable(&HandleTable);
-    ok(status == STATUS_SUCCESS, "RtlDestroyHandleTable failed with error 0x%08x\n", status);
+    ok(status == STATUS_SUCCESS, "RtlDestroyHandleTable failed with error 0x%08lx\n", status);
 }
 
 static void test_RtlAllocateAndInitializeSid(void)
@@ -764,9 +704,9 @@ static void test_RtlAllocateAndInitializeSid(void)
     PSID psid;
 
     ret = RtlAllocateAndInitializeSid(&sia, 0, 1, 2, 3, 4, 5, 6, 7, 8, &psid);
-    ok(!ret, "RtlAllocateAndInitializeSid error %08x\n", ret);
+    ok(!ret, "RtlAllocateAndInitializeSid error %08lx\n", ret);
     ret = RtlFreeSid(psid);
-    ok(!ret, "RtlFreeSid error %08x\n", ret);
+    ok(!ret, "RtlFreeSid error %08lx\n", ret);
 
     /* these tests crash on XP */
     if (0)
@@ -776,7 +716,7 @@ static void test_RtlAllocateAndInitializeSid(void)
     }
 
     ret = RtlAllocateAndInitializeSid(&sia, 9, 1, 2, 3, 4, 5, 6, 7, 8, &psid);
-    ok(ret == STATUS_INVALID_SID, "wrong error %08x\n", ret);
+    ok(ret == STATUS_INVALID_SID, "wrong error %08lx\n", ret);
 }
 
 static void test_RtlDeleteTimer(void)
@@ -786,7 +726,7 @@ static void test_RtlDeleteTimer(void)
     ret = RtlDeleteTimer(NULL, NULL, NULL);
     ok(ret == STATUS_INVALID_PARAMETER_1 ||
        ret == STATUS_INVALID_PARAMETER, /* W2K */
-       "expected STATUS_INVALID_PARAMETER_1 or STATUS_INVALID_PARAMETER, got %x\n", ret);
+       "expected STATUS_INVALID_PARAMETER_1 or STATUS_INVALID_PARAMETER, got %lx\n", ret);
 }
 
 static void test_RtlThreadErrorMode(void)
@@ -810,33 +750,33 @@ static void test_RtlThreadErrorMode(void)
     status = pRtlSetThreadErrorMode(0x70, &mode);
     ok(status == STATUS_SUCCESS ||
        status == STATUS_WAIT_1, /* Vista */
-       "RtlSetThreadErrorMode failed with error 0x%08x\n", status);
+       "RtlSetThreadErrorMode failed with error 0x%08lx\n", status);
     ok(mode == oldmode,
-       "RtlSetThreadErrorMode returned mode 0x%x, expected 0x%x\n",
+       "RtlSetThreadErrorMode returned mode 0x%lx, expected 0x%lx\n",
        mode, oldmode);
     ok(pRtlGetThreadErrorMode() == 0x70,
-       "RtlGetThreadErrorMode returned 0x%x, expected 0x%x\n", mode, 0x70);
+       "RtlGetThreadErrorMode returned 0x%lx, expected 0x%x\n", mode, 0x70);
     if (!is_wow64)
     {
-        ok(NtCurrentTeb()->HardErrorDisabled == 0x70,
-           "The TEB contains 0x%x, expected 0x%x\n",
-           NtCurrentTeb()->HardErrorDisabled, 0x70);
+        ok(NtCurrentTeb()->HardErrorMode == 0x70,
+           "The TEB contains 0x%lx, expected 0x%x\n",
+           NtCurrentTeb()->HardErrorMode, 0x70);
     }
 
     status = pRtlSetThreadErrorMode(0, &mode);
     ok(status == STATUS_SUCCESS ||
        status == STATUS_WAIT_1, /* Vista */
-       "RtlSetThreadErrorMode failed with error 0x%08x\n", status);
+       "RtlSetThreadErrorMode failed with error 0x%08lx\n", status);
     ok(mode == 0x70,
-       "RtlSetThreadErrorMode returned mode 0x%x, expected 0x%x\n",
+       "RtlSetThreadErrorMode returned mode 0x%lx, expected 0x%x\n",
        mode, 0x70);
     ok(pRtlGetThreadErrorMode() == 0,
-       "RtlGetThreadErrorMode returned 0x%x, expected 0x%x\n", mode, 0);
+       "RtlGetThreadErrorMode returned 0x%lx, expected 0x%x\n", mode, 0);
     if (!is_wow64)
     {
-        ok(NtCurrentTeb()->HardErrorDisabled == 0,
-           "The TEB contains 0x%x, expected 0x%x\n",
-           NtCurrentTeb()->HardErrorDisabled, 0);
+        ok(NtCurrentTeb()->HardErrorMode == 0,
+           "The TEB contains 0x%lx, expected 0x%x\n",
+           NtCurrentTeb()->HardErrorMode, 0);
     }
 
     for (mode = 1; mode; mode <<= 1)
@@ -845,11 +785,11 @@ static void test_RtlThreadErrorMode(void)
         if (mode & 0x70)
             ok(status == STATUS_SUCCESS ||
                status == STATUS_WAIT_1, /* Vista */
-               "RtlSetThreadErrorMode(%x,NULL) failed with error 0x%08x\n",
+               "RtlSetThreadErrorMode(%lx,NULL) failed with error 0x%08lx\n",
                mode, status);
         else
             ok(status == STATUS_INVALID_PARAMETER_1,
-               "RtlSetThreadErrorMode(%x,NULL) returns 0x%08x, "
+               "RtlSetThreadErrorMode(%lx,NULL) returns 0x%08lx, "
                "expected STATUS_INVALID_PARAMETER_1\n",
                mode, status);
     }
@@ -868,7 +808,7 @@ static void test_LdrProcessRelocationBlock(void)
     reloc = IMAGE_REL_BASED_HIGHLOW<<12;
     ret = LdrProcessRelocationBlock(&addr32, 1, &reloc, 0x500050);
     ok((USHORT*)ret == &reloc+1, "ret = %p, expected %p\n", ret, &reloc+1);
-    ok(addr32 == 0x550055, "addr32 = %x, expected 0x550055\n", addr32);
+    ok(addr32 == 0x550055, "addr32 = %lx, expected 0x550055\n", addr32);
 
     addr16 = 0x505;
     reloc = IMAGE_REL_BASED_HIGH<<12;
@@ -954,7 +894,7 @@ static void test_RtlIpv4AddressToStringEx(void)
     used = strlen(buffer);
     ok( (res == STATUS_SUCCESS) &&
         (size == strlen(expect) + 1) && !strcmp(buffer, expect),
-        "got 0x%x and size %d with '%s'\n", res, size, buffer);
+        "got 0x%lx and size %ld with '%s'\n", res, size, buffer);
 
     size = used + 1;
     memset(buffer, '#', sizeof(buffer) - 1);
@@ -962,14 +902,14 @@ static void test_RtlIpv4AddressToStringEx(void)
     res = pRtlIpv4AddressToStringExA(&ip, port, buffer, &size);
     ok( (res == STATUS_SUCCESS) &&
         (size == strlen(expect) + 1) && !strcmp(buffer, expect),
-        "got 0x%x and size %d with '%s'\n", res, size, buffer);
+        "got 0x%lx and size %ld with '%s'\n", res, size, buffer);
 
     size = used;
     memset(buffer, '#', sizeof(buffer) - 1);
     buffer[sizeof(buffer) -1] = 0;
     res = pRtlIpv4AddressToStringExA(&ip, port, buffer, &size);
     ok( (res == STATUS_INVALID_PARAMETER) && (size == used + 1),
-        "got 0x%x and %d with '%s' (expected STATUS_INVALID_PARAMETER and %d)\n",
+        "got 0x%lx and %ld with '%s' (expected STATUS_INVALID_PARAMETER and %ld)\n",
         res, size, buffer, used + 1);
 
     size = used - 1;
@@ -977,7 +917,7 @@ static void test_RtlIpv4AddressToStringEx(void)
     buffer[sizeof(buffer) -1] = 0;
     res = pRtlIpv4AddressToStringExA(&ip, port, buffer, &size);
     ok( (res == STATUS_INVALID_PARAMETER) && (size == used + 1),
-        "got 0x%x and %d with '%s' (expected STATUS_INVALID_PARAMETER and %d)\n",
+        "got 0x%lx and %ld with '%s' (expected STATUS_INVALID_PARAMETER and %ld)\n",
         res, size, buffer, used + 1);
 
 
@@ -992,7 +932,7 @@ static void test_RtlIpv4AddressToStringEx(void)
     used = strlen(buffer);
     ok( (res == STATUS_SUCCESS) &&
         (size == strlen(expect) + 1) && !strcmp(buffer, expect),
-        "got 0x%x and size %d with '%s'\n", res, size, buffer);
+        "got 0x%lx and size %ld with '%s'\n", res, size, buffer);
 
     size = used + 1;
     memset(buffer, '#', sizeof(buffer) - 1);
@@ -1000,14 +940,14 @@ static void test_RtlIpv4AddressToStringEx(void)
     res = pRtlIpv4AddressToStringExA(&ip, port, buffer, &size);
     ok( (res == STATUS_SUCCESS) &&
         (size == strlen(expect) + 1) && !strcmp(buffer, expect),
-        "got 0x%x and size %d with '%s'\n", res, size, buffer);
+        "got 0x%lx and size %ld with '%s'\n", res, size, buffer);
 
     size = used;
     memset(buffer, '#', sizeof(buffer) - 1);
     buffer[sizeof(buffer) -1] = 0;
     res = pRtlIpv4AddressToStringExA(&ip, port, buffer, &size);
     ok( (res == STATUS_INVALID_PARAMETER) && (size == used + 1),
-        "got 0x%x and %d with '%s' (expected STATUS_INVALID_PARAMETER and %d)\n",
+        "got 0x%lx and %ld with '%s' (expected STATUS_INVALID_PARAMETER and %ld)\n",
         res, size, buffer, used + 1);
 
     size = used - 1;
@@ -1015,7 +955,7 @@ static void test_RtlIpv4AddressToStringEx(void)
     buffer[sizeof(buffer) -1] = 0;
     res = pRtlIpv4AddressToStringExA(&ip, port, buffer, &size);
     ok( (res == STATUS_INVALID_PARAMETER) && (size == used + 1),
-        "got 0x%x and %d with '%s' (expected STATUS_INVALID_PARAMETER and %d)\n",
+        "got 0x%lx and %ld with '%s' (expected STATUS_INVALID_PARAMETER and %ld)\n",
         res, size, buffer, used + 1);
 
 
@@ -1024,19 +964,19 @@ static void test_RtlIpv4AddressToStringEx(void)
     buffer[sizeof(buffer) -1] = 0;
     res = pRtlIpv4AddressToStringExA(&ip, 0, buffer, NULL);
     ok(res == STATUS_INVALID_PARAMETER,
-        "got 0x%x with '%s' (expected STATUS_INVALID_PARAMETER)\n", res, buffer);
+        "got 0x%lx with '%s' (expected STATUS_INVALID_PARAMETER)\n", res, buffer);
 
     size = sizeof(buffer);
     res = pRtlIpv4AddressToStringExA(&ip, 0, NULL, &size);
     ok( res == STATUS_INVALID_PARAMETER,
-        "got 0x%x and size %d (expected STATUS_INVALID_PARAMETER)\n", res, size);
+        "got 0x%lx and size %ld (expected STATUS_INVALID_PARAMETER)\n", res, size);
 
     size = sizeof(buffer);
     memset(buffer, '#', sizeof(buffer) - 1);
     buffer[sizeof(buffer) -1] = 0;
     res = pRtlIpv4AddressToStringExA(NULL, 0, buffer, &size);
     ok( res == STATUS_INVALID_PARAMETER,
-        "got 0x%x and size %d with '%s' (expected STATUS_INVALID_PARAMETER)\n",
+        "got 0x%lx and size %ld with '%s' (expected STATUS_INVALID_PARAMETER)\n",
         res, size, buffer);
 }
 
@@ -1193,7 +1133,7 @@ static void test_RtlIpv4StringToAddress(void)
         ip.S_un.S_addr = 0xabababab;
         res = RtlIpv4StringToAddressA(ipv4_tests[i].address, FALSE, &terminator, &ip);
         ok(res == ipv4_tests[i].res,
-           "[%s] res = 0x%08x, expected 0x%08x\n",
+           "[%s] res = 0x%08lx, expected 0x%08lx\n",
            ipv4_tests[i].address, res, ipv4_tests[i].res);
         ok(terminator == ipv4_tests[i].address + ipv4_tests[i].terminator_offset,
            "[%s] terminator = %p, expected %p\n",
@@ -1201,7 +1141,7 @@ static void test_RtlIpv4StringToAddress(void)
 
         init_ip4(&expected_ip, ipv4_tests[i].ip);
         ok(ip.S_un.S_addr == expected_ip.S_un.S_addr,
-           "[%s] ip = %08x, expected %08x\n",
+           "[%s] ip = %08lx, expected %08lx\n",
            ipv4_tests[i].address, ip.S_un.S_addr, expected_ip.S_un.S_addr);
 
         if (!(ipv4_tests[i].flags & strict_diff_4))
@@ -1218,7 +1158,7 @@ static void test_RtlIpv4StringToAddress(void)
         ip.S_un.S_addr = 0xabababab;
         res = RtlIpv4StringToAddressA(ipv4_tests[i].address, TRUE, &terminator, &ip);
         ok(res == ipv4_tests[i].res_strict,
-           "[%s] res = 0x%08x, expected 0x%08x\n",
+           "[%s] res = 0x%08lx, expected 0x%08lx\n",
            ipv4_tests[i].address, res, ipv4_tests[i].res_strict);
         ok(terminator == ipv4_tests[i].address + ipv4_tests[i].terminator_offset_strict,
            "[%s] terminator = %p, expected %p\n",
@@ -1226,7 +1166,7 @@ static void test_RtlIpv4StringToAddress(void)
 
         init_ip4(&expected_ip, ipv4_tests[i].ip_strict);
         ok(ip.S_un.S_addr == expected_ip.S_un.S_addr,
-           "[%s] ip = %08x, expected %08x\n",
+           "[%s] ip = %08lx, expected %08lx\n",
            ipv4_tests[i].address, ip.S_un.S_addr, expected_ip.S_un.S_addr);
     }
 }
@@ -1268,7 +1208,7 @@ static void test_RtlIpv4StringToAddressEx(void)
 
     if (!pRtlIpv4StringToAddressExA)
     {
-        skip("RtlIpv4StringToAddressEx not available\n");
+        win_skip("RtlIpv4StringToAddressEx not available\n");
         return;
     }
 
@@ -1276,23 +1216,23 @@ static void test_RtlIpv4StringToAddressEx(void)
     ip.S_un.S_addr = 0xabababab;
     port = 0xdead;
     res = pRtlIpv4StringToAddressExA(NULL, FALSE, &ip, &port);
-    ok(res == STATUS_INVALID_PARAMETER, "[null address] res = 0x%08x, expected 0x%08x\n",
+    ok(res == STATUS_INVALID_PARAMETER, "[null address] res = 0x%08lx, expected 0x%08lx\n",
        res, STATUS_INVALID_PARAMETER);
-    ok(ip.S_un.S_addr == 0xabababab, "RtlIpv4StringToAddressExA should not touch the ip!, ip == %x\n", ip.S_un.S_addr);
+    ok(ip.S_un.S_addr == 0xabababab, "RtlIpv4StringToAddressExA should not touch the ip!, ip == %lx\n", ip.S_un.S_addr);
     ok(port == 0xdead, "RtlIpv4StringToAddressExA should not touch the port!, port == %x\n", port);
 
     port = 0xdead;
     res = pRtlIpv4StringToAddressExA("1.1.1.1", FALSE, NULL, &port);
-    ok(res == STATUS_INVALID_PARAMETER, "[null ip] res = 0x%08x, expected 0x%08x\n",
+    ok(res == STATUS_INVALID_PARAMETER, "[null ip] res = 0x%08lx, expected 0x%08lx\n",
        res, STATUS_INVALID_PARAMETER);
     ok(port == 0xdead, "RtlIpv4StringToAddressExA should not touch the port!, port == %x\n", port);
 
     ip.S_un.S_addr = 0xabababab;
     port = 0xdead;
     res = pRtlIpv4StringToAddressExA("1.1.1.1", FALSE, &ip, NULL);
-    ok(res == STATUS_INVALID_PARAMETER, "[null port] res = 0x%08x, expected 0x%08x\n",
+    ok(res == STATUS_INVALID_PARAMETER, "[null port] res = 0x%08lx, expected 0x%08lx\n",
        res, STATUS_INVALID_PARAMETER);
-    ok(ip.S_un.S_addr == 0xabababab, "RtlIpv4StringToAddressExA should not touch the ip!, ip == %x\n", ip.S_un.S_addr);
+    ok(ip.S_un.S_addr == 0xabababab, "RtlIpv4StringToAddressExA should not touch the ip!, ip == %lx\n", ip.S_un.S_addr);
     ok(port == 0xdead, "RtlIpv4StringToAddressExA should not touch the port!, port == %x\n", port);
 
     /* first we run the non-ex testcases on the ex function */
@@ -1304,11 +1244,11 @@ static void test_RtlIpv4StringToAddressEx(void)
         port = 0xdead;
         ip.S_un.S_addr = 0xabababab;
         res = pRtlIpv4StringToAddressExA(ipv4_tests[i].address, FALSE, &ip, &port);
-        ok(res == expect_res, "[%s] res = 0x%08x, expected 0x%08x\n",
+        ok(res == expect_res, "[%s] res = 0x%08lx, expected 0x%08lx\n",
            ipv4_tests[i].address, res, expect_res);
 
         init_ip4(&expected_ip, ipv4_tests[i].ip);
-        ok(ip.S_un.S_addr == expected_ip.S_un.S_addr, "[%s] ip = %08x, expected %08x\n",
+        ok(ip.S_un.S_addr == expected_ip.S_un.S_addr, "[%s] ip = %08lx, expected %08lx\n",
            ipv4_tests[i].address, ip.S_un.S_addr, expected_ip.S_un.S_addr);
 
         if (!(ipv4_tests[i].flags & strict_diff_4))
@@ -1325,11 +1265,11 @@ static void test_RtlIpv4StringToAddressEx(void)
         port = 0xdead;
         ip.S_un.S_addr = 0xabababab;
         res = pRtlIpv4StringToAddressExA(ipv4_tests[i].address, TRUE, &ip, &port);
-        ok(res == expect_res, "[%s] res = 0x%08x, expected 0x%08x\n",
+        ok(res == expect_res, "[%s] res = 0x%08lx, expected 0x%08lx\n",
            ipv4_tests[i].address, res, expect_res);
 
         init_ip4(&expected_ip, ipv4_tests[i].ip_strict);
-        ok(ip.S_un.S_addr == expected_ip.S_un.S_addr, "[%s] ip = %08x, expected %08x\n",
+        ok(ip.S_un.S_addr == expected_ip.S_un.S_addr, "[%s] ip = %08lx, expected %08lx\n",
            ipv4_tests[i].address, ip.S_un.S_addr, expected_ip.S_un.S_addr);
     }
 
@@ -1342,11 +1282,11 @@ static void test_RtlIpv4StringToAddressEx(void)
             ip.S_un.S_addr = 0xabababab;
             port = 0xdead;
             res = pRtlIpv4StringToAddressExA(ipv4_ex_tests[i].address, strict, &ip, &port);
-            ok(res == ipv4_ex_tests[i].res, "[%s] res = 0x%08x, expected 0x%08x\n",
+            ok(res == ipv4_ex_tests[i].res, "[%s] res = 0x%08lx, expected 0x%08lx\n",
                ipv4_ex_tests[i].address, res, ipv4_ex_tests[i].res);
 
             init_ip4(&expected_ip, ipv4_ex_tests[i].ip);
-            ok(ip.S_un.S_addr == expected_ip.S_un.S_addr, "[%s] ip = %08x, expected %08x\n",
+            ok(ip.S_un.S_addr == expected_ip.S_un.S_addr, "[%s] ip = %08lx, expected %08lx\n",
                ipv4_ex_tests[i].address, ip.S_un.S_addr, expected_ip.S_un.S_addr);
             ok(port == ipv4_ex_tests[i].port, "[%s] port = %u, expected %u\n",
                ipv4_ex_tests[i].address, port, ipv4_ex_tests[i].port);
@@ -1364,7 +1304,7 @@ static const struct
     /* win_broken: XP and Vista do not handle this correctly
         ex_fail: Ex function does need the string to be terminated, non-Ex does not.
         ex_skip: test doesn't make sense for Ex (f.e. it's invalid for non-Ex but valid for Ex) */
-    enum { normal_6, win_broken_6 = 1, ex_fail_6 = 2, ex_skip_6 = 4 } flags;
+    enum { normal_6, win_broken_6 = 1, ex_fail_6 = 2, ex_skip_6 = 4, win_extra_zero = 8 } flags;
 } ipv6_tests[] =
 {
     { "0000:0000:0000:0000:0000:0000:0000:0000",        STATUS_SUCCESS,             39,
@@ -1531,12 +1471,12 @@ static const struct
             { 0, 0, 0, 0, 0, 0, 0, 0 } },
     { "::0:0:0:0:0:0",                                  STATUS_SUCCESS,             13,
             { 0, 0, 0, 0, 0, 0, 0, 0 } },
-    /* this one and the next one are incorrectly parsed by windows,
+    /* this one and the next one are incorrectly parsed before Windows 11,
         it adds one zero too many in front, cutting off the last digit. */
-    { "::0:0:0:0:0:0:0",                                STATUS_SUCCESS,             13,
-            { 0, 0, 0, 0, 0, 0, 0, 0 }, ex_fail_6 },
-    { "::0:a:b:c:d:e:f",                                STATUS_SUCCESS,             13,
-            { 0, 0, 0, 0xa00, 0xb00, 0xc00, 0xd00, 0xe00 }, ex_fail_6 },
+    { "::0:0:0:0:0:0:0",                                STATUS_SUCCESS,             15,
+            { 0, 0, 0, 0, 0, 0, 0, 0 }, win_broken_6|win_extra_zero },
+    { "::0:a:b:c:d:e:f",                                STATUS_SUCCESS,             15,
+            { 0, 0, 0xa00, 0xb00, 0xc00, 0xd00, 0xe00, 0xf00 }, win_broken_6|win_extra_zero },
     { "::123.123.123.123",                              STATUS_SUCCESS,             17,
             { 0, 0, 0, 0, 0, 0, 0x7b7b, 0x7b7b } },
     { "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",        STATUS_SUCCESS,             39,
@@ -1915,7 +1855,7 @@ static void test_RtlIpv6AddressToStringEx(void)
 
     if (!pRtlIpv6AddressToStringExA)
     {
-        skip("RtlIpv6AddressToStringExA not available\n");
+        win_skip("RtlIpv6AddressToStringExA not available\n");
         return;
     }
 
@@ -1925,31 +1865,31 @@ static void test_RtlIpv6AddressToStringEx(void)
     len = sizeof(buffer);
     res = pRtlIpv6AddressToStringExA(&ip, 0, 0, buffer, &len);
 
-    ok(res == STATUS_SUCCESS, "[validate] res = 0x%08x, expected STATUS_SUCCESS\n", res);
+    ok(res == STATUS_SUCCESS, "[validate] res = 0x%08lx, expected STATUS_SUCCESS\n", res);
     ok(len == 3 && !strcmp(buffer, "::"),
-        "got len %d with '%s' (expected 3 with '::')\n", len, buffer);
+        "got len %ld with '%s' (expected 3 with '::')\n", len, buffer);
 
     memset(buffer, '#', sizeof(buffer));
     buffer[sizeof(buffer)-1] = 0;
 
     len = sizeof(buffer);
     res = pRtlIpv6AddressToStringExA(NULL, 0, 0, buffer, &len);
-    ok(res == STATUS_INVALID_PARAMETER, "[null ip] res = 0x%08x, expected STATUS_INVALID_PARAMETER\n", res);
+    ok(res == STATUS_INVALID_PARAMETER, "[null ip] res = 0x%08lx, expected STATUS_INVALID_PARAMETER\n", res);
 
     len = sizeof(buffer);
     res = pRtlIpv6AddressToStringExA(&ip, 0, 0, NULL, &len);
-    ok(res == STATUS_INVALID_PARAMETER, "[null buffer] res = 0x%08x, expected STATUS_INVALID_PARAMETER\n", res);
+    ok(res == STATUS_INVALID_PARAMETER, "[null buffer] res = 0x%08lx, expected STATUS_INVALID_PARAMETER\n", res);
 
     res = pRtlIpv6AddressToStringExA(&ip, 0, 0, buffer, NULL);
-    ok(res == STATUS_INVALID_PARAMETER, "[null length] res = 0x%08x, expected STATUS_INVALID_PARAMETER\n", res);
+    ok(res == STATUS_INVALID_PARAMETER, "[null length] res = 0x%08lx, expected STATUS_INVALID_PARAMETER\n", res);
 
     len = 2;
     memset(buffer, '#', sizeof(buffer));
     buffer[sizeof(buffer)-1] = 0;
     res = pRtlIpv6AddressToStringExA(&ip, 0, 0, buffer, &len);
-    ok(res == STATUS_INVALID_PARAMETER, "[null length] res = 0x%08x, expected STATUS_INVALID_PARAMETER\n", res);
+    ok(res == STATUS_INVALID_PARAMETER, "[null length] res = 0x%08lx, expected STATUS_INVALID_PARAMETER\n", res);
     ok(buffer[0] == '#', "got first char %c (expected '#')\n", buffer[0]);
-    ok(len == 3, "got len %d (expected len 3)\n", len);
+    ok(len == 3, "got len %ld (expected len 3)\n", len);
 
     for (i = 0; i < ARRAY_SIZE(tests); i++)
     {
@@ -1960,9 +1900,9 @@ static void test_RtlIpv6AddressToStringEx(void)
 
         res = pRtlIpv6AddressToStringExA(&ip, tests[i].scopeid, tests[i].port, buffer, &len);
 
-        ok(res == STATUS_SUCCESS, "[validate] res = 0x%08x, expected STATUS_SUCCESS\n", res);
+        ok(res == STATUS_SUCCESS, "[validate] res = 0x%08lx, expected STATUS_SUCCESS\n", res);
         ok(len == (strlen(tests[i].address) + 1) && !strcmp(buffer, tests[i].address),
-           "got len %d with '%s' (expected %d with '%s')\n", len, buffer, (int)strlen(tests[i].address), tests[i].address);
+           "got len %ld with '%s' (expected %d with '%s')\n", len, buffer, (int)strlen(tests[i].address), tests[i].address);
     }
 }
 
@@ -1979,7 +1919,7 @@ static void compare_RtlIpv6StringToAddressW(PCSTR name_a, int terminator_offset_
     init_ip6(&ip, NULL);
     terminator = (void *)0xdeadbeef;
     res = RtlIpv6StringToAddressW(name, &terminator, &ip);
-    ok(res == res_a, "[W:%s] res = 0x%08x, expected 0x%08x\n", name_a, res, res_a);
+    ok(res == res_a, "[W:%s] res = 0x%08lx, expected 0x%08lx\n", name_a, res, res_a);
 
     if (terminator_offset_a < 0)
     {
@@ -2011,16 +1951,16 @@ static void test_RtlIpv6StringToAddress(void)
     unsigned int i;
 
     res = RtlIpv6StringToAddressA("::", &terminator, &ip);
-    ok(res == STATUS_SUCCESS, "[validate] res = 0x%08x, expected STATUS_SUCCESS\n", res);
+    ok(res == STATUS_SUCCESS, "[validate] res = 0x%08lx, expected STATUS_SUCCESS\n", res);
     if (0)
     {
         /* any of these crash */
         res = RtlIpv6StringToAddressA(NULL, &terminator, &ip);
-        ok(res == STATUS_INVALID_PARAMETER, "[null string] res = 0x%08x, expected STATUS_INVALID_PARAMETER\n", res);
+        ok(res == STATUS_INVALID_PARAMETER, "[null string] res = 0x%08lx, expected STATUS_INVALID_PARAMETER\n", res);
         res = RtlIpv6StringToAddressA("::", NULL, &ip);
-        ok(res == STATUS_INVALID_PARAMETER, "[null terminator] res = 0x%08x, expected STATUS_INVALID_PARAMETER\n", res);
+        ok(res == STATUS_INVALID_PARAMETER, "[null terminator] res = 0x%08lx, expected STATUS_INVALID_PARAMETER\n", res);
         res = RtlIpv6StringToAddressA("::", &terminator, NULL);
-        ok(res == STATUS_INVALID_PARAMETER, "[null result] res = 0x%08x, expected STATUS_INVALID_PARAMETER\n", res);
+        ok(res == STATUS_INVALID_PARAMETER, "[null result] res = 0x%08lx, expected STATUS_INVALID_PARAMETER\n", res);
     }
 
     /* sanity check */
@@ -2037,7 +1977,7 @@ static void test_RtlIpv6StringToAddress(void)
         if (ipv6_tests[i].flags & win_broken_6)
         {
             ok(res == ipv6_tests[i].res || broken(res == STATUS_INVALID_PARAMETER),
-               "[%s] res = 0x%08x, expected 0x%08x\n",
+               "[%s] res = 0x%08lx, expected 0x%08lx\n",
                ipv6_tests[i].address, res, ipv6_tests[i].res);
 
             if (res == STATUS_INVALID_PARAMETER)
@@ -2046,7 +1986,7 @@ static void test_RtlIpv6StringToAddress(void)
         else
         {
             ok(res == ipv6_tests[i].res,
-               "[%s] res = 0x%08x, expected 0x%08x\n",
+               "[%s] res = 0x%08lx, expected 0x%08lx\n",
                ipv6_tests[i].address, res, ipv6_tests[i].res);
         }
 
@@ -2058,19 +1998,32 @@ static void test_RtlIpv6StringToAddress(void)
         }
         else
         {
-            ok(terminator == ipv6_tests[i].address + ipv6_tests[i].terminator_offset,
-               "[%s] terminator = %p, expected %p\n",
-               ipv6_tests[i].address, terminator, ipv6_tests[i].address + ipv6_tests[i].terminator_offset);
+            if (ipv6_tests[i].flags & win_extra_zero)
+                ok(terminator == ipv6_tests[i].address + ipv6_tests[i].terminator_offset ||
+                   broken(terminator != ipv6_tests[i].address + ipv6_tests[i].terminator_offset),
+                   "[%s] terminator = %p, expected %p\n",
+                   ipv6_tests[i].address, terminator, ipv6_tests[i].address + ipv6_tests[i].terminator_offset);
+            else
+                ok(terminator == ipv6_tests[i].address + ipv6_tests[i].terminator_offset,
+                   "[%s] terminator = %p, expected %p\n",
+                   ipv6_tests[i].address, terminator, ipv6_tests[i].address + ipv6_tests[i].terminator_offset);
         }
 
         init_ip6(&expected_ip, ipv6_tests[i].ip);
-        ok(!memcmp(&ip, &expected_ip, sizeof(ip)),
-           "[%s] ip = %x:%x:%x:%x:%x:%x:%x:%x, expected %x:%x:%x:%x:%x:%x:%x:%x\n",
-           ipv6_tests[i].address,
-           ip.s6_words[0], ip.s6_words[1], ip.s6_words[2], ip.s6_words[3],
-           ip.s6_words[4], ip.s6_words[5], ip.s6_words[6], ip.s6_words[7],
-           expected_ip.s6_words[0], expected_ip.s6_words[1], expected_ip.s6_words[2], expected_ip.s6_words[3],
-           expected_ip.s6_words[4], expected_ip.s6_words[5], expected_ip.s6_words[6], expected_ip.s6_words[7]);
+        if (ipv6_tests[i].flags & win_extra_zero)
+            ok(!memcmp(&ip, &expected_ip, sizeof(ip)) || broken(memcmp(&ip, &expected_ip, sizeof(ip))),
+               "[%s] ip = %x:%x:%x:%x:%x:%x:%x:%x, expected %x:%x:%x:%x:%x:%x:%x:%x\n",
+               ipv6_tests[i].address, ip.s6_words[0], ip.s6_words[1], ip.s6_words[2], ip.s6_words[3],
+               ip.s6_words[4], ip.s6_words[5], ip.s6_words[6], ip.s6_words[7],
+               expected_ip.s6_words[0], expected_ip.s6_words[1], expected_ip.s6_words[2], expected_ip.s6_words[3],
+               expected_ip.s6_words[4], expected_ip.s6_words[5], expected_ip.s6_words[6], expected_ip.s6_words[7]);
+        else
+            ok(!memcmp(&ip, &expected_ip, sizeof(ip)),
+               "[%s] ip = %x:%x:%x:%x:%x:%x:%x:%x, expected %x:%x:%x:%x:%x:%x:%x:%x\n",
+               ipv6_tests[i].address, ip.s6_words[0], ip.s6_words[1], ip.s6_words[2], ip.s6_words[3],
+               ip.s6_words[4], ip.s6_words[5], ip.s6_words[6], ip.s6_words[7],
+               expected_ip.s6_words[0], expected_ip.s6_words[1], expected_ip.s6_words[2], expected_ip.s6_words[3],
+               expected_ip.s6_words[4], expected_ip.s6_words[5], expected_ip.s6_words[6], expected_ip.s6_words[7]);
     }
 }
 
@@ -2090,8 +2043,8 @@ static void compare_RtlIpv6StringToAddressExW(PCSTR name_a, const struct in6_add
     init_ip6(&ip, NULL);
     res = pRtlIpv6StringToAddressExW(name, &ip, &scope, &port);
 
-    ok(res == res_a, "[W:%s] res = 0x%08x, expected 0x%08x\n", name_a, res, res_a);
-    ok(scope == scope_a, "[W:%s] scope = 0x%08x, expected 0x%08x\n", name_a, scope, scope_a);
+    ok(res == res_a, "[W:%s] res = 0x%08lx, expected 0x%08lx\n", name_a, res, res_a);
+    ok(scope == scope_a, "[W:%s] scope = 0x%08lx, expected 0x%08lx\n", name_a, scope, scope_a);
     ok(port == port_a, "[W:%s] port = 0x%08x, expected 0x%08x\n", name_a, port, port_a);
 
     ok(!memcmp(&ip, addr_a, sizeof(ip)),
@@ -2188,18 +2141,18 @@ static void test_RtlIpv6StringToAddressEx(void)
 
     if (!pRtlIpv6StringToAddressExW)
     {
-        skip("RtlIpv6StringToAddressExW not available\n");
+        win_skip("RtlIpv6StringToAddressExW not available\n");
         /* we can continue, just not test W */
     }
 
     if (!pRtlIpv6StringToAddressExA)
     {
-        skip("RtlIpv6StringToAddressExA not available\n");
+        win_skip("RtlIpv6StringToAddressExA not available\n");
         return;
     }
 
     res = pRtlIpv6StringToAddressExA(simple_ip, &ip, &scope, &port);
-    ok(res == STATUS_SUCCESS, "[validate] res = 0x%08x, expected STATUS_SUCCESS\n", res);
+    ok(res == STATUS_SUCCESS, "[validate] res = 0x%08lx, expected STATUS_SUCCESS\n", res);
 
     init_ip6(&ip, NULL);
     init_ip6(&expected_ip, NULL);
@@ -2207,8 +2160,8 @@ static void test_RtlIpv6StringToAddressEx(void)
     port = 0xbeef;
     res = pRtlIpv6StringToAddressExA(NULL, &ip, &scope, &port);
     ok(res == STATUS_INVALID_PARAMETER,
-       "[null string] res = 0x%08x, expected STATUS_INVALID_PARAMETER\n", res);
-    ok(scope == 0xbadf00d, "[null string] scope = 0x%08x, expected 0xbadf00d\n", scope);
+       "[null string] res = 0x%08lx, expected STATUS_INVALID_PARAMETER\n", res);
+    ok(scope == 0xbadf00d, "[null string] scope = 0x%08lx, expected 0xbadf00d\n", scope);
     ok(port == 0xbeef, "[null string] port = 0x%08x, expected 0xbeef\n", port);
     ok(!memcmp(&ip, &expected_ip, sizeof(ip)),
        "[null string] ip is changed, expected it not to change\n");
@@ -2219,8 +2172,8 @@ static void test_RtlIpv6StringToAddressEx(void)
     port = 0xbeef;
     res = pRtlIpv6StringToAddressExA(simple_ip, NULL, &scope, &port);
     ok(res == STATUS_INVALID_PARAMETER,
-       "[null result] res = 0x%08x, expected STATUS_INVALID_PARAMETER\n", res);
-    ok(scope == 0xbadf00d, "[null result] scope = 0x%08x, expected 0xbadf00d\n", scope);
+       "[null result] res = 0x%08lx, expected STATUS_INVALID_PARAMETER\n", res);
+    ok(scope == 0xbadf00d, "[null result] scope = 0x%08lx, expected 0xbadf00d\n", scope);
     ok(port == 0xbeef, "[null result] port = 0x%08x, expected 0xbeef\n", port);
     ok(!memcmp(&ip, &expected_ip, sizeof(ip)),
        "[null result] ip is changed, expected it not to change\n");
@@ -2230,8 +2183,8 @@ static void test_RtlIpv6StringToAddressEx(void)
     port = 0xbeef;
     res = pRtlIpv6StringToAddressExA(simple_ip, &ip, NULL, &port);
     ok(res == STATUS_INVALID_PARAMETER,
-       "[null scope] res = 0x%08x, expected STATUS_INVALID_PARAMETER\n", res);
-    ok(scope == 0xbadf00d, "[null scope] scope = 0x%08x, expected 0xbadf00d\n", scope);
+       "[null scope] res = 0x%08lx, expected STATUS_INVALID_PARAMETER\n", res);
+    ok(scope == 0xbadf00d, "[null scope] scope = 0x%08lx, expected 0xbadf00d\n", scope);
     ok(port == 0xbeef, "[null scope] port = 0x%08x, expected 0xbeef\n", port);
     ok(!memcmp(&ip, &expected_ip, sizeof(ip)),
        "[null scope] ip is changed, expected it not to change\n");
@@ -2241,8 +2194,8 @@ static void test_RtlIpv6StringToAddressEx(void)
     port = 0xbeef;
     res = pRtlIpv6StringToAddressExA(simple_ip, &ip, &scope, NULL);
     ok(res == STATUS_INVALID_PARAMETER,
-       "[null port] res = 0x%08x, expected STATUS_INVALID_PARAMETER\n", res);
-    ok(scope == 0xbadf00d, "[null port] scope = 0x%08x, expected 0xbadf00d\n", scope);
+       "[null port] res = 0x%08lx, expected STATUS_INVALID_PARAMETER\n", res);
+    ok(scope == 0xbadf00d, "[null port] scope = 0x%08lx, expected 0xbadf00d\n", scope);
     ok(port == 0xbeef, "[null port] port = 0x%08x, expected 0xbeef\n", port);
     ok(!memcmp(&ip, &expected_ip, sizeof(ip)),
        "[null port] ip is changed, expected it not to change\n");
@@ -2267,14 +2220,14 @@ static void test_RtlIpv6StringToAddressEx(void)
         /* make sure nothing was changed if this function fails. */
         if (res == STATUS_INVALID_PARAMETER)
         {
-            ok(scope == 0xbadf00d, "[%s] scope = 0x%08x, expected 0xbadf00d\n",
+            ok(scope == 0xbadf00d, "[%s] scope = 0x%08lx, expected 0xbadf00d\n",
                ipv6_tests[i].address, scope);
             ok(port == 0xbeef, "[%s] port = 0x%08x, expected 0xbeef\n",
                ipv6_tests[i].address, port);
         }
         else
         {
-            ok(scope != 0xbadf00d, "[%s] scope = 0x%08x, not expected 0xbadf00d\n",
+            ok(scope != 0xbadf00d, "[%s] scope = 0x%08lx, not expected 0xbadf00d\n",
                ipv6_tests[i].address, scope);
             ok(port != 0xbeef, "[%s] port = 0x%08x, not expected 0xbeef\n",
                ipv6_tests[i].address, port);
@@ -2283,14 +2236,14 @@ static void test_RtlIpv6StringToAddressEx(void)
         if (ipv6_tests[i].flags & win_broken_6)
         {
             ok(res == expect_ret || broken(res == STATUS_INVALID_PARAMETER),
-               "[%s] res = 0x%08x, expected 0x%08x\n", ipv6_tests[i].address, res, expect_ret);
+               "[%s] res = 0x%08lx, expected 0x%08lx\n", ipv6_tests[i].address, res, expect_ret);
 
             if (res == STATUS_INVALID_PARAMETER)
                 continue;
         }
         else
         {
-            ok(res == expect_ret, "[%s] res = 0x%08x, expected 0x%08x\n",
+            ok(res == expect_ret, "[%s] res = 0x%08lx, expected 0x%08lx\n",
                ipv6_tests[i].address, res, expect_ret);
         }
 
@@ -2318,9 +2271,9 @@ static void test_RtlIpv6StringToAddressEx(void)
         res = pRtlIpv6StringToAddressExA(ipv6_ex_tests[i].address, &ip, &scope, &port);
         compare_RtlIpv6StringToAddressExW(ipv6_ex_tests[i].address, &ip, res, scope, port);
 
-        ok(res == ipv6_ex_tests[i].res, "[%s] res = 0x%08x, expected 0x%08x\n",
+        ok(res == ipv6_ex_tests[i].res, "[%s] res = 0x%08lx, expected 0x%08lx\n",
            ipv6_ex_tests[i].address, res, ipv6_ex_tests[i].res);
-        ok(scope == ipv6_ex_tests[i].scope, "[%s] scope = 0x%08x, expected 0x%08x\n",
+        ok(scope == ipv6_ex_tests[i].scope, "[%s] scope = 0x%08lx, expected 0x%08lx\n",
            ipv6_ex_tests[i].address, scope, ipv6_ex_tests[i].scope);
         ok(port == ipv6_ex_tests[i].port, "[%s] port = 0x%08x, expected 0x%08x\n",
            ipv6_ex_tests[i].address, port, ipv6_ex_tests[i].port);
@@ -2354,7 +2307,7 @@ static void test_LdrAddRefDll(void)
     mod = LoadLibraryA("comctl32.dll");
     ok(mod != NULL, "got %p\n", mod);
     status = LdrAddRefDll(0, mod);
-    ok(status == STATUS_SUCCESS, "got 0x%08x\n", status);
+    ok(status == STATUS_SUCCESS, "got 0x%08lx\n", status);
     ret = FreeLibrary(mod);
     ok(ret, "got %d\n", ret);
 
@@ -2370,7 +2323,7 @@ static void test_LdrAddRefDll(void)
     mod = LoadLibraryA("comctl32.dll");
     ok(mod != NULL, "got %p\n", mod);
     status = LdrAddRefDll(LDR_ADDREF_DLL_PIN, mod);
-    ok(status == STATUS_SUCCESS, "got 0x%08x\n", status);
+    ok(status == STATUS_SUCCESS, "got 0x%08lx\n", status);
 
     ret = FreeLibrary(mod);
     ok(ret, "got %d\n", ret);
@@ -2395,39 +2348,39 @@ static void test_LdrLockLoaderLock(void)
     result = 10;
     magic = 0xdeadbeef;
     status = LdrLockLoaderLock(0x10, &result, &magic);
-    ok(status == STATUS_INVALID_PARAMETER_1, "got 0x%08x\n", status);
-    ok(result == 0, "got %d\n", result);
-    ok(magic == 0, "got %lx\n", magic);
+    ok(status == STATUS_INVALID_PARAMETER_1, "got 0x%08lx\n", status);
+    ok(result == 0, "got %ld\n", result);
+    ok(magic == 0, "got %Ix\n", magic);
 
     magic = 0xdeadbeef;
     status = LdrLockLoaderLock(0x10, NULL, &magic);
-    ok(status == STATUS_INVALID_PARAMETER_1, "got 0x%08x\n", status);
-    ok(magic == 0, "got %lx\n", magic);
+    ok(status == STATUS_INVALID_PARAMETER_1, "got 0x%08lx\n", status);
+    ok(magic == 0, "got %Ix\n", magic);
 
     result = 10;
     status = LdrLockLoaderLock(0x10, &result, NULL);
-    ok(status == STATUS_INVALID_PARAMETER_1, "got 0x%08x\n", status);
-    ok(result == 0, "got %d\n", result);
+    ok(status == STATUS_INVALID_PARAMETER_1, "got 0x%08lx\n", status);
+    ok(result == 0, "got %ld\n", result);
 
     /* non-blocking mode, result is null */
     magic = 0xdeadbeef;
     status = LdrLockLoaderLock(0x2, NULL, &magic);
-    ok(status == STATUS_INVALID_PARAMETER_2, "got 0x%08x\n", status);
-    ok(magic == 0, "got %lx\n", magic);
+    ok(status == STATUS_INVALID_PARAMETER_2, "got 0x%08lx\n", status);
+    ok(magic == 0, "got %Ix\n", magic);
 
     /* magic pointer is null */
     result = 10;
     status = LdrLockLoaderLock(0, &result, NULL);
-    ok(status == STATUS_INVALID_PARAMETER_3, "got 0x%08x\n", status);
-    ok(result == 0, "got %d\n", result);
+    ok(status == STATUS_INVALID_PARAMETER_3, "got 0x%08lx\n", status);
+    ok(result == 0, "got %ld\n", result);
 
     /* lock in non-blocking mode */
     result = 0;
     magic = 0;
     status = LdrLockLoaderLock(0x2, &result, &magic);
-    ok(status == STATUS_SUCCESS, "got 0x%08x\n", status);
-    ok(result == 1, "got %d\n", result);
-    ok(magic != 0, "got %lx\n", magic);
+    ok(status == STATUS_SUCCESS, "got 0x%08lx\n", status);
+    ok(result == 1, "got %ld\n", result);
+    ok(magic != 0, "got %Ix\n", magic);
     LdrUnlockLoaderLock(0, magic);
 }
 
@@ -2443,39 +2396,39 @@ static void test_RtlCompressBuffer(void)
     compress_workspace = decompress_workspace = 0xdeadbeef;
     status = RtlGetCompressionWorkSpaceSize(COMPRESSION_FORMAT_LZNT1, &compress_workspace,
                                             &decompress_workspace);
-    ok(status == STATUS_SUCCESS, "got wrong status 0x%08x\n", status);
-    ok(compress_workspace != 0, "got wrong compress_workspace %u\n", compress_workspace);
+    ok(status == STATUS_SUCCESS, "got wrong status 0x%08lx\n", status);
+    ok(compress_workspace != 0, "got wrong compress_workspace %lu\n", compress_workspace);
     workspace = HeapAlloc(GetProcessHeap(), 0, compress_workspace);
-    ok(workspace != NULL, "HeapAlloc failed %d\n", GetLastError());
+    ok(workspace != NULL, "HeapAlloc failed %ld\n", GetLastError());
 
     /* test compression format / engine */
     final_size = 0xdeadbeef;
     status = RtlCompressBuffer(COMPRESSION_FORMAT_NONE, test_buffer, sizeof(test_buffer),
                                buf1, sizeof(buf1) - 1, 4096, &final_size, workspace);
-    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08x\n", status);
-    ok(final_size == 0xdeadbeef, "got wrong final_size %u\n", final_size);
+    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08lx\n", status);
+    ok(final_size == 0xdeadbeef, "got wrong final_size %lu\n", final_size);
 
     final_size = 0xdeadbeef;
     status = RtlCompressBuffer(COMPRESSION_FORMAT_DEFAULT, test_buffer, sizeof(test_buffer),
                                buf1, sizeof(buf1) - 1, 4096, &final_size, workspace);
-    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08x\n", status);
-    ok(final_size == 0xdeadbeef, "got wrong final_size %u\n", final_size);
+    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08lx\n", status);
+    ok(final_size == 0xdeadbeef, "got wrong final_size %lu\n", final_size);
 
     final_size = 0xdeadbeef;
     status = RtlCompressBuffer(0xFF, test_buffer, sizeof(test_buffer),
                                buf1, sizeof(buf1) - 1, 4096, &final_size, workspace);
-    ok(status == STATUS_UNSUPPORTED_COMPRESSION, "got wrong status 0x%08x\n", status);
-    ok(final_size == 0xdeadbeef, "got wrong final_size %u\n", final_size);
+    ok(status == STATUS_UNSUPPORTED_COMPRESSION, "got wrong status 0x%08lx\n", status);
+    ok(final_size == 0xdeadbeef, "got wrong final_size %lu\n", final_size);
 
     /* test compression */
     final_size = 0xdeadbeef;
     memset(buf1, 0x11, sizeof(buf1));
     status = RtlCompressBuffer(COMPRESSION_FORMAT_LZNT1, test_buffer, sizeof(test_buffer),
                                buf1, sizeof(buf1), 4096, &final_size, workspace);
-    ok(status == STATUS_SUCCESS, "got wrong status 0x%08x\n", status);
+    ok(status == STATUS_SUCCESS, "got wrong status 0x%08lx\n", status);
     ok((*(WORD *)buf1 & 0x7000) == 0x3000, "no chunk signature found %04x\n", *(WORD *)buf1);
     todo_wine
-    ok(final_size < sizeof(test_buffer), "got wrong final_size %u\n", final_size);
+    ok(final_size < sizeof(test_buffer), "got wrong final_size %lu\n", final_size);
 
     /* test decompression */
     buf_size = final_size;
@@ -2483,8 +2436,8 @@ static void test_RtlCompressBuffer(void)
     memset(buf2, 0x11, sizeof(buf2));
     status = RtlDecompressBuffer(COMPRESSION_FORMAT_LZNT1, buf2, sizeof(buf2),
                                  buf1, buf_size, &final_size);
-    ok(status == STATUS_SUCCESS, "got wrong status 0x%08x\n", status);
-    ok(final_size == sizeof(test_buffer), "got wrong final_size %u\n", final_size);
+    ok(status == STATUS_SUCCESS, "got wrong status 0x%08lx\n", status);
+    ok(final_size == sizeof(test_buffer), "got wrong final_size %lu\n", final_size);
     ok(!memcmp(buf2, test_buffer, sizeof(test_buffer)), "got wrong decoded data\n");
     ok(buf2[sizeof(test_buffer)] == 0x11, "too many bytes written\n");
 
@@ -2493,7 +2446,7 @@ static void test_RtlCompressBuffer(void)
     memset(buf1, 0x11, sizeof(buf1));
     status = RtlCompressBuffer(COMPRESSION_FORMAT_LZNT1, test_buffer, sizeof(test_buffer),
                                buf1, 4, 4096, &final_size, workspace);
-    ok(status == STATUS_BUFFER_TOO_SMALL, "got wrong status 0x%08x\n", status);
+    ok(status == STATUS_BUFFER_TOO_SMALL, "got wrong status 0x%08lx\n", status);
 
     HeapFree(GetProcessHeap(), 0, workspace);
 }
@@ -2506,29 +2459,29 @@ static void test_RtlGetCompressionWorkSpaceSize(void)
     /* test invalid format / engine */
     status = RtlGetCompressionWorkSpaceSize(COMPRESSION_FORMAT_NONE, &compress_workspace,
                                             &decompress_workspace);
-    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08x\n", status);
+    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08lx\n", status);
 
     status = RtlGetCompressionWorkSpaceSize(COMPRESSION_FORMAT_DEFAULT, &compress_workspace,
                                             &decompress_workspace);
-    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08x\n", status);
+    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08lx\n", status);
 
     status = RtlGetCompressionWorkSpaceSize(0xFF, &compress_workspace, &decompress_workspace);
-    ok(status == STATUS_UNSUPPORTED_COMPRESSION, "got wrong status 0x%08x\n", status);
+    ok(status == STATUS_UNSUPPORTED_COMPRESSION, "got wrong status 0x%08lx\n", status);
 
     /* test LZNT1 with normal and maximum compression */
     compress_workspace = decompress_workspace = 0xdeadbeef;
     status = RtlGetCompressionWorkSpaceSize(COMPRESSION_FORMAT_LZNT1, &compress_workspace,
                                             &decompress_workspace);
-    ok(status == STATUS_SUCCESS, "got wrong status 0x%08x\n", status);
-    ok(compress_workspace != 0, "got wrong compress_workspace %u\n", compress_workspace);
-    ok(decompress_workspace == 0x1000, "got wrong decompress_workspace %u\n", decompress_workspace);
+    ok(status == STATUS_SUCCESS, "got wrong status 0x%08lx\n", status);
+    ok(compress_workspace != 0, "got wrong compress_workspace %lu\n", compress_workspace);
+    ok(decompress_workspace == 0x1000, "got wrong decompress_workspace %lu\n", decompress_workspace);
 
     compress_workspace = decompress_workspace = 0xdeadbeef;
     status = RtlGetCompressionWorkSpaceSize(COMPRESSION_FORMAT_LZNT1 | COMPRESSION_ENGINE_MAXIMUM,
                                             &compress_workspace, &decompress_workspace);
-    ok(status == STATUS_SUCCESS, "got wrong status 0x%08x\n", status);
-    ok(compress_workspace != 0, "got wrong compress_workspace %u\n", compress_workspace);
-    ok(decompress_workspace == 0x1000, "got wrong decompress_workspace %u\n", decompress_workspace);
+    ok(status == STATUS_SUCCESS, "got wrong status 0x%08lx\n", status);
+    ok(compress_workspace != 0, "got wrong compress_workspace %lu\n", compress_workspace);
+    ok(decompress_workspace == 0x1000, "got wrong decompress_workspace %lu\n", decompress_workspace);
 }
 
 /* helper for test_RtlDecompressBuffer, checks if a chunk is incomplete */
@@ -2769,25 +2722,25 @@ static void test_RtlDecompressBuffer(void)
     final_size = 0xdeadbeef;
     status = RtlDecompressBuffer(COMPRESSION_FORMAT_NONE, buf, sizeof(buf), test_lznt[0].compressed,
                                  test_lznt[0].compressed_size, &final_size);
-    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08x\n", status);
-    ok(final_size == 0xdeadbeef, "got wrong final_size %u\n", final_size);
+    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08lx\n", status);
+    ok(final_size == 0xdeadbeef, "got wrong final_size %lu\n", final_size);
 
     final_size = 0xdeadbeef;
     status = RtlDecompressBuffer(COMPRESSION_FORMAT_DEFAULT, buf, sizeof(buf), test_lznt[0].compressed,
                                  test_lznt[0].compressed_size, &final_size);
-    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08x\n", status);
-    ok(final_size == 0xdeadbeef, "got wrong final_size %u\n", final_size);
+    ok(status == STATUS_INVALID_PARAMETER, "got wrong status 0x%08lx\n", status);
+    ok(final_size == 0xdeadbeef, "got wrong final_size %lu\n", final_size);
 
     final_size = 0xdeadbeef;
     status = RtlDecompressBuffer(0xFF, buf, sizeof(buf), test_lznt[0].compressed,
                                  test_lznt[0].compressed_size, &final_size);
-    ok(status == STATUS_UNSUPPORTED_COMPRESSION, "got wrong status 0x%08x\n", status);
-    ok(final_size == 0xdeadbeef, "got wrong final_size %u\n", final_size);
+    ok(status == STATUS_UNSUPPORTED_COMPRESSION, "got wrong status 0x%08lx\n", status);
+    ok(final_size == 0xdeadbeef, "got wrong final_size %lu\n", final_size);
 
     /* regular tests for RtlDecompressBuffer */
     for (i = 0; i < ARRAY_SIZE(test_lznt); i++)
     {
-        trace("Running test %d (compressed_size=%u, uncompressed_size=%u, status=0x%08x)\n",
+        trace("Running test %d (compressed_size=%lu, uncompressed_size=%lu, status=0x%08lx)\n",
               i, test_lznt[i].compressed_size, test_lznt[i].uncompressed_size, test_lznt[i].status);
 
         /* test with very big buffer */
@@ -2796,15 +2749,15 @@ static void test_RtlDecompressBuffer(void)
         status = RtlDecompressBuffer(COMPRESSION_FORMAT_LZNT1, buf, sizeof(buf), test_lznt[i].compressed,
                                      test_lznt[i].compressed_size, &final_size);
         ok(status == test_lznt[i].status || broken(status == STATUS_BAD_COMPRESSION_BUFFER &&
-           (test_lznt[i].broken_flags & DECOMPRESS_BROKEN_FRAGMENT)), "%d: got wrong status 0x%08x\n", i, status);
+           (test_lznt[i].broken_flags & DECOMPRESS_BROKEN_FRAGMENT)), "%d: got wrong status 0x%08lx\n", i, status);
         if (!status)
         {
             ok(final_size == test_lznt[i].uncompressed_size,
-               "%d: got wrong final_size %u\n", i, final_size);
+               "%d: got wrong final_size %lu\n", i, final_size);
             ok(!memcmp(buf, test_lznt[i].uncompressed, test_lznt[i].uncompressed_size),
                "%d: got wrong decoded data\n", i);
             ok(buf[test_lznt[i].uncompressed_size] == 0x11,
-               "%d: buf[%u] was modified\n", i, test_lznt[i].uncompressed_size);
+               "%d: buf[%lu] was modified\n", i, test_lznt[i].uncompressed_size);
         }
 
         /* test that modifier for compression engine is ignored */
@@ -2813,15 +2766,15 @@ static void test_RtlDecompressBuffer(void)
         status = RtlDecompressBuffer(COMPRESSION_FORMAT_LZNT1 | COMPRESSION_ENGINE_MAXIMUM, buf, sizeof(buf),
                                      test_lznt[i].compressed, test_lznt[i].compressed_size, &final_size);
         ok(status == test_lznt[i].status || broken(status == STATUS_BAD_COMPRESSION_BUFFER &&
-           (test_lznt[i].broken_flags & DECOMPRESS_BROKEN_FRAGMENT)), "%d: got wrong status 0x%08x\n", i, status);
+           (test_lznt[i].broken_flags & DECOMPRESS_BROKEN_FRAGMENT)), "%d: got wrong status 0x%08lx\n", i, status);
         if (!status)
         {
             ok(final_size == test_lznt[i].uncompressed_size,
-               "%d: got wrong final_size %u\n", i, final_size);
+               "%d: got wrong final_size %lu\n", i, final_size);
             ok(!memcmp(buf, test_lznt[i].uncompressed, test_lznt[i].uncompressed_size),
                "%d: got wrong decoded data\n", i);
             ok(buf[test_lznt[i].uncompressed_size] == 0x11,
-               "%d: buf[%u] was modified\n", i, test_lznt[i].uncompressed_size);
+               "%d: buf[%lu] was modified\n", i, test_lznt[i].uncompressed_size);
         }
 
         /* test with expected output size */
@@ -2831,15 +2784,15 @@ static void test_RtlDecompressBuffer(void)
             memset(buf, 0x11, sizeof(buf));
             status = RtlDecompressBuffer(COMPRESSION_FORMAT_LZNT1, buf, test_lznt[i].uncompressed_size,
                                          test_lznt[i].compressed, test_lznt[i].compressed_size, &final_size);
-            ok(status == test_lznt[i].status, "%d: got wrong status 0x%08x\n", i, status);
+            ok(status == test_lznt[i].status, "%d: got wrong status 0x%08lx\n", i, status);
             if (!status)
             {
                 ok(final_size == test_lznt[i].uncompressed_size,
-                   "%d: got wrong final_size %u\n", i, final_size);
+                   "%d: got wrong final_size %lu\n", i, final_size);
                 ok(!memcmp(buf, test_lznt[i].uncompressed, test_lznt[i].uncompressed_size),
                    "%d: got wrong decoded data\n", i);
                 ok(buf[test_lznt[i].uncompressed_size] == 0x11,
-                   "%d: buf[%u] was modified\n", i, test_lznt[i].uncompressed_size);
+                   "%d: buf[%lu] was modified\n", i, test_lznt[i].uncompressed_size);
             }
         }
 
@@ -2850,19 +2803,17 @@ static void test_RtlDecompressBuffer(void)
             memset(buf, 0x11, sizeof(buf));
             status = RtlDecompressBuffer(COMPRESSION_FORMAT_LZNT1, buf, test_lznt[i].uncompressed_size - 1,
                                          test_lznt[i].compressed, test_lznt[i].compressed_size, &final_size);
-            if (test_lznt[i].broken_flags & DECOMPRESS_BROKEN_TRUNCATED)
-                todo_wine
-                ok(status == STATUS_BAD_COMPRESSION_BUFFER, "%d: got wrong status 0x%08x\n", i, status);
-            else
-                ok(status == test_lznt[i].status, "%d: got wrong status 0x%08x\n", i, status);
+            ok(status == test_lznt[i].status ||
+               broken(status == STATUS_BAD_COMPRESSION_BUFFER && (test_lznt[i].broken_flags & DECOMPRESS_BROKEN_TRUNCATED)),
+               "%d: got wrong status 0x%08lx\n", i, status);
             if (!status)
             {
                 ok(final_size == test_lznt[i].uncompressed_size - 1,
-                   "%d: got wrong final_size %u\n", i, final_size);
+                   "%d: got wrong final_size %lu\n", i, final_size);
                 ok(!memcmp(buf, test_lznt[i].uncompressed, test_lznt[i].uncompressed_size - 1),
                    "%d: got wrong decoded data\n", i);
                 ok(buf[test_lznt[i].uncompressed_size - 1] == 0x11,
-                   "%d: buf[%u] was modified\n", i, test_lznt[i].uncompressed_size - 1);
+                   "%d: buf[%lu] was modified\n", i, test_lznt[i].uncompressed_size - 1);
             }
         }
 
@@ -2872,11 +2823,11 @@ static void test_RtlDecompressBuffer(void)
         status = RtlDecompressBuffer(COMPRESSION_FORMAT_LZNT1, buf, 0, test_lznt[i].compressed,
                                      test_lznt[i].compressed_size, &final_size);
         if (is_incomplete_chunk(test_lznt[i].compressed, test_lznt[i].compressed_size, FALSE))
-            ok(status == STATUS_BAD_COMPRESSION_BUFFER, "%d: got wrong status 0x%08x\n", i, status);
+            ok(status == STATUS_BAD_COMPRESSION_BUFFER, "%d: got wrong status 0x%08lx\n", i, status);
         else
         {
-            ok(status == STATUS_SUCCESS, "%d: got wrong status 0x%08x\n", i, status);
-            ok(final_size == 0, "%d: got wrong final_size %u\n", i, final_size);
+            ok(status == STATUS_SUCCESS, "%d: got wrong status 0x%08lx\n", i, status);
+            ok(final_size == 0, "%d: got wrong final_size %lu\n", i, final_size);
             ok(buf[0] == 0x11, "%d: buf[0] was modified\n", i);
         }
 
@@ -2887,17 +2838,17 @@ static void test_RtlDecompressBuffer(void)
                                        test_lznt[i].compressed_size, 0, &final_size, workspace);
         if (test_lznt[i].broken_flags & DECOMPRESS_BROKEN_FRAGMENT)
             todo_wine
-            ok(status == STATUS_BAD_COMPRESSION_BUFFER, "%d: got wrong status 0x%08x\n", i, status);
+            ok(status == STATUS_BAD_COMPRESSION_BUFFER, "%d: got wrong status 0x%08lx\n", i, status);
         else
-            ok(status == test_lznt[i].status, "%d: got wrong status 0x%08x\n", i, status);
+            ok(status == test_lznt[i].status, "%d: got wrong status 0x%08lx\n", i, status);
         if (!status)
         {
             ok(final_size == test_lznt[i].uncompressed_size,
-               "%d: got wrong final_size %u\n", i, final_size);
+               "%d: got wrong final_size %lu\n", i, final_size);
             ok(!memcmp(buf, test_lznt[i].uncompressed, test_lznt[i].uncompressed_size),
                "%d: got wrong decoded data\n", i);
             ok(buf[test_lznt[i].uncompressed_size] == 0x11,
-               "%d: buf[%u] was modified\n", i, test_lznt[i].uncompressed_size);
+               "%d: buf[%lu] was modified\n", i, test_lznt[i].uncompressed_size);
         }
 
         /* test RtlDecompressFragment with offset = 1 */
@@ -2907,26 +2858,26 @@ static void test_RtlDecompressBuffer(void)
                                        test_lznt[i].compressed_size, 1, &final_size, workspace);
         if (test_lznt[i].broken_flags & DECOMPRESS_BROKEN_FRAGMENT)
             todo_wine
-            ok(status == STATUS_BAD_COMPRESSION_BUFFER, "%d: got wrong status 0x%08x\n", i, status);
+            ok(status == STATUS_BAD_COMPRESSION_BUFFER, "%d: got wrong status 0x%08lx\n", i, status);
         else
-            ok(status == test_lznt[i].status, "%d: got wrong status 0x%08x\n", i, status);
+            ok(status == test_lznt[i].status, "%d: got wrong status 0x%08lx\n", i, status);
         if (!status)
         {
             if (test_lznt[i].uncompressed_size == 0)
             {
                 todo_wine
-                ok(final_size == 4095, "%d: got wrong final_size %u\n", i, final_size);
+                ok(final_size == 4095, "%d: got wrong final_size %lu\n", i, final_size);
                 /* Buffer doesn't contain any useful value on Windows */
                 ok(buf[4095] == 0x11, "%d: buf[4095] was modified\n", i);
             }
             else
             {
                 ok(final_size == test_lznt[i].uncompressed_size - 1,
-                   "%d: got wrong final_size %u\n", i, final_size);
+                   "%d: got wrong final_size %lu\n", i, final_size);
                 ok(!memcmp(buf, test_lznt[i].uncompressed + 1, test_lznt[i].uncompressed_size - 1),
                    "%d: got wrong decoded data\n", i);
                 ok(buf[test_lznt[i].uncompressed_size - 1] == 0x11,
-                   "%d: buf[%u] was modified\n", i, test_lznt[i].uncompressed_size - 1);
+                   "%d: buf[%lu] was modified\n", i, test_lznt[i].uncompressed_size - 1);
             }
         }
 
@@ -2937,13 +2888,13 @@ static void test_RtlDecompressBuffer(void)
                                        test_lznt[i].compressed_size, 4095, &final_size, workspace);
         if (test_lznt[i].broken_flags & DECOMPRESS_BROKEN_FRAGMENT)
             todo_wine
-            ok(status == STATUS_BAD_COMPRESSION_BUFFER, "%d: got wrong status 0x%08x\n", i, status);
+            ok(status == STATUS_BAD_COMPRESSION_BUFFER, "%d: got wrong status 0x%08lx\n", i, status);
         else
-            ok(status == test_lznt[i].status, "%d: got wrong status 0x%08x\n", i, status);
+            ok(status == test_lznt[i].status, "%d: got wrong status 0x%08lx\n", i, status);
         if (!status)
         {
             todo_wine
-            ok(final_size == 1, "%d: got wrong final_size %u\n", i, final_size);
+            ok(final_size == 1, "%d: got wrong final_size %lu\n", i, final_size);
             todo_wine
             ok(buf[0] == 0, "%d: padding is not zero\n", i);
             ok(buf[1] == 0x11, "%d: buf[1] was modified\n", i);
@@ -2956,10 +2907,10 @@ static void test_RtlDecompressBuffer(void)
                                        test_lznt[i].compressed_size, 4096, &final_size, workspace);
         expected_status = is_incomplete_chunk(test_lznt[i].compressed, test_lznt[i].compressed_size, TRUE) ?
                           test_lznt[i].status : STATUS_SUCCESS;
-        ok(status == expected_status, "%d: got wrong status 0x%08x, expected 0x%08x\n", i, status, expected_status);
+        ok(status == expected_status, "%d: got wrong status 0x%08lx, expected 0x%08lx\n", i, status, expected_status);
         if (!status)
         {
-            ok(final_size == 0, "%d: got wrong final_size %u\n", i, final_size);
+            ok(final_size == 0, "%d: got wrong final_size %lu\n", i, final_size);
             ok(buf[0] == 0x11, "%d: buf[4096] was modified\n", i);
         }
     }
@@ -2980,29 +2931,29 @@ static DWORD WINAPI critsect_locked_thread(void *param)
     DWORD ret;
 
     ret = pRtlIsCriticalSectionLocked(&info->crit);
-    ok(ret == TRUE, "expected TRUE, got %u\n", ret);
+    ok(ret == TRUE, "expected TRUE, got %lu\n", ret);
     ret = pRtlIsCriticalSectionLockedByThread(&info->crit);
-    ok(ret == FALSE, "expected FALSE, got %u\n", ret);
+    ok(ret == FALSE, "expected FALSE, got %lu\n", ret);
 
     ReleaseSemaphore(info->semaphores[0], 1, NULL);
     ret = WaitForSingleObject(info->semaphores[1], 1000);
-    ok(ret == WAIT_OBJECT_0, "expected WAIT_OBJECT_0, got %u\n", ret);
+    ok(ret == WAIT_OBJECT_0, "expected WAIT_OBJECT_0, got %lu\n", ret);
 
     ret = pRtlIsCriticalSectionLocked(&info->crit);
-    ok(ret == FALSE, "expected FALSE, got %u\n", ret);
+    ok(ret == FALSE, "expected FALSE, got %lu\n", ret);
     ret = pRtlIsCriticalSectionLockedByThread(&info->crit);
-    ok(ret == FALSE, "expected FALSE, got %u\n", ret);
+    ok(ret == FALSE, "expected FALSE, got %lu\n", ret);
 
     EnterCriticalSection(&info->crit);
 
     ret = pRtlIsCriticalSectionLocked(&info->crit);
-    ok(ret == TRUE, "expected TRUE, got %u\n", ret);
+    ok(ret == TRUE, "expected TRUE, got %lu\n", ret);
     ret = pRtlIsCriticalSectionLockedByThread(&info->crit);
-    ok(ret == TRUE, "expected TRUE, got %u\n", ret);
+    ok(ret == TRUE, "expected TRUE, got %lu\n", ret);
 
     ReleaseSemaphore(info->semaphores[0], 1, NULL);
     ret = WaitForSingleObject(info->semaphores[1], 1000);
-    ok(ret == WAIT_OBJECT_0, "expected WAIT_OBJECT_0, got %u\n", ret);
+    ok(ret == WAIT_OBJECT_0, "expected WAIT_OBJECT_0, got %lu\n", ret);
 
     LeaveCriticalSection(&info->crit);
     return 0;
@@ -3022,9 +2973,9 @@ static void test_RtlIsCriticalSectionLocked(void)
 
     InitializeCriticalSection(&info.crit);
     info.semaphores[0] = CreateSemaphoreW(NULL, 0, 1, NULL);
-    ok(info.semaphores[0] != NULL, "CreateSemaphore failed with %u\n", GetLastError());
+    ok(info.semaphores[0] != NULL, "CreateSemaphore failed with %lu\n", GetLastError());
     info.semaphores[1] = CreateSemaphoreW(NULL, 0, 1, NULL);
-    ok(info.semaphores[1] != NULL, "CreateSemaphore failed with %u\n", GetLastError());
+    ok(info.semaphores[1] != NULL, "CreateSemaphore failed with %lu\n", GetLastError());
 
     ret = pRtlIsCriticalSectionLocked(&info.crit);
     ok(ret == FALSE, "expected FALSE, got %u\n", ret);
@@ -3039,7 +2990,7 @@ static void test_RtlIsCriticalSectionLocked(void)
     ok(ret == TRUE, "expected TRUE, got %u\n", ret);
 
     thread = CreateThread(NULL, 0, critsect_locked_thread, &info, 0, NULL);
-    ok(thread != NULL, "CreateThread failed with %u\n", GetLastError());
+    ok(thread != NULL, "CreateThread failed with %lu\n", GetLastError());
     ret = WaitForSingleObject(info.semaphores[0], 1000);
     ok(ret == WAIT_OBJECT_0, "expected WAIT_OBJECT_0, got %u\n", ret);
 
@@ -3077,23 +3028,23 @@ static void test_RtlInitializeCriticalSectionEx(void)
 
     memset(&cs, 0x11, sizeof(cs));
     pRtlInitializeCriticalSectionEx(&cs, 0, 0);
-    ok((cs.DebugInfo != NULL && cs.DebugInfo != no_debug) || broken(cs.DebugInfo == no_debug) /* >= Win 8 */,
+    ok(cs.DebugInfo == no_debug || broken(cs.DebugInfo != NULL && cs.DebugInfo != no_debug) /* < Win8 */,
        "expected DebugInfo != NULL and DebugInfo != ~0, got %p\n", cs.DebugInfo);
-    ok(cs.LockCount == -1, "expected LockCount == -1, got %d\n", cs.LockCount);
-    ok(cs.RecursionCount == 0, "expected RecursionCount == 0, got %d\n", cs.RecursionCount);
+    ok(cs.LockCount == -1, "expected LockCount == -1, got %ld\n", cs.LockCount);
+    ok(cs.RecursionCount == 0, "expected RecursionCount == 0, got %ld\n", cs.RecursionCount);
     ok(cs.LockSemaphore == NULL, "expected LockSemaphore == NULL, got %p\n", cs.LockSemaphore);
     ok(cs.SpinCount == 0 || broken(cs.SpinCount != 0) /* >= Win 8 */,
-       "expected SpinCount == 0, got %ld\n", cs.SpinCount);
+       "expected SpinCount == 0, got %Id\n", cs.SpinCount);
     RtlDeleteCriticalSection(&cs);
 
     memset(&cs, 0x11, sizeof(cs));
     pRtlInitializeCriticalSectionEx(&cs, 0, RTL_CRITICAL_SECTION_FLAG_NO_DEBUG_INFO);
     ok(cs.DebugInfo == no_debug, "expected DebugInfo == ~0, got %p\n", cs.DebugInfo);
-    ok(cs.LockCount == -1, "expected LockCount == -1, got %d\n", cs.LockCount);
-    ok(cs.RecursionCount == 0, "expected RecursionCount == 0, got %d\n", cs.RecursionCount);
+    ok(cs.LockCount == -1, "expected LockCount == -1, got %ld\n", cs.LockCount);
+    ok(cs.RecursionCount == 0, "expected RecursionCount == 0, got %ld\n", cs.RecursionCount);
     ok(cs.LockSemaphore == NULL, "expected LockSemaphore == NULL, got %p\n", cs.LockSemaphore);
     ok(cs.SpinCount == 0 || broken(cs.SpinCount != 0) /* >= Win 8 */,
-       "expected SpinCount == 0, got %ld\n", cs.SpinCount);
+       "expected SpinCount == 0, got %Id\n", cs.SpinCount);
     RtlDeleteCriticalSection(&cs);
 }
 
@@ -3106,19 +3057,19 @@ static void test_RtlLeaveCriticalSection(void)
         return; /* Skip winxp */
 
     status = RtlInitializeCriticalSection(&cs);
-    ok(!status, "RtlInitializeCriticalSection failed: %x\n", status);
+    ok(!status, "RtlInitializeCriticalSection failed: %lx\n", status);
 
     status = RtlEnterCriticalSection(&cs);
-    ok(!status, "RtlEnterCriticalSection failed: %x\n", status);
+    ok(!status, "RtlEnterCriticalSection failed: %lx\n", status);
     todo_wine
-    ok(cs.LockCount == -2, "expected LockCount == -2, got %d\n", cs.LockCount);
-    ok(cs.RecursionCount == 1, "expected RecursionCount == 1, got %d\n", cs.RecursionCount);
+    ok(cs.LockCount == -2, "expected LockCount == -2, got %ld\n", cs.LockCount);
+    ok(cs.RecursionCount == 1, "expected RecursionCount == 1, got %ld\n", cs.RecursionCount);
     ok(cs.OwningThread == ULongToHandle(GetCurrentThreadId()), "unexpected OwningThread\n");
 
     status = RtlLeaveCriticalSection(&cs);
-    ok(!status, "RtlLeaveCriticalSection failed: %x\n", status);
-    ok(cs.LockCount == -1, "expected LockCount == -1, got %d\n", cs.LockCount);
-    ok(cs.RecursionCount == 0, "expected RecursionCount == 0, got %d\n", cs.RecursionCount);
+    ok(!status, "RtlLeaveCriticalSection failed: %lx\n", status);
+    ok(cs.LockCount == -1, "expected LockCount == -1, got %ld\n", cs.LockCount);
+    ok(cs.RecursionCount == 0, "expected RecursionCount == 0, got %ld\n", cs.RecursionCount);
     ok(!cs.OwningThread, "unexpected OwningThread %p\n", cs.OwningThread);
 
     /*
@@ -3126,34 +3077,34 @@ static void test_RtlLeaveCriticalSection(void)
      * but doesn't modify LockCount so that an attempt to enter the section later will work.
      */
     status = RtlLeaveCriticalSection(&cs);
-    ok(!status, "RtlLeaveCriticalSection failed: %x\n", status);
-    ok(cs.LockCount == -1, "expected LockCount == -1, got %d\n", cs.LockCount);
-    ok(cs.RecursionCount == -1, "expected RecursionCount == -1, got %d\n", cs.RecursionCount);
+    ok(!status, "RtlLeaveCriticalSection failed: %lx\n", status);
+    ok(cs.LockCount == -1, "expected LockCount == -1, got %ld\n", cs.LockCount);
+    ok(cs.RecursionCount == -1, "expected RecursionCount == -1, got %ld\n", cs.RecursionCount);
     ok(!cs.OwningThread, "unexpected OwningThread %p\n", cs.OwningThread);
 
     /* and again */
     status = RtlLeaveCriticalSection(&cs);
-    ok(!status, "RtlLeaveCriticalSection failed: %x\n", status);
-    ok(cs.LockCount == -1, "expected LockCount == -1, got %d\n", cs.LockCount);
-    ok(cs.RecursionCount == -2, "expected RecursionCount == -2, got %d\n", cs.RecursionCount);
+    ok(!status, "RtlLeaveCriticalSection failed: %lx\n", status);
+    ok(cs.LockCount == -1, "expected LockCount == -1, got %ld\n", cs.LockCount);
+    ok(cs.RecursionCount == -2, "expected RecursionCount == -2, got %ld\n", cs.RecursionCount);
     ok(!cs.OwningThread, "unexpected OwningThread %p\n", cs.OwningThread);
 
     /* entering section fixes RecursionCount */
     status = RtlEnterCriticalSection(&cs);
-    ok(!status, "RtlEnterCriticalSection failed: %x\n", status);
+    ok(!status, "RtlEnterCriticalSection failed: %lx\n", status);
     todo_wine
-    ok(cs.LockCount == -2, "expected LockCount == -2, got %d\n", cs.LockCount);
-    ok(cs.RecursionCount == 1, "expected RecursionCount == 1, got %d\n", cs.RecursionCount);
+    ok(cs.LockCount == -2, "expected LockCount == -2, got %ld\n", cs.LockCount);
+    ok(cs.RecursionCount == 1, "expected RecursionCount == 1, got %ld\n", cs.RecursionCount);
     ok(cs.OwningThread == ULongToHandle(GetCurrentThreadId()), "unexpected OwningThread\n");
 
     status = RtlLeaveCriticalSection(&cs);
-    ok(!status, "RtlLeaveCriticalSection failed: %x\n", status);
-    ok(cs.LockCount == -1, "expected LockCount == -1, got %d\n", cs.LockCount);
-    ok(cs.RecursionCount == 0, "expected RecursionCount == 0, got %d\n", cs.RecursionCount);
+    ok(!status, "RtlLeaveCriticalSection failed: %lx\n", status);
+    ok(cs.LockCount == -1, "expected LockCount == -1, got %ld\n", cs.LockCount);
+    ok(cs.RecursionCount == 0, "expected RecursionCount == 0, got %ld\n", cs.RecursionCount);
     ok(!cs.OwningThread, "unexpected OwningThread %p\n", cs.OwningThread);
 
     status = RtlDeleteCriticalSection(&cs);
-    ok(!status, "RtlDeleteCriticalSection failed: %x\n", status);
+    ok(!status, "RtlDeleteCriticalSection failed: %lx\n", status);
 }
 
 struct ldr_enum_context
@@ -3190,24 +3141,24 @@ static void test_LdrEnumerateLoadedModules(void)
     ctx.found = FALSE;
     ctx.count = 0;
     status = pLdrEnumerateLoadedModules(NULL, ldr_enum_callback, &ctx);
-    ok(status == STATUS_SUCCESS, "LdrEnumerateLoadedModules failed with %08x\n", status);
+    ok(status == STATUS_SUCCESS, "LdrEnumerateLoadedModules failed with %08lx\n", status);
     ok(ctx.count > 1, "Expected more than one module, got %d\n", ctx.count);
     ok(ctx.found, "Could not find ntdll in list of modules\n");
 
     ctx.abort = TRUE;
     ctx.count = 0;
     status = pLdrEnumerateLoadedModules(NULL, ldr_enum_callback, &ctx);
-    ok(status == STATUS_SUCCESS, "LdrEnumerateLoadedModules failed with %08x\n", status);
+    ok(status == STATUS_SUCCESS, "LdrEnumerateLoadedModules failed with %08lx\n", status);
     ok(ctx.count == 1, "Expected exactly one module, got %d\n", ctx.count);
 
     status = pLdrEnumerateLoadedModules((void *)0x1, ldr_enum_callback, (void *)0xdeadbeef);
-    ok(status == STATUS_INVALID_PARAMETER, "expected STATUS_INVALID_PARAMETER, got 0x%08x\n", status);
+    ok(status == STATUS_INVALID_PARAMETER, "expected STATUS_INVALID_PARAMETER, got 0x%08lx\n", status);
 
     status = pLdrEnumerateLoadedModules((void *)0xdeadbeef, ldr_enum_callback, (void *)0xdeadbeef);
-    ok(status == STATUS_INVALID_PARAMETER, "expected STATUS_INVALID_PARAMETER, got 0x%08x\n", status);
+    ok(status == STATUS_INVALID_PARAMETER, "expected STATUS_INVALID_PARAMETER, got 0x%08lx\n", status);
 
     status = pLdrEnumerateLoadedModules(NULL, NULL, (void *)0xdeadbeef);
-    ok(status == STATUS_INVALID_PARAMETER, "expected STATUS_INVALID_PARAMETER, got 0x%08x\n", status);
+    ok(status == STATUS_INVALID_PARAMETER, "expected STATUS_INVALID_PARAMETER, got 0x%08lx\n", status);
 }
 
 static void test_RtlMakeSelfRelativeSD(void)
@@ -3223,31 +3174,31 @@ static void test_RtlMakeSelfRelativeSD(void)
 
     len = 0;
     status = RtlMakeSelfRelativeSD( &sd, NULL, &len );
-    ok( status == STATUS_BUFFER_TOO_SMALL, "got %08x\n", status );
-    ok( len == sizeof(*sd_rel), "got %u\n", len );
+    ok( status == STATUS_BUFFER_TOO_SMALL, "got %08lx\n", status );
+    ok( len == sizeof(*sd_rel), "got %lu\n", len );
 
     len += 4;
     status = RtlMakeSelfRelativeSD( &sd, sd_rel, &len );
-    ok( status == STATUS_SUCCESS, "got %08x\n", status );
-    ok( len == sizeof(*sd_rel) + 4, "got %u\n", len );
+    ok( status == STATUS_SUCCESS, "got %08lx\n", status );
+    ok( len == sizeof(*sd_rel) + 4, "got %lu\n", len );
 
     len = 0;
     status = RtlAbsoluteToSelfRelativeSD( &sd, NULL, &len );
-    ok( status == STATUS_BUFFER_TOO_SMALL, "got %08x\n", status );
-    ok( len == sizeof(*sd_rel), "got %u\n", len );
+    ok( status == STATUS_BUFFER_TOO_SMALL, "got %08lx\n", status );
+    ok( len == sizeof(*sd_rel), "got %lu\n", len );
 
     len += 4;
     status = RtlAbsoluteToSelfRelativeSD( &sd, sd_rel, &len );
-    ok( status == STATUS_SUCCESS, "got %08x\n", status );
-    ok( len == sizeof(*sd_rel) + 4, "got %u\n", len );
+    ok( status == STATUS_SUCCESS, "got %08lx\n", status );
+    ok( len == sizeof(*sd_rel) + 4, "got %lu\n", len );
 
     sd.Control = SE_SELF_RELATIVE;
     status = RtlMakeSelfRelativeSD( &sd, sd_rel, &len );
-    ok( status == STATUS_SUCCESS, "got %08x\n", status );
-    ok( len == sizeof(*sd_rel) + 4, "got %u\n", len );
+    ok( status == STATUS_SUCCESS, "got %08lx\n", status );
+    ok( len == sizeof(*sd_rel) + 4, "got %lu\n", len );
 
     status = RtlAbsoluteToSelfRelativeSD( &sd, sd_rel, &len );
-    ok( status == STATUS_BAD_DESCRIPTOR_FORMAT, "got %08x\n", status );
+    ok( status == STATUS_BAD_DESCRIPTOR_FORMAT, "got %08lx\n", status );
 }
 
 static DWORD (CALLBACK *orig_entry)(HMODULE,DWORD,LPVOID);
@@ -3275,7 +3226,7 @@ static void CALLBACK ldr_notify_callback1(ULONG reason, LDR_DLL_NOTIFICATION_DAT
     if (!lstrcmpiW(data->Loaded.BaseDllName->Buffer, expected_dll))
         return;
 
-    ok(data->Loaded.Flags == 0, "Expected flags 0, got %x\n", data->Loaded.Flags);
+    ok(data->Loaded.Flags == 0, "Expected flags 0, got %lx\n", data->Loaded.Flags);
     ok(!lstrcmpiW(data->Loaded.BaseDllName->Buffer, expected_dll), "Expected %s, got %s\n",
        wine_dbgstr_w(expected_dll), wine_dbgstr_w(data->Loaded.BaseDllName->Buffer));
     ok(!!data->Loaded.DllBase, "Expected non zero base address\n");
@@ -3435,67 +3386,67 @@ static void test_LdrRegisterDllNotification(void)
 
     /* generic test */
     status = pLdrRegisterDllNotification(0, ldr_notify_callback1, &calls, &cookie);
-    ok(!status, "Expected STATUS_SUCCESS, got %08x\n", status);
+    ok(!status, "Expected STATUS_SUCCESS, got %08lx\n", status);
 
     calls = 0;
     mod = LoadLibraryW(expected_dll);
-    ok(!!mod, "Failed to load library: %d\n", GetLastError());
-    ok(calls == LDR_DLL_NOTIFICATION_REASON_LOADED, "Expected LDR_DLL_NOTIFICATION_REASON_LOADED, got %x\n", calls);
+    ok(!!mod, "Failed to load library: %ld\n", GetLastError());
+    ok(calls == LDR_DLL_NOTIFICATION_REASON_LOADED, "Expected LDR_DLL_NOTIFICATION_REASON_LOADED, got %lx\n", calls);
 
     calls = 0;
     FreeLibrary(mod);
-    ok(calls == LDR_DLL_NOTIFICATION_REASON_UNLOADED, "Expected LDR_DLL_NOTIFICATION_REASON_UNLOADED, got %x\n", calls);
+    ok(calls == LDR_DLL_NOTIFICATION_REASON_UNLOADED, "Expected LDR_DLL_NOTIFICATION_REASON_UNLOADED, got %lx\n", calls);
 
     /* test order of callbacks */
     status = pLdrRegisterDllNotification(0, ldr_notify_callback2, &calls, &cookie2);
-    ok(!status, "Expected STATUS_SUCCESS, got %08x\n", status);
+    ok(!status, "Expected STATUS_SUCCESS, got %08lx\n", status);
 
     calls = 0;
     mod = LoadLibraryW(expected_dll);
-    ok(!!mod, "Failed to load library: %d\n", GetLastError());
-    ok(calls == 0x13, "Expected order 0x13, got %x\n", calls);
+    ok(!!mod, "Failed to load library: %ld\n", GetLastError());
+    ok(calls == 0x13, "Expected order 0x13, got %lx\n", calls);
 
     calls = 0;
     FreeLibrary(mod);
-    ok(calls == 0x24, "Expected order 0x24, got %x\n", calls);
+    ok(calls == 0x24, "Expected order 0x24, got %lx\n", calls);
 
     pLdrUnregisterDllNotification(cookie2);
     pLdrUnregisterDllNotification(cookie);
 
     /* test dll main order */
     status = pLdrRegisterDllNotification(0, ldr_notify_callback_dll_main, &calls, &cookie);
-    ok(!status, "Expected STATUS_SUCCESS, got %08x\n", status);
+    ok(!status, "Expected STATUS_SUCCESS, got %08lx\n", status);
 
     calls = 0;
     mod = LoadLibraryW(expected_dll);
-    ok(!!mod, "Failed to load library: %d\n", GetLastError());
-    ok(calls == 0x13, "Expected order 0x13, got %x\n", calls);
+    ok(!!mod, "Failed to load library: %ld\n", GetLastError());
+    ok(calls == 0x13, "Expected order 0x13, got %lx\n", calls);
 
     calls = 0;
     FreeLibrary(mod);
-    ok(calls == 0x42, "Expected order 0x42, got %x\n", calls);
+    ok(calls == 0x42, "Expected order 0x42, got %lx\n", calls);
 
     pLdrUnregisterDllNotification(cookie);
 
     /* test dll main order */
     status = pLdrRegisterDllNotification(0, ldr_notify_callback_fail, &calls, &cookie);
-    ok(!status, "Expected STATUS_SUCCESS, got %08x\n", status);
+    ok(!status, "Expected STATUS_SUCCESS, got %08lx\n", status);
 
     calls = 0;
     mod = LoadLibraryW(expected_dll);
     ok(!mod, "Expected library to fail loading\n");
-    ok(calls == 0x1342, "Expected order 0x1342, got %x\n", calls);
+    ok(calls == 0x1342, "Expected order 0x1342, got %lx\n", calls);
 
     pLdrUnregisterDllNotification(cookie);
 
     /* test dll with dependencies */
     status = pLdrRegisterDllNotification(0, ldr_notify_callback_imports, &calls, &cookie);
-    ok(!status, "Expected STATUS_SUCCESS, got %08x\n", status);
+    ok(!status, "Expected STATUS_SUCCESS, got %08lx\n", status);
 
     calls = 0;
     mod = LoadLibraryW(wintrustdllW);
-    ok(!!mod, "Failed to load library: %d\n", GetLastError());
-    ok(calls == 0x12 || calls == 0x21, "got %x\n", calls);
+    ok(!!mod, "Failed to load library: %ld\n", GetLastError());
+    ok(calls == 0x12 || calls == 0x21, "got %lx\n", calls);
 
     FreeLibrary(mod);
     pLdrUnregisterDllNotification(cookie);
@@ -3509,7 +3460,7 @@ static LONG CALLBACK test_dbg_print_except_handler( EXCEPTION_POINTERS *eptrs )
     if (eptrs->ExceptionRecord->ExceptionCode == DBG_PRINTEXCEPTION_C)
     {
         ok( eptrs->ExceptionRecord->NumberParameters == 2,
-            "Unexpected NumberParameters: %d\n", eptrs->ExceptionRecord->NumberParameters );
+            "Unexpected NumberParameters: %ld\n", eptrs->ExceptionRecord->NumberParameters );
         ok( eptrs->ExceptionRecord->ExceptionInformation[0] == strlen("test_DbgPrint: Hello World") + 1,
             "Unexpected ExceptionInformation[0]: %d\n", (int)eptrs->ExceptionRecord->ExceptionInformation[0] );
         ok( !strcmp((char *)eptrs->ExceptionRecord->ExceptionInformation[1], "test_DbgPrint: Hello World"),
@@ -3551,26 +3502,26 @@ static void test_DbgPrint(void)
     test_dbg_print_except = FALSE;
     test_dbg_print_except_ret = (LONG)EXCEPTION_EXECUTE_HANDLER;
     status = DbgPrint( "test_DbgPrint: %s", "Hello World" );
-    ok( !status, "DbgPrint returned %x\n", status );
+    ok( !status, "DbgPrint returned %lx\n", status );
     ok( !test_dbg_print_except, "DBG_PRINTEXCEPTION_C received\n" );
 
     Peb->BeingDebugged = TRUE;
     test_dbg_print_except = FALSE;
     test_dbg_print_except_ret = (LONG)EXCEPTION_EXECUTE_HANDLER;
     status = DbgPrint( "test_DbgPrint: %s", "Hello World" );
-    ok( !status, "DbgPrint returned %x\n", status );
+    ok( !status, "DbgPrint returned %lx\n", status );
     ok( test_dbg_print_except, "DBG_PRINTEXCEPTION_C not received\n" );
 
     test_dbg_print_except = FALSE;
     test_dbg_print_except_ret = (LONG)EXCEPTION_CONTINUE_EXECUTION;
     status = DbgPrint( "test_DbgPrint: %s", "Hello World" );
-    ok( !status, "DbgPrint returned %x\n", status );
+    ok( !status, "DbgPrint returned %lx\n", status );
     ok( test_dbg_print_except, "DBG_PRINTEXCEPTION_C not received\n" );
 
     test_dbg_print_except = FALSE;
     test_dbg_print_except_ret = (LONG)EXCEPTION_CONTINUE_SEARCH;
     status = DbgPrint( "test_DbgPrint: %s", "Hello World" );
-    ok( !status, "DbgPrint returned %x\n", status );
+    ok( !status, "DbgPrint returned %lx\n", status );
     ok( test_dbg_print_except, "DBG_PRINTEXCEPTION_C not received\n" );
 
 
@@ -3579,38 +3530,38 @@ static void test_DbgPrint(void)
     test_dbg_print_except = FALSE;
     test_dbg_print_except_ret = (LONG)EXCEPTION_EXECUTE_HANDLER;
     status = DbgPrintEx( 0, DPFLTR_ERROR_LEVEL, "test_DbgPrint: %s", "Hello World" );
-    ok( !status, "DbgPrintEx returned %x\n", status );
+    ok( !status, "DbgPrintEx returned %lx\n", status );
     ok( test_dbg_print_except, "DBG_PRINTEXCEPTION_C not received\n" );
 
     test_dbg_print_except = FALSE;
     test_dbg_print_except_ret = (LONG)EXCEPTION_EXECUTE_HANDLER;
     status = DbgPrintEx( 0, DPFLTR_WARNING_LEVEL, "test_DbgPrint: %s", "Hello World" );
-    ok( !status, "DbgPrintEx returned %x\n", status );
+    ok( !status, "DbgPrintEx returned %lx\n", status );
     ok( !test_dbg_print_except, "DBG_PRINTEXCEPTION_C not received\n" );
 
     test_dbg_print_except = FALSE;
     test_dbg_print_except_ret = (LONG)EXCEPTION_EXECUTE_HANDLER;
     status = DbgPrintEx( 0, DPFLTR_MASK|(1 << DPFLTR_ERROR_LEVEL), "test_DbgPrint: %s", "Hello World" );
-    ok( !status, "DbgPrintEx returned %x\n", status );
+    ok( !status, "DbgPrintEx returned %lx\n", status );
     ok( test_dbg_print_except, "DBG_PRINTEXCEPTION_C not received\n" );
 
     test_dbg_print_except = FALSE;
     test_dbg_print_except_ret = (LONG)EXCEPTION_EXECUTE_HANDLER;
     status = DbgPrintEx( 0, DPFLTR_MASK|(1 << DPFLTR_WARNING_LEVEL), "test_DbgPrint: %s", "Hello World" );
-    ok( !status, "DbgPrintEx returned %x\n", status );
+    ok( !status, "DbgPrintEx returned %lx\n", status );
     ok( !test_dbg_print_except, "DBG_PRINTEXCEPTION_C not received\n" );
 
 
     test_dbg_print_except = FALSE;
     test_dbg_print_except_ret = (LONG)EXCEPTION_EXECUTE_HANDLER;
     status = test_vDbgPrintEx( 0, 0xFFFFFFFF, "test_DbgPrint: %s", "Hello World" );
-    ok( !status, "vDbgPrintEx returned %x\n", status );
+    ok( !status, "vDbgPrintEx returned %lx\n", status );
     ok( test_dbg_print_except, "DBG_PRINTEXCEPTION_C not received\n" );
 
     test_dbg_print_except = FALSE;
     test_dbg_print_except_ret = (LONG)EXCEPTION_EXECUTE_HANDLER;
     status = test_vDbgPrintExWithPrefix( "test_", 0, 0xFFFFFFFF, "DbgPrint: %s", "Hello World" );
-    ok( !status, "vDbgPrintExWithPrefix returned %x\n", status );
+    ok( !status, "vDbgPrintExWithPrefix returned %lx\n", status );
     ok( test_dbg_print_except, "DBG_PRINTEXCEPTION_C not received\n" );
 
     Peb->BeingDebugged = debugged;
@@ -3630,6 +3581,10 @@ static LONG CALLBACK test_heap_destroy_except_handler( EXCEPTION_POINTERS *eptrs
         return (LONG)EXCEPTION_CONTINUE_EXECUTION;
 #elif defined( __x86_64__ )
         eptrs->ContextRecord->Rip += 1;
+        test_heap_destroy_break = TRUE;
+        return (LONG)EXCEPTION_CONTINUE_EXECUTION;
+#elif defined( __aarch64__ )
+        eptrs->ContextRecord->Pc += 4;
         test_heap_destroy_break = TRUE;
         return (LONG)EXCEPTION_CONTINUE_EXECUTION;
 #endif
@@ -3682,6 +3637,1519 @@ static void test_RtlDestroyHeap(void)
     RtlRemoveVectoredExceptionHandler( handler );
 }
 
+struct commit_routine_context
+{
+    void *base;
+    SIZE_T size;
+};
+
+static struct commit_routine_context commit_context;
+
+static NTSTATUS NTAPI test_commit_routine(void *base, void **address, SIZE_T *size)
+{
+    commit_context.base = base;
+    commit_context.size = *size;
+
+    return VirtualAlloc(*address, *size, MEM_COMMIT, PAGE_READWRITE) ? 0 : STATUS_ASSERTION_FAILURE;
+}
+
+static void test_RtlCreateHeap(void)
+{
+    void *ptr, *base, *reserve;
+    RTL_HEAP_PARAMETERS params;
+    HANDLE heap;
+    BOOL ret;
+
+    heap = RtlCreateHeap(0, NULL, 0, 0, NULL, NULL);
+    ok(!!heap, "Failed to create a heap.\n");
+    RtlDestroyHeap(heap);
+
+    memset(&params, 0, sizeof(params));
+    heap = RtlCreateHeap(0, NULL, 0, 0, NULL, &params);
+    ok(!!heap, "Failed to create a heap.\n");
+    RtlDestroyHeap(heap);
+
+    params.Length = 1;
+    heap = RtlCreateHeap(0, NULL, 0, 0, NULL, &params);
+    ok(!!heap, "Failed to create a heap.\n");
+    RtlDestroyHeap(heap);
+
+    params.Length = sizeof(params);
+    params.CommitRoutine = test_commit_routine;
+    params.InitialCommit = 0x1000;
+    params.InitialReserve = 0x10000;
+
+    heap = RtlCreateHeap(0, NULL, 0, 0, NULL, &params);
+    todo_wine
+    ok(!heap, "Unexpected heap.\n");
+    if (heap)
+        RtlDestroyHeap(heap);
+
+    reserve = VirtualAlloc(NULL, 0x10000, MEM_RESERVE, PAGE_READWRITE);
+    base = VirtualAlloc(reserve, 0x1000, MEM_COMMIT, PAGE_READWRITE);
+    ok(!!base, "Unexpected pointer.\n");
+
+    heap = RtlCreateHeap(0, base, 0, 0, NULL, &params);
+    ok(!!heap, "Unexpected heap.\n");
+
+    /* Using block size above initially committed size to trigger
+       new allocation via user callback. */
+    ptr = RtlAllocateHeap(heap, 0, 0x4000);
+    ok(!!ptr, "Failed to allocate a block.\n");
+    todo_wine
+    ok(commit_context.base == base, "Unexpected base %p.\n", commit_context.base);
+    todo_wine
+    ok(!!commit_context.size, "Unexpected allocation size.\n");
+    RtlFreeHeap(heap, 0, ptr);
+    RtlDestroyHeap(heap);
+
+    ret = VirtualFree(reserve, 0, MEM_RELEASE);
+    todo_wine
+    ok(ret, "Unexpected return value.\n");
+}
+
+static void test_RtlFirstFreeAce(void)
+{
+    PACL acl;
+    PACE_HEADER first;
+    BOOL ret;
+    DWORD size;
+    BOOLEAN found;
+
+    size = sizeof(ACL) + (sizeof(ACCESS_ALLOWED_ACE));
+    acl = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
+    ret = InitializeAcl(acl, sizeof(ACL), ACL_REVISION);
+    ok(ret, "InitializeAcl failed with error %ld\n", GetLastError());
+
+    /* AceCount = 0 */
+    first = (ACE_HEADER *)0xdeadbeef;
+    found = RtlFirstFreeAce(acl, &first);
+    ok(found, "RtlFirstFreeAce failed\n");
+    ok(first == (PACE_HEADER)(acl + 1), "Failed to find ACL\n");
+
+    acl->AclSize = sizeof(ACL) - 1;
+    first = (ACE_HEADER *)0xdeadbeef;
+    found = RtlFirstFreeAce(acl, &first);
+    ok(found, "RtlFirstFreeAce failed\n");
+    ok(first == NULL, "Found FirstAce = %p\n", first);
+
+    /* AceCount = 1 */
+    acl->AceCount = 1;
+    acl->AclSize = size;
+    first = (ACE_HEADER *)0xdeadbeef;
+    found = RtlFirstFreeAce(acl, &first);
+    ok(found, "RtlFirstFreeAce failed\n");
+    ok(first == (PACE_HEADER)(acl + 1), "Failed to find ACL %p, %p\n", first, (PACE_HEADER)(acl + 1));
+
+    acl->AclSize = sizeof(ACL) - 1;
+    first = (ACE_HEADER *)0xdeadbeef;
+    found = RtlFirstFreeAce(acl, &first);
+    ok(!found, "RtlFirstFreeAce failed\n");
+    ok(first == NULL, "Found FirstAce = %p\n", first);
+
+    acl->AclSize = sizeof(ACL);
+    first = (ACE_HEADER *)0xdeadbeef;
+    found = RtlFirstFreeAce(acl, &first);
+    ok(!found, "RtlFirstFreeAce failed\n");
+    ok(first == NULL, "Found FirstAce = %p\n", first);
+
+    HeapFree(GetProcessHeap(), 0, acl);
+}
+
+static void test_RtlInitializeSid(void)
+{
+    SID_IDENTIFIER_AUTHORITY sid_ident = { SECURITY_NT_AUTHORITY };
+    char buffer[SECURITY_MAX_SID_SIZE];
+    PSID sid = (PSID)&buffer;
+    NTSTATUS status;
+
+    status = RtlInitializeSid(sid, &sid_ident, 1);
+    ok(!status, "Unexpected status %#lx.\n", status);
+
+    status = RtlInitializeSid(sid, &sid_ident, SID_MAX_SUB_AUTHORITIES);
+    ok(!status, "Unexpected status %#lx.\n", status);
+
+    status = RtlInitializeSid(sid, &sid_ident, SID_MAX_SUB_AUTHORITIES + 1);
+    ok(status == STATUS_INVALID_PARAMETER, "Unexpected status %#lx.\n", status);
+}
+
+static void test_RtlValidSecurityDescriptor(void)
+{
+    SECURITY_DESCRIPTOR *sd;
+    NTSTATUS status;
+    BOOLEAN ret;
+
+    ret = RtlValidSecurityDescriptor(NULL);
+    ok(!ret, "Unexpected return value %d.\n", ret);
+
+    sd = calloc(1, SECURITY_DESCRIPTOR_MIN_LENGTH);
+
+    ret = RtlValidSecurityDescriptor(sd);
+    ok(!ret, "Unexpected return value %d.\n", ret);
+
+    status = RtlCreateSecurityDescriptor(sd, SECURITY_DESCRIPTOR_REVISION);
+    ok(!status, "Unexpected return value %#lx.\n", status);
+
+    ret = RtlValidSecurityDescriptor(sd);
+    ok(ret, "Unexpected return value %d.\n", ret);
+
+    free(sd);
+}
+
+static void test_RtlFindExportedRoutineByName(void)
+{
+    void *proc;
+
+    if (!pRtlFindExportedRoutineByName)
+    {
+        win_skip( "RtlFindExportedRoutineByName is not present\n" );
+        return;
+    }
+    proc = pRtlFindExportedRoutineByName( GetModuleHandleW( L"kernelbase" ), "CtrlRoutine" );
+    ok( proc != NULL, "Expected non NULL address\n" );
+    proc = pRtlFindExportedRoutineByName( GetModuleHandleW( L"kernel32" ), "CtrlRoutine" );
+    ok( proc == NULL, "Shouldn't find forwarded function\n" );
+}
+
+static void test_RtlGetDeviceFamilyInfoEnum(void)
+{
+    ULONGLONG version;
+    DWORD family, form;
+
+    if (!pRtlGetDeviceFamilyInfoEnum)
+    {
+        win_skip( "RtlGetDeviceFamilyInfoEnum is not present\n" );
+        return;
+    }
+
+    version = 0x1234567;
+    family = 1234567;
+    form = 1234567;
+    pRtlGetDeviceFamilyInfoEnum(&version, &family, &form);
+    ok( version != 0x1234567, "got unexpected unchanged value 0x1234567\n" );
+    ok( family <= DEVICEFAMILYINFOENUM_MAX, "got unexpected %lu\n", family );
+    ok( form <= DEVICEFAMILYDEVICEFORM_MAX, "got unexpected %lu\n", form );
+    trace( "UAP version is %#I64x, device family is %lu, form factor is %lu\n", version, family, form );
+}
+
+struct test_rb_tree_entry
+{
+    int value;
+    struct rb_entry wine_rb_entry;
+    RTL_BALANCED_NODE rtl_entry;
+};
+
+static int test_rb_tree_entry_compare( const void *key, const struct wine_rb_entry *entry )
+{
+    const struct test_rb_tree_entry *t = WINE_RB_ENTRY_VALUE(entry, struct test_rb_tree_entry, wine_rb_entry);
+    const int *value = key;
+
+    return *value - t->value;
+}
+
+static int test_rtl_rb_tree_entry_compare( const void *key, const RTL_BALANCED_NODE *entry )
+{
+    const struct test_rb_tree_entry *t = CONTAINING_RECORD(entry, struct test_rb_tree_entry, rtl_entry);
+    const int *value = key;
+
+    return *value - t->value;
+}
+
+static int rtl_rb_tree_put( RTL_RB_TREE *tree, const void *key, RTL_BALANCED_NODE *entry,
+                            int (*compare_func)( const void *key, const RTL_BALANCED_NODE *entry ))
+{
+    RTL_BALANCED_NODE *parent = tree->root;
+    BOOLEAN right = 0;
+    int c;
+
+    while (parent)
+    {
+        if (!(c = compare_func( key, parent ))) return -1;
+        right = c > 0;
+        if (!parent->Children[right]) break;
+        parent = parent->Children[right];
+    }
+    pRtlRbInsertNodeEx( tree, parent, right, entry );
+    return 0;
+}
+
+static struct test_rb_tree_entry *test_rb_tree_entry_from_wine_rb( struct rb_entry *entry )
+{
+    if (!entry) return NULL;
+    return CONTAINING_RECORD(entry, struct test_rb_tree_entry, wine_rb_entry);
+}
+
+static struct test_rb_tree_entry *test_rb_tree_entry_from_rtl_rb( RTL_BALANCED_NODE *entry )
+{
+    if (!entry) return NULL;
+    return CONTAINING_RECORD(entry, struct test_rb_tree_entry, rtl_entry);
+}
+
+static struct test_rb_tree_entry *test_rb_tree_entry_rtl_parent( struct test_rb_tree_entry *node )
+{
+    return test_rb_tree_entry_from_rtl_rb( (void *)(node->rtl_entry.ParentValue
+                                           & ~(ULONG_PTR)RTL_BALANCED_NODE_RESERVED_PARENT_MASK) );
+}
+
+static void test_rb_tree(void)
+{
+    static int test_values[] = { 44, 51, 6, 66, 69, 20, 87, 80, 72, 86, 90, 16, 54, 61, 62, 14, 27, 39, 42, 41 };
+    static const unsigned int count = ARRAY_SIZE(test_values);
+
+    struct test_rb_tree_entry *nodes, *parent, *parent2;
+    RTL_BALANCED_NODE *prev_min_entry = NULL;
+    int ret, is_red, min_val;
+    struct rb_tree wine_tree;
+    RTL_RB_TREE rtl_tree;
+    unsigned int i;
+
+    if (!pRtlRbInsertNodeEx)
+    {
+        win_skip( "RtlRbInsertNodeEx is not present.\n" );
+        return;
+    }
+
+    memset( &rtl_tree, 0, sizeof(rtl_tree) );
+    nodes = malloc( count * sizeof(*nodes) );
+    memset( nodes, 0xcc, count * sizeof(*nodes) );
+
+    min_val = test_values[0];
+    rb_init( &wine_tree, test_rb_tree_entry_compare );
+    for (i = 0; i < count; ++i)
+    {
+        winetest_push_context( "i %u", i );
+        nodes[i].value = test_values[i];
+        ret = rb_put( &wine_tree, &nodes[i].value, &nodes[i].wine_rb_entry );
+        ok( !ret, "got %d.\n", ret );
+        parent = test_rb_tree_entry_from_wine_rb( nodes[i].wine_rb_entry.parent );
+        ret = rtl_rb_tree_put( &rtl_tree, &nodes[i].value, &nodes[i].rtl_entry, test_rtl_rb_tree_entry_compare );
+        ok( !ret, "got %d.\n", ret );
+        parent2 = test_rb_tree_entry_rtl_parent( &nodes[i] );
+        ok( parent == parent2, "got %p, %p.\n", parent, parent2 );
+        is_red = nodes[i].rtl_entry.ParentValue & RTL_BALANCED_NODE_RESERVED_PARENT_MASK;
+        ok( is_red == rb_is_red( &nodes[i].wine_rb_entry ), "got %d, expected %d.\n", is_red,
+            rb_is_red( &nodes[i].wine_rb_entry ));
+
+        parent = test_rb_tree_entry_from_wine_rb( wine_tree.root );
+        parent2 = test_rb_tree_entry_from_rtl_rb( rtl_tree.root );
+        ok( parent == parent2, "got %p, %p.\n", parent, parent2 );
+        if (nodes[i].value <= min_val)
+        {
+            min_val = nodes[i].value;
+            prev_min_entry = &nodes[i].rtl_entry;
+        }
+        ok( rtl_tree.min == prev_min_entry, "unexpected min tree entry.\n" );
+        winetest_pop_context();
+    }
+
+    for (i = 0; i < count; ++i)
+    {
+        struct test_rb_tree_entry *node;
+
+        winetest_push_context( "i %u", i );
+        rb_remove( &wine_tree, &nodes[i].wine_rb_entry );
+        pRtlRbRemoveNode( &rtl_tree, &nodes[i].rtl_entry );
+
+        parent = test_rb_tree_entry_from_wine_rb( wine_tree.root );
+        parent2 = test_rb_tree_entry_from_rtl_rb( rtl_tree.root );
+        ok( parent == parent2, "got %p, %p.\n", parent, parent2 );
+
+        parent = test_rb_tree_entry_from_wine_rb( rb_head( wine_tree.root ));
+        parent2 = test_rb_tree_entry_from_rtl_rb( rtl_tree.min );
+        ok( parent == parent2, "got %p, %p.\n", parent, parent2 );
+
+        RB_FOR_EACH_ENTRY(node, &wine_tree, struct test_rb_tree_entry, wine_rb_entry)
+        {
+            is_red = node->rtl_entry.ParentValue & RTL_BALANCED_NODE_RESERVED_PARENT_MASK;
+            ok( is_red == rb_is_red( &node->wine_rb_entry ), "got %d, expected %d.\n", is_red, rb_is_red( &node->wine_rb_entry ));
+            parent = test_rb_tree_entry_from_wine_rb( node->wine_rb_entry.parent );
+            parent2 = test_rb_tree_entry_rtl_parent( node );
+            ok( parent == parent2, "got %p, %p.\n", parent, parent2 );
+        }
+        winetest_pop_context();
+    }
+    ok( !rtl_tree.root, "got %p.\n", rtl_tree.root );
+    ok( !rtl_tree.min, "got %p.\n", rtl_tree.min );
+    free(nodes);
+}
+
+static void test_RtlConvertDeviceFamilyInfoToString(void)
+{
+    DWORD device_family_size, device_form_size, ret;
+    WCHAR device_family[16], device_form[16];
+
+    if (!pRtlConvertDeviceFamilyInfoToString)
+    {
+        win_skip("RtlConvertDeviceFamilyInfoToString is unavailable.\n" );
+        return;
+    }
+
+    if (0) /* Crash on Windows */
+    {
+    ret = pRtlConvertDeviceFamilyInfoToString(NULL, NULL, NULL, NULL);
+    ok(ret == STATUS_INVALID_PARAMETER, "Got unexpected status %#lx.\n", ret);
+
+    device_family_size = 0;
+    ret = pRtlConvertDeviceFamilyInfoToString(&device_family_size, NULL, NULL, NULL);
+    ok(ret == STATUS_BUFFER_TOO_SMALL, "Got unexpected status %#lx.\n", ret);
+    ok(device_family_size == (wcslen(L"Windows.Desktop") + 1) * sizeof(WCHAR),
+       "Got unexpected %#lx.\n", device_family_size);
+
+    device_form_size = 0;
+    ret = pRtlConvertDeviceFamilyInfoToString(NULL, &device_form_size, NULL, NULL);
+    ok(ret == STATUS_BUFFER_TOO_SMALL, "Got unexpected status %#lx.\n", ret);
+    ok(device_form_size == (wcslen(L"Unknown") + 1) * sizeof(WCHAR), "Got unexpected %#lx.\n",
+       device_form_size);
+
+    ret = pRtlConvertDeviceFamilyInfoToString(&device_family_size, NULL, device_family, NULL);
+    ok(ret == STATUS_SUCCESS, "Got unexpected status %#lx.\n", ret);
+    ok(device_family_size == (wcslen(L"Windows.Desktop") + 1) * sizeof(WCHAR),
+       "Got unexpected %#lx.\n", device_family_size);
+    ok(!wcscmp(device_family, L"Windows.Desktop"), "Got unexpected %s.\n", wine_dbgstr_w(device_family));
+
+    ret = pRtlConvertDeviceFamilyInfoToString(NULL, &device_form_size, NULL, device_form);
+    ok(ret == STATUS_SUCCESS, "Got unexpected status %#lx.\n", ret);
+    ok(device_form_size == (wcslen(L"Unknown") + 1) * sizeof(WCHAR), "Got unexpected %#lx.\n",
+       device_form_size);
+    ok(!wcscmp(device_form, L"Unknown"), "Got unexpected %s.\n", wine_dbgstr_w(device_form));
+
+    ret = pRtlConvertDeviceFamilyInfoToString(&device_family_size, &device_form_size, NULL, NULL);
+    ok(ret == STATUS_INVALID_PARAMETER, "Got unexpected status %#lx.\n", ret);
+    }
+
+    device_family_size = wcslen(L"Windows.Desktop") * sizeof(WCHAR);
+    device_form_size = wcslen(L"Unknown") * sizeof(WCHAR);
+    ret = pRtlConvertDeviceFamilyInfoToString(&device_family_size, &device_form_size, NULL, NULL);
+    ok(ret == STATUS_BUFFER_TOO_SMALL, "Got unexpected status %#lx.\n", ret);
+    ok(device_family_size == (wcslen(L"Windows.Desktop") + 1) * sizeof(WCHAR),
+       "Got unexpected %#lx.\n", device_family_size);
+    ok(device_form_size == (wcslen(L"Unknown") + 1) * sizeof(WCHAR), "Got unexpected %#lx.\n",
+       device_form_size);
+
+    ret = pRtlConvertDeviceFamilyInfoToString(&device_family_size, &device_form_size, device_family, device_form);
+    ok(ret == STATUS_SUCCESS, "Got unexpected status %#lx.\n", ret);
+    ok(!wcscmp(device_family, L"Windows.Desktop"), "Got unexpected %s.\n", wine_dbgstr_w(device_family));
+    ok(!wcscmp(device_form, L"Unknown"), "Got unexpected %s.\n", wine_dbgstr_w(device_form));
+}
+
+static void test_user_procs(void)
+{
+    UINT64 ptrs[32], dummy[32] = { 0 };
+    NTSTATUS status;
+    const UINT64 *ptr_A, *ptr_W, *ptr_workers;
+    ULONG size_A, size_W, size_workers;
+
+    if (!pRtlRetrieveNtUserPfn || !pRtlInitializeNtUserPfn)
+    {
+        win_skip( "user procs not supported\n" );
+        return;
+    }
+
+    status = pRtlRetrieveNtUserPfn( &ptr_A, &ptr_W, &ptr_workers );
+    ok( !status || broken(!is_win64 && status == STATUS_INVALID_PARAMETER), /* <= win8 32-bit */
+        "RtlRetrieveNtUserPfn failed %lx\n", status );
+    if (status) return;
+
+    /* assume that the tables are consecutive */
+    size_A = (ptr_W - ptr_A) * sizeof(UINT64);
+    size_W = (ptr_workers - ptr_W) * sizeof(UINT64);
+    ok( size_A > 0x80 && size_A < 0x100, "unexpected size for %p %p %p\n", ptr_A, ptr_W, ptr_workers );
+    ok( size_W == size_A, "unexpected size for %p %p %p\n", ptr_A, ptr_W, ptr_workers );
+    memcpy( ptrs, ptr_A, size_A );
+
+    status = pRtlInitializeNtUserPfn( dummy, size_A, dummy + 1, size_W, dummy + 2, 0 );
+    ok( status == STATUS_INVALID_PARAMETER, "RtlInitializeNtUserPfn failed %lx\n", status );
+
+    if (!pRtlResetNtUserPfn)
+    {
+        win_skip( "RtlResetNtUserPfn not supported\n" );
+        return;
+    }
+
+    status = pRtlResetNtUserPfn();
+    ok( !status, "RtlResetNtUserPfn failed %lx\n", status );
+    ok( !memcmp( ptrs, ptr_A, size_A ), "pointers changed by reset\n" );
+
+    /* can't do anything after reset except set them again */
+    status = pRtlResetNtUserPfn();
+    ok( status == STATUS_INVALID_PARAMETER, "RtlResetNtUserPfn failed %lx\n", status );
+    status = pRtlRetrieveNtUserPfn( &ptr_A, &ptr_W, &ptr_workers );
+    ok( status == STATUS_INVALID_PARAMETER, "RtlRetrieveNtUserPfn failed %lx\n", status );
+
+    for (size_workers = 0x100; size_workers > 0; size_workers--)
+    {
+        status = pRtlInitializeNtUserPfn( dummy, size_A, dummy + 1, size_W, dummy + 2, size_workers );
+        if (!status) break;
+        ok( status == STATUS_INVALID_PARAMETER, "RtlInitializeNtUserPfn failed %lx\n", status );
+    }
+    trace( "got sizes %lx %lx %lx\n", size_A, size_W, size_workers );
+    if (!size_workers) return;  /* something went wrong */
+    ok( !memcmp( ptrs, ptr_A, size_A ), "pointers changed by init\n" );
+
+    /* can't set twice without a reset */
+    status = pRtlInitializeNtUserPfn( dummy, size_A, dummy + 1, size_W, dummy + 2, size_workers );
+    ok( status == STATUS_INVALID_PARAMETER, "RtlInitializeNtUserPfn failed %lx\n", status );
+    status = pRtlResetNtUserPfn();
+    ok( !status, "RtlResetNtUserPfn failed %lx\n", status );
+    status = pRtlInitializeNtUserPfn( dummy, size_A, dummy + 1, size_W, dummy + 2, size_workers );
+    ok( !status, "RtlInitializeNtUserPfn failed %lx\n", status );
+    ok( !memcmp( ptrs, ptr_A, size_A ), "pointers changed by init\n" );
+}
+
+struct splay_index
+{
+    int parent_index;
+    int left_index;
+    int right_index;
+};
+
+static void init_splay_indices(RTL_SPLAY_LINKS *links, unsigned int links_count,
+                               const struct splay_index *indices, unsigned int index_count)
+{
+    const struct splay_index *index;
+    unsigned int i;
+
+    for (i = 0; i < links_count; i++)
+        RtlInitializeSplayLinks(&links[i]);
+    for (i = 0; i < index_count; i++)
+    {
+        index = &indices[i];
+        if (index->left_index != -1)
+            RtlInsertAsLeftChild(&links[index->parent_index], &links[index->left_index]);
+        if (index->right_index != -1)
+            RtlInsertAsRightChild(&links[index->parent_index], &links[index->right_index]);
+    }
+}
+
+#define expect_splay_indices(a, b, c, d) _expect_splay_indices(__LINE__, a, b, c, d)
+static void _expect_splay_indices(int line, RTL_SPLAY_LINKS *links, RTL_SPLAY_LINKS *root,
+                                  const struct splay_index *indices, unsigned int index_count)
+{
+    const struct splay_index *index;
+    unsigned int i;
+
+    ok_(__FILE__, line)(RtlIsRoot(root), "Got unexpected root node %d.\n", root ? (int)(root - links) : -1);
+    ok_(__FILE__, line)(root == &links[indices[0].parent_index], "Expected root %d, got %d.\n",
+                        indices[0].parent_index, root ? (int)(root - links) : -1);
+
+    for (i = 0; i < index_count; i++)
+    {
+        winetest_push_context("%d", i);
+
+        index = &indices[i];
+        if (index->left_index != -1)
+        {
+            ok_(__FILE__, line)(links[index->parent_index].LeftChild == &links[index->left_index],
+                                "Node %d got unexpected left child %d.\n", index->parent_index,
+                                links[index->parent_index].LeftChild ?
+                                (int)(links[index->parent_index].LeftChild - links) : -1);
+            ok_(__FILE__, line)(links[index->left_index].Parent == &links[index->parent_index],
+                                "Node %d got unexpected parent %d.\n", index->left_index,
+                                (int)(links[index->left_index].Parent - links));
+        }
+        else
+        {
+            ok_(__FILE__, line)(!links[index->parent_index].LeftChild,
+                                "Node %d shouldn't have left child %d.\n",
+                                index->parent_index, (int)(links[index->parent_index].LeftChild - links));
+        }
+
+        if (index->right_index != -1)
+        {
+            ok_(__FILE__, line)(links[index->parent_index].RightChild == &links[index->right_index],
+                                "Node %d got unexpected right child %d.\n", index->parent_index,
+                                links[index->parent_index].RightChild ?
+                                (int)(links[index->parent_index].RightChild - links) : -1);
+            ok_(__FILE__, line)(links[index->right_index].Parent == &links[index->parent_index],
+                                "Node %d got unexpected parent %d.\n", index->right_index,
+                                (int)(links[index->right_index].Parent - links));
+        }
+        else
+        {
+            ok_(__FILE__, line)(!links[index->parent_index].RightChild,
+                                "Node %d shouldn't have right child %d.\n",
+                                index->parent_index, (int)(links[index->parent_index].RightChild - links));
+        }
+
+        winetest_pop_context();
+    }
+}
+
+static void test_RtlSubtreePredecessor(void)
+{
+    /*       3
+     *     /   \
+     *    1     5
+     *   / \   / \
+     *  0   2 4   6
+     */
+    static const struct splay_index splay_indices[] =
+    {
+        {3, 1, 5},
+        {1, 0, 2},
+        {5, 4, 6},
+    };
+    static const int expected_predecessors[] = {-1, 0, -1, 2, -1, 4, -1};
+    RTL_SPLAY_LINKS links[7], *predecessor;
+    unsigned int i;
+
+    if (!pRtlSubtreePredecessor)
+    {
+        win_skip("RtlSubtreePredecessor is unavailable.\n");
+        return;
+    }
+
+    init_splay_indices(links, ARRAY_SIZE(links), splay_indices, ARRAY_SIZE(splay_indices));
+    for (i = 0; i < ARRAY_SIZE(expected_predecessors); i++)
+    {
+        winetest_push_context("%d", i);
+
+        predecessor = pRtlSubtreePredecessor(&links[i]);
+        if (expected_predecessors[i] == -1)
+            ok(!predecessor, "Expected NULL, got unexpected %d.\n", (int)(predecessor - links));
+        else
+            ok(predecessor == &links[expected_predecessors[i]], "Expected %d, got unexpected %d.\n",
+               expected_predecessors[i], (int)(predecessor ? predecessor - links : -1));
+
+        winetest_pop_context();
+    }
+}
+
+static void test_RtlSubtreeSuccessor(void)
+{
+    /*       3
+     *     /   \
+     *    1     5
+     *   / \   / \
+     *  0   2 4   6
+     */
+    static const struct splay_index splay_indices[] =
+    {
+        {3, 1, 5},
+        {1, 0, 2},
+        {5, 4, 6},
+    };
+    static const int expected_successors[] = {-1, 2, -1, 4, -1, 6, -1};
+    RTL_SPLAY_LINKS links[7], *successor;
+    unsigned int i;
+
+    if (!pRtlSubtreeSuccessor)
+    {
+        win_skip("RtlSubtreeSuccessor is unavailable.\n");
+        return;
+    }
+
+    init_splay_indices(links, ARRAY_SIZE(links), splay_indices, ARRAY_SIZE(splay_indices));
+    for (i = 0; i < ARRAY_SIZE(expected_successors); i++)
+    {
+        winetest_push_context("%d", i);
+
+        successor = pRtlSubtreeSuccessor(&links[i]);
+        if (expected_successors[i] == -1)
+            ok(!successor, "Expected NULL, got unexpected %d.\n", (int)(successor - links));
+        else
+            ok(successor == &links[expected_successors[i]], "Expected %d, got unexpected %d.\n",
+               expected_successors[i], (int)(successor ? successor - links : -1));
+
+        winetest_pop_context();
+    }
+}
+
+static void test_RtlRealPredecessor(void)
+{
+    /*       3
+     *     /   \
+     *    1     5
+     *   / \   / \
+     *  0   2 4   6
+     */
+    static const struct splay_index splay_indices[] =
+    {
+        {3, 1, 5},
+        {1, 0, 2},
+        {5, 4, 6},
+    };
+    static const int expected_predecessors[] = {-1, 0, 1, 2, 3, 4, 5};
+    RTL_SPLAY_LINKS links[7], *predecessor;
+    unsigned int i;
+
+    if (!pRtlRealPredecessor)
+    {
+        win_skip("RtlRealPredecessor is unavailable.\n");
+        return;
+    }
+
+    init_splay_indices(links, ARRAY_SIZE(links), splay_indices, ARRAY_SIZE(splay_indices));
+    for (i = 0; i < ARRAY_SIZE(expected_predecessors); i++)
+    {
+        winetest_push_context("%d", i);
+
+        predecessor = pRtlRealPredecessor(&links[i]);
+        if (expected_predecessors[i] == -1)
+            ok(!predecessor, "Expected NULL, got unexpected %d.\n", (int)(predecessor - links));
+        else
+            ok(predecessor == &links[expected_predecessors[i]], "Expected %d, got unexpected %d.\n",
+               expected_predecessors[i], (int)(predecessor ? predecessor - links : -1));
+
+        winetest_pop_context();
+    }
+}
+
+static void test_RtlRealSuccessor(void)
+{
+    /*       3
+     *     /   \
+     *    1     5
+     *   / \   / \
+     *  0   2 4   6
+     */
+    static const struct splay_index splay_indices[] =
+    {
+        {3, 1, 5},
+        {1, 0, 2},
+        {5, 4, 6},
+    };
+    static const int expected_successors[] = {1, 2, 3, 4, 5, 6, -1};
+    RTL_SPLAY_LINKS links[7], *successor;
+    unsigned int i;
+
+    if (!pRtlRealSuccessor)
+    {
+        win_skip("RtlRealSuccessor is unavailable.\n");
+        return;
+    }
+
+    init_splay_indices(links, ARRAY_SIZE(links), splay_indices, ARRAY_SIZE(splay_indices));
+    for (i = 0; i < ARRAY_SIZE(expected_successors); i++)
+    {
+        winetest_push_context("%d", i);
+
+        successor = pRtlRealSuccessor(&links[i]);
+        if (expected_successors[i] == -1)
+            ok(!successor, "Expected NULL, got unexpected %d.\n", (int)(successor - links));
+        else
+            ok(successor == &links[expected_successors[i]], "Expected %d, got unexpected %d.\n",
+               expected_successors[i], (int)(successor ? successor - links : -1));
+
+        winetest_pop_context();
+    }
+}
+
+static void test_RtlSplay(void)
+{
+    /*      3
+     *    /   \
+     *   1     5
+     *  / \   / \
+     * 0   2 4   6
+     */
+    static const struct splay_index splay_indices[] =
+    {
+        {3, 1, 5},
+        {1, 0, 2},
+        {5, 4, 6},
+        {0, -1, -1},
+        {2, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      0
+     *       \
+     *        1
+     *         \
+     *          3
+     *         / \
+     *        2   5
+     *           / \
+     *          4   6
+     */
+    static const struct splay_index splay0[] =
+    {
+        {0, -1, 1},
+        {1, -1, 3},
+        {3, 2, 5},
+        {5, 4, 6},
+        {2, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      1
+     *     / \
+     *    0   3
+     *       / \
+     *      2   5
+     *         / \
+     *        4   6
+     */
+    static const struct splay_index splay1[] =
+    {
+        {1, 0, 3},
+        {3, 2, 5},
+        {5, 4, 6},
+        {0, -1, -1},
+        {2, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      2
+     *     / \
+     *    1   3
+     *   /     \
+     *  0       5
+     *         / \
+     *        4   6
+     */
+    static const struct splay_index splay2[] =
+    {
+        {2, 1, 3},
+        {1, 0, -1},
+        {3, -1, 5},
+        {5, 4, 6},
+        {0, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      3
+     *    /   \
+     *   1     5
+     *  / \   / \
+     * 0   2 4   6
+     */
+    static const struct splay_index splay3[] =
+    {
+        {3, 1, 5},
+        {1, 0, 2},
+        {5, 4, 6},
+        {0, -1, -1},
+        {2, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*       4
+     *      / \
+     *     3   5
+     *    /     \
+     *   1       6
+     *  / \
+     * 0   2
+     */
+    static const struct splay_index splay4[] =
+    {
+        {4, 3, 5},
+        {3, 1, -1},
+        {5, -1, 6},
+        {1, 0, 2},
+        {0, -1, -1},
+        {2, -1, -1},
+        {6, -1, -1},
+    };
+    /*       5
+     *      / \
+     *     3   6
+     *    / \
+     *   1   4
+     *  / \
+     * 0   2
+     */
+    static const struct splay_index splay5[] =
+    {
+        {5, 3, 6},
+        {3, 1, 4},
+        {1, 0, 2},
+        {0, -1, -1},
+        {2, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*         6
+     *        /
+     *       5
+     *      /
+     *     3
+     *    / \
+     *   1   4
+     *  / \
+     * 0   2
+     */
+    static const struct splay_index splay6[] =
+    {
+        {6, 5, -1},
+        {5, 3, -1},
+        {3, 1, 4},
+        {1, 0, 2},
+        {0, -1, -1},
+        {2, -1, -1},
+        {4, -1, -1},
+    };
+    RTL_SPLAY_LINKS links[7], *root;
+    static const struct
+    {
+        const struct splay_index *indices;
+        unsigned int indices_count;
+    }
+    expected_indices[] =
+    {
+        {splay0, ARRAY_SIZE(splay0)},
+        {splay1, ARRAY_SIZE(splay1)},
+        {splay2, ARRAY_SIZE(splay2)},
+        {splay3, ARRAY_SIZE(splay3)},
+        {splay4, ARRAY_SIZE(splay4)},
+        {splay5, ARRAY_SIZE(splay5)},
+        {splay6, ARRAY_SIZE(splay6)},
+    };
+    unsigned int i;
+
+    if (!pRtlSplay)
+    {
+        win_skip("RtlSplay is unavailable.\n");
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(expected_indices); i++)
+    {
+        winetest_push_context("%d", i);
+
+        init_splay_indices(links, ARRAY_SIZE(links), splay_indices, ARRAY_SIZE(splay_indices));
+        root = pRtlSplay(&links[i]);
+        expect_splay_indices(links, root, expected_indices[i].indices, expected_indices[i].indices_count);
+
+        winetest_pop_context();
+    }
+}
+
+static void test_RtlDeleteNoSplay(void)
+{
+    /*      3
+     *    /   \
+     *   1     5
+     *  / \   / \
+     * 0   2 4   6
+     */
+    static const struct splay_index splay_indices[] =
+    {
+        {3, 1, 5},
+        {1, 0, 2},
+        {5, 4, 6},
+        {0, -1, -1},
+        {2, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      3
+     *    /   \
+     *   1     5
+     *    \   / \
+     *     2 4   6
+     */
+    static const struct splay_index delete0[] =
+    {
+        {3, 1, 5},
+        {1, -1, 2},
+        {5, 4, 6},
+        {2, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      3
+     *    /   \
+     *   0     5
+     *    \   / \
+     *     2 4   6
+     */
+    static const struct splay_index delete1[] =
+    {
+        {3, 0, 5},
+        {0, -1, 2},
+        {5, 4, 6},
+        {2, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      3
+     *     / \
+     *    1   5
+     *   /   / \
+     *  0   4   6
+     */
+    static const struct splay_index delete2[] =
+    {
+        {3, 1, 5},
+        {1, 0, -1},
+        {5, 4, 6},
+        {0, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      2
+     *     / \
+     *    1   5
+     *   /   / \
+     *  0   4   6
+     */
+    static const struct splay_index delete3[] =
+    {
+        {2, 1, 5},
+        {1, 0, -1},
+        {5, 4, 6},
+        {0, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*     3
+     *    / \
+     *   1   5
+     *  / \   \
+     * 0   2   6
+     */
+    static const struct splay_index delete4[] =
+    {
+        {3, 1, 5},
+        {1, 0, 2},
+        {5, -1, 6},
+        {0, -1, -1},
+        {2, -1, -1},
+        {6, -1, -1},
+    };
+    /*     3
+     *    / \
+     *   1   4
+     *  / \   \
+     * 0   2   6
+     */
+    static const struct splay_index delete5[] =
+    {
+        {3, 1, 4},
+        {1, 0, 2},
+        {4, -1, 6},
+        {0, -1, -1},
+        {2, -1, -1},
+        {6, -1, -1},
+    };
+    /*      3
+     *    /   \
+     *   1     5
+     *  / \   /
+     * 0   2 4
+     */
+    static const struct splay_index delete6[] =
+    {
+        {3, 1, 5},
+        {1, 0, 2},
+        {5, 4, -1},
+        {0, -1, -1},
+        {2, -1, -1},
+        {4, -1, -1},
+    };
+    RTL_SPLAY_LINKS links[7], *root;
+    static const struct
+    {
+        const struct splay_index *indices;
+        unsigned int index_count;
+    }
+    expected_indices[] =
+    {
+        {delete0, ARRAY_SIZE(delete0)},
+        {delete1, ARRAY_SIZE(delete1)},
+        {delete2, ARRAY_SIZE(delete2)},
+        {delete3, ARRAY_SIZE(delete3)},
+        {delete4, ARRAY_SIZE(delete4)},
+        {delete5, ARRAY_SIZE(delete5)},
+        {delete6, ARRAY_SIZE(delete6)},
+    };
+    unsigned int i;
+
+    if (!pRtlDeleteNoSplay)
+    {
+        win_skip("RtlDeleteNoSplay is unavailable.\n");
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(expected_indices); i++)
+    {
+        winetest_push_context("%d", i);
+
+        init_splay_indices(links, ARRAY_SIZE(links), splay_indices, ARRAY_SIZE(splay_indices));
+        root = &links[expected_indices[i].indices[0].parent_index];
+        pRtlDeleteNoSplay(&links[i], &root);
+        expect_splay_indices(links, root, expected_indices[i].indices, expected_indices[i].index_count);
+
+        winetest_pop_context();
+    }
+
+    /* Test that root should be NULL when the splay tree is empty */
+    RtlInitializeSplayLinks(&links[0]);
+    pRtlDeleteNoSplay(&links[0], &root);
+    ok(root == NULL, "Got unexpected root.\n");
+}
+
+static void test_RtlDelete(void)
+{
+    /*      3
+     *    /   \
+     *   1     5
+     *  / \   / \
+     * 0   2 4   6
+     */
+    static const struct splay_index splay_indices[] =
+    {
+        {3, 1, 5},
+        {1, 0, 2},
+        {5, 4, 6},
+        {0, -1, -1},
+        {2, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      1
+     *       \
+     *        3
+     *       / \
+     *      2   5
+     *         / \
+     *        4   6
+     */
+    static const struct splay_index delete0[] =
+    {
+        {1, -1, 3},
+        {3, 2, 5},
+        {5, 4, 6},
+        {2, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      0
+     *       \
+     *        3
+     *       / \
+     *      2   5
+     *         / \
+     *        4   6
+     */
+    static const struct splay_index delete1[] =
+    {
+        {0, -1, 3},
+        {3, 2, 5},
+        {5, 4, 6},
+        {2, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      1
+     *     / \
+     *    0   3
+     *         \
+     *          5
+     *         / \
+     *        4   6
+     */
+    static const struct splay_index delete2[] =
+    {
+        {1, 0, 3},
+        {3, -1, 5},
+        {5, 4, 6},
+        {0, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*      1
+     *     / \
+     *    0   2
+     *         \
+     *          5
+     *         / \
+     *        4   6
+     */
+    static const struct splay_index delete3[] =
+    {
+        {1, 0, 2},
+        {2, -1, 5},
+        {5, 4, 6},
+        {0, -1, -1},
+        {4, -1, -1},
+        {6, -1, -1},
+    };
+    /*       5
+     *      / \
+     *     3   6
+     *    /
+     *   1
+     *  / \
+     * 0   2
+     */
+    static const struct splay_index delete4[] =
+    {
+        {5, 3, 6},
+        {3, 1, -1},
+        {1, 0, 2},
+        {0, -1, -1},
+        {2, -1, -1},
+        {6, -1, -1},
+    };
+    /*       4
+     *      / \
+     *     3   6
+     *    /
+     *   1
+     *  / \
+     * 0   2
+     */
+    static const struct splay_index delete5[] =
+    {
+        {4, 3, 6},
+        {3, 1, -1},
+        {1, 0, 2},
+        {0, -1, -1},
+        {2, -1, -1},
+        {6, -1, -1},
+    };
+    /*       5
+     *      /
+     *     3
+     *    / \
+     *   1   4
+     *  / \
+     * 0   2
+     */
+    static const struct splay_index delete6[] =
+    {
+        {5, 3, -1},
+        {3, 1, 4},
+        {1, 0, 2},
+        {0, -1, -1},
+        {2, -1, -1},
+        {4, -1, -1},
+    };
+    RTL_SPLAY_LINKS links[7], *root;
+    static const struct
+    {
+        const struct splay_index *indices;
+        unsigned int index_count;
+    }
+    expected_indices[] =
+    {
+        {delete0, ARRAY_SIZE(delete0)},
+        {delete1, ARRAY_SIZE(delete1)},
+        {delete2, ARRAY_SIZE(delete2)},
+        {delete3, ARRAY_SIZE(delete3)},
+        {delete4, ARRAY_SIZE(delete4)},
+        {delete5, ARRAY_SIZE(delete5)},
+        {delete6, ARRAY_SIZE(delete6)},
+    };
+    unsigned int i;
+
+    if (!pRtlDelete)
+    {
+        win_skip("RtlDelete is unavailable.\n");
+        return;
+    }
+    for (i = 0; i < ARRAY_SIZE(expected_indices); i++)
+    {
+        winetest_push_context("%d", i);
+
+        init_splay_indices(links, ARRAY_SIZE(links), splay_indices, ARRAY_SIZE(splay_indices));
+
+        root = pRtlDelete(&links[i]);
+        expect_splay_indices(links, root, expected_indices[i].indices, expected_indices[i].index_count);
+
+        winetest_pop_context();
+    }
+
+    /* Test that root should be NULL when the splay tree is empty */
+    RtlInitializeSplayLinks(&links[0]);
+    root = pRtlDelete(&links[0]);
+    ok(root == NULL, "Got unexpected root.\n");
+}
+
+/* data is a place holder to align stored data on a 8 byte boundary */
+struct rtl_generic_table_entry
+{
+    RTL_SPLAY_LINKS splay_links;
+    LIST_ENTRY list_entry;
+    LONGLONG data;
+};
+
+static void *get_data_from_list_entry(LIST_ENTRY *list_entry)
+{
+    return (unsigned char *)list_entry + FIELD_OFFSET(struct rtl_generic_table_entry, data)
+        - FIELD_OFFSET(struct rtl_generic_table_entry, list_entry);
+}
+
+static RTL_SPLAY_LINKS *get_splay_links_from_data(void *data)
+{
+    return (RTL_SPLAY_LINKS *)((unsigned char *)data - FIELD_OFFSET(struct rtl_generic_table_entry, data));
+}
+
+static LIST_ENTRY *get_list_entry_from_data(void *data)
+{
+    return (LIST_ENTRY *)((unsigned char *)data - FIELD_OFFSET(struct rtl_generic_table_entry, data)
+        + FIELD_OFFSET(struct rtl_generic_table_entry, list_entry));
+}
+
+static RTL_GENERIC_COMPARE_RESULTS WINAPI generic_compare_proc(RTL_GENERIC_TABLE *table, void *p1, void *p2)
+{
+    int *value1 = p1, *value2 = p2;
+
+    if (*value1 < *value2)
+        return GenericLessThan;
+    else if (*value1 > *value2)
+        return GenericGreaterThan;
+    else
+        return GenericEqual;
+}
+
+static void * WINAPI generic_allocate_proc(RTL_GENERIC_TABLE *table, CLONG size)
+{
+    CLONG *last_allocated = table->TableContext;
+
+    if (last_allocated)
+        *last_allocated = size;
+    return malloc(size);
+}
+
+static void WINAPI generic_free_proc(RTL_GENERIC_TABLE *table, void *ptr)
+{
+    free(ptr);
+}
+
+static void test_RtlInitializeGenericTable(void)
+{
+    RTL_GENERIC_TABLE table;
+
+    if (!pRtlInitializeGenericTable)
+    {
+        win_skip("RtlInitializeGenericTable is unavailable.\n");
+        return;
+    }
+
+    memset(&table, 0xff, sizeof(table));
+    pRtlInitializeGenericTable(&table, generic_compare_proc, generic_allocate_proc,
+                               generic_free_proc, (void *)0xdeadbeef);
+    ok(!table.TableRoot, "Got unexpected TableRoot.\n");
+    ok(table.InsertOrderList.Flink == &table.InsertOrderList, "Got unexpected InsertOrderList.Flink.\n");
+    ok(table.InsertOrderList.Blink == &table.InsertOrderList, "Got unexpected InsertOrderList.Blink.\n");
+    ok(table.OrderedPointer == &table.InsertOrderList, "Got unexpected OrderedPointer.\n");
+    ok(!table.NumberGenericTableElements, "Got unexpected NumberGenericTableElements.\n");
+    ok(!table.WhichOrderedElement, "Got unexpected WhichOrderedElement.\n");
+    ok(table.CompareRoutine == generic_compare_proc, "Got unexpected CompareRoutine.\n");
+    ok(table.AllocateRoutine == generic_allocate_proc, "Got unexpected AllocateRoutine.\n");
+    ok(table.FreeRoutine == generic_free_proc, "Got unexpected FreeRoutine.\n");
+    ok(table.TableContext == (void *)0xdeadbeef, "Got unexpected TableContext.\n");
+}
+
+static void test_RtlNumberGenericTableElements(void)
+{
+    RTL_GENERIC_TABLE table;
+    ULONG count;
+
+    if (!pRtlNumberGenericTableElements)
+    {
+        win_skip("RtlNumberGenericTableElements is unavailable.\n");
+        return;
+    }
+
+    table.NumberGenericTableElements = 0xdeadbeef;
+    count = pRtlNumberGenericTableElements(&table);
+    ok(count == table.NumberGenericTableElements, "Got unexpected count.\n");
+}
+
+static void test_RtlIsGenericTableEmpty(void)
+{
+    RTL_GENERIC_TABLE table;
+    BOOLEAN empty;
+
+    if (!pRtlIsGenericTableEmpty)
+    {
+        win_skip("RtlIsGenericTableEmpty is unavailable.\n");
+        return;
+    }
+
+    /* Test that RtlIsGenericTableEmpty() uses TableRoot to check if a generic table is empty */
+    table.TableRoot = NULL;
+    table.NumberGenericTableElements = 1;
+    empty = pRtlIsGenericTableEmpty(&table);
+    ok(empty, "Expected empty.\n");
+
+    table.TableRoot = (RTL_SPLAY_LINKS *)1;
+    table.NumberGenericTableElements = 0;
+    empty = pRtlIsGenericTableEmpty(&table);
+    ok(!empty, "Expected not empty.\n");
+}
+
+static void test_RtlInsertElementGenericTable(void)
+{
+    static const int elements[] = {1, 9, 5, 4, 7, 2, 3, 8, 6};
+    int i, value, *ret, *first_ret = NULL, *last_ret = NULL;
+    ULONG count, size, last_allocated;
+    BOOLEAN new_element, success;
+    RTL_GENERIC_TABLE table;
+    LIST_ENTRY *entry;
+
+    if (!pRtlInsertElementGenericTable)
+    {
+        win_skip("RtlInsertElementGenericTable is unavailable.\n");
+        return;
+    }
+
+    pRtlInitializeGenericTable(&table, generic_compare_proc, generic_allocate_proc,
+                               generic_free_proc, (void *)&last_allocated);
+
+    for (i = 0; i < ARRAY_SIZE(elements); i++)
+    {
+        value = elements[i];
+        ret = pRtlInsertElementGenericTable(&table, &value, sizeof(value), &new_element);
+        ok(ret && *ret == value, "Got unexpected pointer.\n");
+        ok(new_element, "Expected new element.\n");
+        ok(table.TableRoot == get_splay_links_from_data(ret), "Got unexpected TableRoot.\n");
+
+        if (i == 0)
+            first_ret = ret;
+        if (i == ARRAY_SIZE(elements) - 1)
+            last_ret = ret;
+    }
+
+    count = pRtlNumberGenericTableElements(&table);
+    ok(count == ARRAY_SIZE(elements), "Got unexpected count %ld.\n", count);
+
+    /* Test that the allocated memory includes a RTL_SPLAY_LINKS and a LIST_ENTRY header. The data
+     * is aligned on a 8 byte boundary */
+    size = FIELD_OFFSET(struct rtl_generic_table_entry, data) + sizeof(value);
+    ok(last_allocated == size, "Expected %lu, got %lu.\n", size, last_allocated);
+
+    /* Check that InsertOrderList points to a doubly linked list of elements in insertion order */
+    ok(table.InsertOrderList.Flink == get_list_entry_from_data(first_ret), "Got unexpected Flink.\n");
+    ok(table.InsertOrderList.Blink == get_list_entry_from_data(last_ret), "Got unexpected Blink.\n");
+    for (i = 0, entry = table.InsertOrderList.Flink; entry->Flink != table.InsertOrderList.Flink;
+         i++, entry = entry->Flink)
+    {
+        ret = (int *)get_data_from_list_entry(entry);
+        ok(*ret == elements[i], "Got unexpected pointer, value %d.\n", *ret);
+    }
+    ok(i == ARRAY_SIZE(elements), "Got unexpected index %d.\n", i);
+    for (i = ARRAY_SIZE(elements) - 1, entry = table.InsertOrderList.Blink;
+         entry->Blink != table.InsertOrderList.Blink; i--, entry = entry->Blink)
+    {
+        ret = (int *)get_data_from_list_entry(entry);
+        ok(*ret == elements[i], "Got unexpected pointer, value %d.\n", *ret);
+    }
+    ok(i == -1, "Got unexpected index %d.\n", i);
+
+    /* Insert the same element again */
+    ret = pRtlInsertElementGenericTable(&table, &value, sizeof(value), &new_element);
+    ok(ret && *ret == value, "Got unexpected pointer.\n");
+    ok(!new_element, "Expected old element.\n");
+
+    count = pRtlNumberGenericTableElements(&table);
+    ok(count == ARRAY_SIZE(elements), "Got unexpected count %ld.\n", count);
+
+    /* Insert a new element with new_element pointer being NULL */
+    value = 0;
+    ret = pRtlInsertElementGenericTable(&table, &value, sizeof(value), NULL);
+    ok(ret && ret != &value && *ret == 0, "Got unexpected pointer.\n");
+
+    count = pRtlNumberGenericTableElements(&table);
+    ok(count == ARRAY_SIZE(elements) + 1, "Got unexpected count %ld.\n", count);
+
+    success = pRtlDeleteElementGenericTable(&table, &value);
+    ok(success, "RtlDeleteElementGenericTable failed.\n");
+
+    for (i = 0; i < ARRAY_SIZE(elements); i++)
+    {
+        value = elements[i];
+        success = pRtlDeleteElementGenericTable(&table, &value);
+        ok(success, "RtlDeleteElementGenericTable failed.\n");
+    }
+}
+
+static void test_RtlDeleteElementGenericTable(void)
+{
+    static const int elements[] = {1, 9, 5, 4, 7, 2, 3, 8, 6};
+    BOOLEAN success, new_element, empty;
+    RTL_GENERIC_TABLE table;
+    int i, value, *ret;
+
+    if (!pRtlDeleteElementGenericTable)
+    {
+        win_skip("RtlDeleteElementGenericTable is unavailable.\n");
+        return;
+    }
+
+    pRtlInitializeGenericTable(&table, generic_compare_proc, generic_allocate_proc, generic_free_proc, NULL);
+
+    success = pRtlDeleteElementGenericTable(&table, NULL);
+    ok(!success, "Got unexpected pointer.\n");
+
+    for (i = 0; i < ARRAY_SIZE(elements); i++)
+    {
+        value = elements[i];
+        ret = pRtlInsertElementGenericTable(&table, &value, sizeof(value), &new_element);
+        ok(ret && *ret == value, "Got unexpected pointer.\n");
+        ok(new_element, "Expected new element.\n");
+    }
+
+    for (i = 0; i < ARRAY_SIZE(elements); i++)
+    {
+        value = elements[i];
+        success = pRtlDeleteElementGenericTable(&table, &value);
+        ok(success, "RtlDeleteElementGenericTable failed.\n");
+        ok(table.NumberGenericTableElements == ARRAY_SIZE(elements) - i - 1,
+           "Got unexpected NumberGenericTableElements %lu.\n", table.NumberGenericTableElements);
+    }
+
+    empty = pRtlIsGenericTableEmpty(&table);
+    ok(empty, "Expected empty.\n");
+
+    /* Delete non-existent element */
+    value = elements[0];
+    success = pRtlDeleteElementGenericTable(&table, &value);
+    ok(!success, "RtlDeleteElementGenericTable succeeded.\n");
+}
+
+static void test_RtlLookupElementGenericTable(void)
+{
+    static const int elements[] = {1, 9, 5, 4, 7, 2, 3, 8, 6};
+    BOOLEAN new_element, success;
+    RTL_GENERIC_TABLE table;
+    int i, value, *ret;
+
+    if (!pRtlLookupElementGenericTable)
+    {
+        win_skip("RtlLookupElementGenericTable is unavailable.\n");
+        return;
+    }
+
+    pRtlInitializeGenericTable(&table, generic_compare_proc, generic_allocate_proc, generic_free_proc, NULL);
+
+    ret = pRtlLookupElementGenericTable(&table, NULL);
+    ok(!ret, "Got unexpected pointer.\n");
+
+    value = 1;
+    ret = pRtlLookupElementGenericTable(&table, &value);
+    ok(!ret, "Got unexpected pointer.\n");
+
+    for (i = 0; i < ARRAY_SIZE(elements); i++)
+    {
+        value = elements[i];
+        ret = pRtlInsertElementGenericTable(&table, &value, sizeof(value), &new_element);
+        ok(ret && *ret == value, "Got unexpected pointer.\n");
+        ok(new_element, "Expected new element.\n");
+    }
+
+    for (i = 0; i < ARRAY_SIZE(elements); i++)
+    {
+        value = elements[i];
+        ret = pRtlLookupElementGenericTable(&table, &value);
+        ok(ret && *ret == value, "Got unexpected pointer.\n");
+        ok(table.TableRoot == get_splay_links_from_data(ret), "Got unexpected TableRoot.\n");
+    }
+
+    for (i = 0; i < ARRAY_SIZE(elements); i++)
+    {
+        value = elements[i];
+        success = pRtlDeleteElementGenericTable(&table, &value);
+        ok(success, "RtlDeleteElementGenericTable failed.\n");
+    }
+}
+
 START_TEST(rtl)
 {
     InitFunctionPtrs();
@@ -3693,7 +5161,7 @@ START_TEST(rtl)
     test_RtlFillMemory();
     test_RtlFillMemoryUlong();
     test_RtlZeroMemory();
-    test_RtlUlonglongByteSwap();
+    test_RtlByteSwap();
     test_RtlUniform();
     test_RtlRandom();
     test_RtlAreAllAccessesGranted();
@@ -3725,4 +5193,26 @@ START_TEST(rtl)
     test_LdrRegisterDllNotification();
     test_DbgPrint();
     test_RtlDestroyHeap();
+    test_RtlCreateHeap();
+    test_RtlFirstFreeAce();
+    test_RtlInitializeSid();
+    test_RtlValidSecurityDescriptor();
+    test_RtlFindExportedRoutineByName();
+    test_RtlGetDeviceFamilyInfoEnum();
+    test_RtlConvertDeviceFamilyInfoToString();
+    test_rb_tree();
+    test_user_procs();
+    test_RtlSubtreePredecessor();
+    test_RtlSubtreeSuccessor();
+    test_RtlRealPredecessor();
+    test_RtlRealSuccessor();
+    test_RtlSplay();
+    test_RtlDeleteNoSplay();
+    test_RtlDelete();
+    test_RtlInitializeGenericTable();
+    test_RtlNumberGenericTableElements();
+    test_RtlIsGenericTableEmpty();
+    test_RtlInsertElementGenericTable();
+    test_RtlDeleteElementGenericTable();
+    test_RtlLookupElementGenericTable();
 }

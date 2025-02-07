@@ -37,7 +37,6 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(nsi);
 
-static unixlib_handle_t nsiproxy_handle;
 static HANDLE request_event;
 
 #define DECLARE_CRITICAL_SECTION(cs)                                    \
@@ -50,10 +49,17 @@ DECLARE_CRITICAL_SECTION( nsiproxy_cs );
 
 #define LIST_ENTRY_INIT( list )  { .Flink = &(list), .Blink = &(list) }
 static LIST_ENTRY request_queue = LIST_ENTRY_INIT( request_queue );
+static LIST_ENTRY notification_queue = LIST_ENTRY_INIT( notification_queue );
+
+struct notification_data
+{
+    NPI_MODULEID module;
+    UINT table;
+};
 
 static NTSTATUS nsiproxy_call( unsigned int code, void *args )
 {
-    return __wine_unix_call( nsiproxy_handle, code, args );
+    return WINE_UNIX_CALL( code, args );
 }
 
 enum unix_calls
@@ -65,6 +71,7 @@ enum unix_calls
     nsi_enumerate_all_ex,
     nsi_get_all_parameters_ex,
     nsi_get_parameter_ex,
+    nsi_get_notification,
 };
 
 static NTSTATUS nsiproxy_enumerate_all( IRP *irp )
@@ -79,7 +86,7 @@ static NTSTATUS nsiproxy_enumerate_all( IRP *irp )
 
     if (in_len != sizeof(*in)) return STATUS_INVALID_PARAMETER;
 
-    if (out_len < sizeof(DWORD) + (in->key_size + in->rw_size + in->dynamic_size + in->static_size) * in->count)
+    if (out_len < sizeof(UINT) + (in->key_size + in->rw_size + in->dynamic_size + in->static_size) * in->count)
         return STATUS_INVALID_PARAMETER;
 
     enum_all.unknown[0] = 0;
@@ -88,7 +95,7 @@ static NTSTATUS nsiproxy_enumerate_all( IRP *irp )
     enum_all.second_arg = in->second_arg;
     enum_all.module = &in->module;
     enum_all.table = in->table;
-    enum_all.key_data = (BYTE *)out + sizeof(DWORD);
+    enum_all.key_data = (BYTE *)out + sizeof(UINT);
     enum_all.key_size = in->key_size;
     enum_all.rw_data = (BYTE *)enum_all.key_data + in->key_size * in->count;
     enum_all.rw_size = in->rw_size;
@@ -102,7 +109,7 @@ static NTSTATUS nsiproxy_enumerate_all( IRP *irp )
     if (status == STATUS_SUCCESS || status == STATUS_BUFFER_OVERFLOW)
     {
         irp->IoStatus.Information = out_len;
-        *(DWORD *)out = enum_all.count;
+        *(UINT *)out = enum_all.count;
     }
     else irp->IoStatus.Information = 0;
 
@@ -180,19 +187,20 @@ static NTSTATUS nsiproxy_get_parameter( IRP *irp )
     return status;
 }
 
-static inline HANDLE irp_get_icmp_handle( IRP *irp )
+static inline icmp_handle irp_get_icmp_handle( IRP *irp )
 {
-    return irp->Tail.Overlay.DriverContext[0];
+    return PtrToUlong( irp->Tail.Overlay.DriverContext[0] );
 }
 
-static inline HANDLE irp_set_icmp_handle( IRP *irp, HANDLE handle )
+static inline icmp_handle irp_set_icmp_handle( IRP *irp, icmp_handle handle )
 {
-    return InterlockedExchangePointer( irp->Tail.Overlay.DriverContext, handle );
+    return PtrToUlong( InterlockedExchangePointer( irp->Tail.Overlay.DriverContext,
+                                                   ULongToPtr( handle ) ) );
 }
 
 static void WINAPI icmp_echo_cancel( DEVICE_OBJECT *device, IRP *irp )
 {
-    HANDLE handle;
+    struct icmp_cancel_listen_params params;
 
     TRACE( "device %p, irp %p.\n", device, irp );
 
@@ -205,8 +213,8 @@ static void WINAPI icmp_echo_cancel( DEVICE_OBJECT *device, IRP *irp )
        cancel it, or the irp has already finished.  If the handle
        does exist then notify the listen thread.  In all cases the irp
        will be completed elsewhere. */
-    handle = irp_get_icmp_handle( irp );
-    if (handle) nsiproxy_call( icmp_cancel_listen, handle );
+    params.handle = irp_get_icmp_handle( irp );
+    if (params.handle) nsiproxy_call( icmp_cancel_listen, &params );
 
     LeaveCriticalSection( &nsiproxy_cs );
 }
@@ -261,12 +269,60 @@ static NTSTATUS nsiproxy_icmp_echo( IRP *irp )
     return STATUS_PENDING;
 }
 
+static void WINAPI change_notification_cancel( DEVICE_OBJECT *device, IRP *irp )
+{
+    TRACE( "device %p, irp %p.\n", device, irp );
+
+    IoReleaseCancelSpinLock( irp->CancelIrql );
+
+    EnterCriticalSection( &nsiproxy_cs );
+    RemoveEntryList( &irp->Tail.Overlay.ListEntry );
+    free( irp->Tail.Overlay.DriverContext[0] );
+    LeaveCriticalSection( &nsiproxy_cs );
+
+    irp->IoStatus.Status = STATUS_CANCELLED;
+    IoCompleteRequest( irp, IO_NO_INCREMENT );
+}
+
+static NTSTATUS nsiproxy_change_notification( IRP *irp )
+{
+    IO_STACK_LOCATION *irpsp = IoGetCurrentIrpStackLocation( irp );
+    struct nsiproxy_request_notification *in = (struct nsiproxy_request_notification *)irp->AssociatedIrp.SystemBuffer;
+    DWORD in_len = irpsp->Parameters.DeviceIoControl.InputBufferLength;
+    struct notification_data *data;
+
+    TRACE( "irp %p.\n", irp );
+
+    if (in_len < sizeof(*in)) return STATUS_INVALID_PARAMETER;
+    if (!(data = calloc( 1, sizeof(*data) ))) return STATUS_NO_MEMORY;
+    /* FIXME: validate module and table. */
+
+    EnterCriticalSection( &nsiproxy_cs );
+    IoSetCancelRoutine( irp, change_notification_cancel );
+    if (irp->Cancel && !IoSetCancelRoutine( irp, NULL ))
+    {
+        /* IRP was canceled before we set cancel routine */
+        InitializeListHead( &irp->Tail.Overlay.ListEntry );
+        LeaveCriticalSection( &nsiproxy_cs );
+        free( data );
+        return STATUS_CANCELLED;
+    }
+    InsertTailList( &notification_queue, &irp->Tail.Overlay.ListEntry );
+    IoMarkIrpPending( irp );
+    data->module = in->module;
+    data->table = in->table;
+    irp->Tail.Overlay.DriverContext[0] = data;
+    LeaveCriticalSection( &nsiproxy_cs );
+
+    return STATUS_PENDING;
+}
+
 static NTSTATUS WINAPI nsi_ioctl( DEVICE_OBJECT *device, IRP *irp )
 {
     IO_STACK_LOCATION *irpsp = IoGetCurrentIrpStackLocation( irp );
     NTSTATUS status;
 
-    TRACE( "ioctl %x insize %u outsize %u\n",
+    TRACE( "ioctl %lx insize %lu outsize %lu\n",
            irpsp->Parameters.DeviceIoControl.IoControlCode,
            irpsp->Parameters.DeviceIoControl.InputBufferLength,
            irpsp->Parameters.DeviceIoControl.OutputBufferLength );
@@ -289,8 +345,12 @@ static NTSTATUS WINAPI nsi_ioctl( DEVICE_OBJECT *device, IRP *irp )
         status = nsiproxy_icmp_echo( irp );
         break;
 
+    case IOCTL_NSIPROXY_WINE_CHANGE_NOTIFICATION:
+        status = nsiproxy_change_notification( irp );
+        break;
+
     default:
-        FIXME( "ioctl %x not supported\n", irpsp->Parameters.DeviceIoControl.IoControlCode );
+        FIXME( "ioctl %lx not supported\n", irpsp->Parameters.DeviceIoControl.IoControlCode );
         status = STATUS_NOT_SUPPORTED;
         break;
     }
@@ -305,18 +365,16 @@ static NTSTATUS WINAPI nsi_ioctl( DEVICE_OBJECT *device, IRP *irp )
 
 static int add_device( DRIVER_OBJECT *driver )
 {
-    UNICODE_STRING name, link;
+    UNICODE_STRING name = RTL_CONSTANT_STRING( L"\\Device\\Nsi" );
+    UNICODE_STRING link = RTL_CONSTANT_STRING( L"\\??\\Nsi" );
     DEVICE_OBJECT *device;
     NTSTATUS status;
-
-    RtlInitUnicodeString( &name, L"\\Device\\Nsi" );
-    RtlInitUnicodeString( &link, L"\\??\\Nsi" );
 
     if (!(status = IoCreateDevice( driver, 0, &name, FILE_DEVICE_NETWORK, FILE_DEVICE_SECURE_OPEN, FALSE, &device )))
         status = IoCreateSymbolicLink( &link, &name );
     if (status)
     {
-        FIXME( "failed to create device error %x\n", status );
+        FIXME( "failed to create device error %lx\n", status );
         return 0;
     }
 
@@ -328,6 +386,7 @@ static DWORD WINAPI listen_thread_proc( void *arg )
     IRP *irp = arg;
     IO_STACK_LOCATION *irpsp = IoGetCurrentIrpStackLocation( irp );
     struct nsiproxy_icmp_echo *in = irp->AssociatedIrp.SystemBuffer;
+    struct icmp_close_params close_params;
     struct icmp_listen_params params;
     NTSTATUS status;
 
@@ -341,11 +400,12 @@ static DWORD WINAPI listen_thread_proc( void *arg )
     params.reply_len = irpsp->Parameters.DeviceIoControl.OutputBufferLength;
 
     status = nsiproxy_call( icmp_listen, &params );
-    TRACE( "icmp_listen rets %08x\n", status );
+    TRACE( "icmp_listen rets %08lx\n", status );
 
     EnterCriticalSection( &nsiproxy_cs );
 
-    nsiproxy_call( icmp_close, irp_set_icmp_handle( irp, NULL ) );
+    close_params.handle = irp_set_icmp_handle( irp, 0 );
+    nsiproxy_call( icmp_close, &close_params );
 
     irp->IoStatus.Status = status;
     if (status == STATUS_SUCCESS)
@@ -363,6 +423,7 @@ static void handle_queued_send_echo( IRP *irp )
 {
     struct nsiproxy_icmp_echo *in = (struct nsiproxy_icmp_echo *)irp->AssociatedIrp.SystemBuffer;
     struct icmp_send_echo_params params;
+    icmp_handle handle;
     NTSTATUS status;
 
     TRACE( "\n" );
@@ -373,9 +434,10 @@ static void handle_queued_send_echo( IRP *irp )
     params.ttl = in->ttl;
     params.tos = in->tos;
     params.dst = &in->dst;
+    params.handle = &handle;
 
     status = nsiproxy_call( icmp_send_echo, &params );
-    TRACE( "icmp_send_echo rets %08x\n", status );
+    TRACE( "icmp_send_echo rets %08lx\n", status );
 
     if (status != STATUS_PENDING)
     {
@@ -386,7 +448,7 @@ static void handle_queued_send_echo( IRP *irp )
     }
     else
     {
-        irp_set_icmp_handle( irp, params.handle );
+        irp_set_icmp_handle( irp, handle );
         RtlQueueWorkItem( listen_thread_proc, irp, WT_EXECUTELONGFUNCTION );
     }
 }
@@ -418,17 +480,52 @@ static DWORD WINAPI request_thread_proc( void *arg )
     return 0;
 }
 
+static DWORD WINAPI notification_thread_proc( void *arg )
+{
+    struct nsi_get_notification_params params;
+    LIST_ENTRY *entry, *next;
+    NTSTATUS status;
+
+    while (!(status = nsiproxy_call( nsi_get_notification, &params )))
+    {
+        EnterCriticalSection( &nsiproxy_cs );
+        for (entry = notification_queue.Flink; entry != &notification_queue; entry = next)
+        {
+            IRP *irp = CONTAINING_RECORD( entry, IRP, Tail.Overlay.ListEntry );
+            struct notification_data *data = irp->Tail.Overlay.DriverContext[0];
+
+            next = entry->Flink;
+            if(irp->Cancel)
+            {
+                /* Cancel routine should care of freeing data and completing IRP. */
+                TRACE( "irp %p canceled.\n", irp );
+                continue;
+            }
+            if (!NmrIsEqualNpiModuleId( &data->module, &params.module ) || data->table != params.table)
+                continue;
+
+            irp->IoStatus.Status = 0;
+            RemoveEntryList( entry );
+            irp->Tail.Overlay.DriverContext[0] = NULL;
+            free( data );
+            TRACE("completing irp %p.\n", irp);
+            IoCompleteRequest( irp, IO_NO_INCREMENT );
+        }
+        LeaveCriticalSection( &nsiproxy_cs );
+    }
+
+    WARN( "nsi_get_notification failed, status %#lx.\n", status );
+    return 0;
+}
+
 NTSTATUS WINAPI DriverEntry( DRIVER_OBJECT *driver, UNICODE_STRING *path )
 {
-    HMODULE instance;
     NTSTATUS status;
     HANDLE thread;
 
     TRACE( "(%p, %s)\n", driver, debugstr_w( path->Buffer ) );
 
-    RtlPcToFileHeader( &DriverEntry, (void *)&instance );
-    status = NtQueryVirtualMemory( GetCurrentProcess(), instance, MemoryWineUnixFuncs,
-                                   &nsiproxy_handle, sizeof(nsiproxy_handle), NULL );
+    status = __wine_init_unix_call();
     if (status) return status;
 
     driver->MajorFunction[IRP_MJ_DEVICE_CONTROL] = nsi_ioctl;
@@ -437,6 +534,8 @@ NTSTATUS WINAPI DriverEntry( DRIVER_OBJECT *driver, UNICODE_STRING *path )
 
     request_event = CreateEventW( NULL, FALSE, FALSE, NULL );
     thread = CreateThread( NULL, 0, request_thread_proc, NULL, 0, NULL );
+    CloseHandle( thread );
+    thread = CreateThread( NULL, 0, notification_thread_proc, NULL, 0, NULL );
     CloseHandle( thread );
 
     return STATUS_SUCCESS;

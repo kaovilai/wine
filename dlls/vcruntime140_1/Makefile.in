@@ -1,5 +1,9 @@
-EXTRADEFS = -DWINE_NO_LONG_TYPES
-MODULE = vcruntime140_1.dll
+MODULE  = vcruntime140_1.dll
+IMPORTS = vcruntime140
+PARENTSRC = ../msvcrt
 
-C_SRCS = \
-	except_x86_64.c
+SOURCES = \
+	except_arm64ec.c \
+	except_x86_64.c \
+	handler4.c \
+	main.c

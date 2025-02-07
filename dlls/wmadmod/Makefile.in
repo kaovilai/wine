@@ -1,4 +1,6 @@
 MODULE    = wmadmod.dll
+IMPORTS   = combase mfplat msdmo mfuuid dmoguids strmiids wmcodecdspuuid uuid
 
-C_SRCS = \
-	main.c
+SOURCES = \
+	wmadmod.c \
+	wmadmod.idl

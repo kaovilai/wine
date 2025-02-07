@@ -93,6 +93,8 @@ struct video_capture_device
     const struct caps *current_caps;
     struct caps *caps;
     LONG caps_count;
+    struct v4l2_format device_format;
+    BOOL started;
 
     int image_size, image_pitch;
     BYTE *image_data;
@@ -162,7 +164,7 @@ static NTSTATUS v4l_device_check_format( void *args )
     return E_FAIL;
 }
 
-static HRESULT set_caps(struct video_capture_device *device, const struct caps *caps)
+static HRESULT set_caps(struct video_capture_device *device, const struct caps *caps, BOOL try)
 {
     struct v4l2_format format = {0};
     LONG width, height, image_size;
@@ -182,7 +184,7 @@ static HRESULT set_caps(struct video_capture_device *device, const struct caps *
     format.fmt.pix.pixelformat = caps->pixelformat;
     format.fmt.pix.width = width;
     format.fmt.pix.height = height;
-    if (xioctl(device->fd, VIDIOC_S_FMT, &format) == -1
+    if (xioctl(device->fd, try ? VIDIOC_TRY_FMT : VIDIOC_S_FMT, &format) == -1
             || format.fmt.pix.pixelformat != caps->pixelformat
             || format.fmt.pix.width != width
             || format.fmt.pix.height != height)
@@ -192,6 +194,8 @@ static HRESULT set_caps(struct video_capture_device *device, const struct caps *
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
+    device->started = !try;
+    device->device_format = format;
     device->current_caps = caps;
     device->image_size = image_size;
     device->image_pitch = width * caps->video_info.bmiHeader.biBitCount / 8;
@@ -213,7 +217,7 @@ static NTSTATUS v4l_device_set_format( void *args )
     if (device->current_caps == caps)
         return S_OK;
 
-    return set_caps(device, caps);
+    return set_caps(device, caps, FALSE);
 }
 
 static NTSTATUS v4l_device_get_format( void *args )
@@ -387,8 +391,8 @@ static void fill_caps(__u32 pixelformat, __u32 width, __u32 height,
     caps->media_type.cbFormat = sizeof(VIDEOINFOHEADER);
     /* We reallocate the caps array, so pbFormat has to be set after all caps
      * have been enumerated. */
-    caps->config.MaxFrameInterval = 10000000 * max_fps;
-    caps->config.MinFrameInterval = 10000000 * min_fps;
+    caps->config.MaxFrameInterval = 10000000 / max_fps;
+    caps->config.MinFrameInterval = 10000000 / min_fps;
     caps->config.MaxOutputSize.cx = width;
     caps->config.MaxOutputSize.cy = height;
     caps->config.MinOutputSize.cx = width;
@@ -528,8 +532,8 @@ static NTSTATUS v4l_device_create( void *args )
             else if (frmival.type == V4L2_FRMIVAL_TYPE_STEPWISE
                     || frmival.type == V4L2_FRMIVAL_TYPE_CONTINUOUS)
             {
-                max_fps = frmival.stepwise.max.denominator / frmival.stepwise.max.numerator;
-                min_fps = frmival.stepwise.min.denominator / frmival.stepwise.min.numerator;
+                min_fps = frmival.stepwise.max.denominator / frmival.stepwise.max.numerator;
+                max_fps = frmival.stepwise.min.denominator / frmival.stepwise.min.numerator;
             }
         }
         else
@@ -550,7 +554,7 @@ static NTSTATUS v4l_device_create( void *args )
     for (i = 0; i < device->caps_count; ++i)
         device->caps[i].media_type.pbFormat = (BYTE *)&device->caps[i].video_info;
 
-    if (FAILED(hr = set_caps(device, &device->caps[0])))
+    if (FAILED(hr = set_caps(device, &device->caps[0], TRUE)))
     {
         if (hr == VFW_E_TYPE_NOT_ACCEPTED && !have_libv4l2)
             ERR_(winediag)("You may need libv4l2 to use this device.\n");
@@ -558,8 +562,8 @@ static NTSTATUS v4l_device_create( void *args )
     }
 
     TRACE("Format: %d bpp - %dx%d.\n", device->current_caps->video_info.bmiHeader.biBitCount,
-            device->current_caps->video_info.bmiHeader.biWidth,
-            device->current_caps->video_info.bmiHeader.biHeight);
+            (int)device->current_caps->video_info.bmiHeader.biWidth,
+            (int)device->current_caps->video_info.bmiHeader.biHeight);
 
     *params->device = (ULONG_PTR)device;
     return S_OK;
@@ -567,6 +571,22 @@ static NTSTATUS v4l_device_create( void *args )
 error:
     device_destroy(device);
     return E_FAIL;
+}
+
+static NTSTATUS v4l_device_start( void *args )
+{
+    const struct start_params *params = args;
+    struct video_capture_device *device = get_device(params->device);
+
+    if (device->started) return S_OK;
+
+    if (xioctl(device->fd, VIDIOC_S_FMT, &device->device_format) == -1)
+    {
+        ERR("Failed to set pixel format: %s.\n", strerror(errno));
+        return errno == EBUSY ? HRESULT_FROM_WIN32(ERROR_NO_SYSTEM_RESOURCES) : VFW_E_TYPE_NOT_ACCEPTED;
+    }
+    device->started = TRUE;
+    return S_OK;
 }
 
 static NTSTATUS v4l_device_destroy( void *args )
@@ -580,6 +600,7 @@ static NTSTATUS v4l_device_destroy( void *args )
 const unixlib_entry_t __wine_unix_call_funcs[] =
 {
     v4l_device_create,
+    v4l_device_start,
     v4l_device_destroy,
     v4l_device_check_format,
     v4l_device_set_format,
@@ -592,6 +613,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     v4l_device_set_prop,
     v4l_device_read_frame,
 };
+
+C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
 
 #ifdef _WIN64
 
@@ -844,6 +867,7 @@ static NTSTATUS wow64_v4l_device_read_frame( void *args )
 const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
 {
     wow64_v4l_device_create,
+    v4l_device_start,
     v4l_device_destroy,
     wow64_v4l_device_check_format,
     wow64_v4l_device_set_format,
@@ -856,6 +880,8 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     v4l_device_set_prop,
     wow64_v4l_device_read_frame,
 };
+
+C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count );
 
 #endif /* _WIN64 */
 

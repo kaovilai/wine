@@ -18,6 +18,11 @@
 
 var tests = [];
 
+sync_test("url", function() {
+    ok(document.URL === "http://winetest.example.org/index.html?dom.js", "document.URL = " + document.URL);
+    ok(!("documentURI" in document), "documentURI in document");
+});
+
 sync_test("input_selection", function() {
     var input = document.createElement("input");
     input.type = "text";
@@ -89,14 +94,29 @@ sync_test("textContent", function() {
 
 sync_test("ElementTraversal", function() {
     var div = document.createElement("div");
-    div.innerHTML = "abc<b>bold</b><script>/* */<script><div>text</div>def";
+    div.innerHTML = "abc<b>bold</b><script>/* */</script><div>text</div>def";
+    ok(div.childElementCount === 3, "div.childElementCount = " + div.childElementCount);
     ok(div.firstElementChild.outerHTML === "<b>bold</b>",
             "div.firstElementChild.outerHTML = " + div.firstElementChild.outerHTML);
+    ok(div.lastElementChild.outerHTML === "<div>text</div>",
+            "div.lastElementChild.outerHTML = " + div.lastElementChild.outerHTML);
+    ok(div.firstElementChild.nextElementSibling.outerHTML === "<script>/* */</script>",
+            "div.firstElementChild.nextElementSibling.outerHTML = " + div.firstElementChild.nextElementSibling.outerHTML);
+    ok(div.lastElementChild.nextElementSibling === null,
+            "div.lastElementChild.nextElementSibling = " + div.lastElementChild.nextElementSibling);
+    ok(div.lastElementChild.previousElementSibling.outerHTML === "<script>/* */</script>",
+            "div.lastElementChild.previousElementSibling.outerHTML = " + div.lastElementChild.previousElementSibling.outerHTML);
+    ok(div.firstElementChild.previousElementSibling === null,
+            "div.firstElementChild.previousElementSibling = " + div.firstElementChild.previousElementSibling);
 
     div.innerHTML = "abc";
+    ok(div.childElementCount === 0, "div.childElementCount = " + div.childElementCount);
     ok(div.firstElementChild === null, "div.firstElementChild = " + div.firstElementChild);
+    ok(div.lastElementChild === null, "div.lastElementChild = " + div.lastElementChild);
 
+    ok(!("childElementCount" in document), "childElementCount found in document");
     ok(!("firstElementChild" in document), "firstElementChild found in document");
+    ok(!("nextElementSibling" in document), "nextElementSibling found in document");
 });
 
 sync_test("head", function() {
@@ -224,9 +244,19 @@ sync_test("query_selector", function() {
         + '</div>'
         + '<script class="class1"></script>';
 
-    var e = document.querySelector("nomatch");
+    var frag = document.createDocumentFragment()
+    var e = document.createElement("div");
+    e.innerHTML = '<div class="class3"></div><a id="class3" class="class4"></a></div>';
+    frag.appendChild(e);
+    var e = document.createElement("script");
+    e.className = "class3";
+    frag.appendChild(e);
+
+    e = document.querySelector("nomatch");
     ok(e === null, "e = " + e);
     e = document.body.querySelector("nomatch");
+    ok(e === null, "e = " + e);
+    e = frag.querySelector("nomatch");
     ok(e === null, "e = " + e);
 
     e = document.querySelector(".class1");
@@ -235,11 +265,39 @@ sync_test("query_selector", function() {
     ok(e.tagName === "DIV", "e.tagName = " + e.tagName);
     ok(e.msMatchesSelector(".class1") === true, "msMatchesSelector returned " + e.msMatchesSelector(".class1"));
     ok(e.msMatchesSelector(".class2") === false, "msMatchesSelector returned " + e.msMatchesSelector(".class2"));
+    e = document.querySelector(".class3");
+    ok(e === null, "e = " + e);
+    e = document.body.querySelector(".class3");
+    ok(e === null, "e = " + e);
+
+    e = frag.querySelector(".class3");
+    ok(e.tagName === "DIV", "e.tagName = " + e.tagName);
+    e = frag.querySelector(".class4");
+    ok(e.tagName === "A", "e.tagName = " + e.tagName);
+    e = frag.querySelector(".class1");
+    ok(e === null, "e = " + e);
+    e = frag.querySelector(".class2");
+    ok(e === null, "e = " + e);
 
     e = document.querySelector("a");
     ok(e.tagName === "A", "e.tagName = " + e.tagName);
     e = document.body.querySelector("a");
     ok(e.tagName === "A", "e.tagName = " + e.tagName);
+    e = frag.querySelector("a");
+    ok(e.tagName === "A", "e.tagName = " + e.tagName);
+
+    e = document.querySelectorAll(".class1");
+    ok(e.length === 3, "e.length = " + e.length);
+    e = document.body.querySelectorAll(".class1");
+    ok(e.length === 3, "e.length = " + e.length);
+    e = document.querySelectorAll(".class2");
+    ok(e.length === 1, "e.length = " + e.length);
+    e = document.body.querySelectorAll(".class2");
+    ok(e.length === 1, "e.length = " + e.length);
+    e = frag.querySelectorAll(".class3");
+    ok(e.length === 2, "e.length = " + e.length);
+    e = frag.querySelectorAll(".class4");
+    ok(e.length === 1, "e.length = " + e.length);
 });
 
 sync_test("compare_position", function() {
@@ -274,9 +332,29 @@ sync_test("rects", function() {
     ok(rects[0].top === rect.top, "rects[0].top = " + rects[0].top + " rect.top = " + rect.top);
     ok(rects[0].bottom === rect.bottom, "rects[0].bottom = " + rects[0].bottom + " rect.bottom = " + rect.bottom);
 
+    ok("" + rects[0] === "[object ClientRect]", "rects[0] = " + rects[0]);
+    ok(rects.hasOwnProperty("0"), 'rects.hasOwnProperty("0") = ' + rects.hasOwnProperty("0"));
+    todo_wine.
+    ok(rects.hasOwnProperty("1"), 'rects.hasOwnProperty("1") = ' + rects.hasOwnProperty("1"));
+    var desc = Object.getOwnPropertyDescriptor(rects, "0");
+    ok(desc.writable === true, "writable = " + desc.writable);
+    todo_wine.
+    ok(desc.enumerable === true, "enumerable = " + desc.enumerable);
+    ok(desc.configurable === true, "configurable = " + desc.configurable);
+    ok("" + desc.value === "[object ClientRect]", "desc.value = " + desc.value);
+
+    ok(rect.height === rect.bottom - rect.top, "rect.height = " + rect.height + " rect.bottom = " + rect.bottom + " rect.top = " + rect.top);
+    ok(rect.width === rect.right - rect.left, "rect.width = " + rect.width + " rect.right = " + rect.right + " rect.left = " + rect.left);
+
     elem = document.createElement("style");
     rects = elem.getClientRects();
     ok(rects.length === 0, "rect.length = " + rects.length);
+});
+
+sync_test("document_lastModified", function() {
+    // actually it seems to be rounded up from about ~250ms above a sec, but be more conservative with the check
+    var diff = Date.parse(document.lastModified) - performance.timing.navigationStart;
+    ok(diff > -1000 && diff < 1000, "lastModified too far from navigationStart: " + diff);
 });
 
 sync_test("document_owner", function() {
@@ -333,6 +411,20 @@ sync_test("style_properties", function() {
     ok(val === "", "removeProperty() returned " + val);
     ok(style.testVal === "test", "testVal = " + style.testVal);
 
+    val = style.getPropertyValue("testVal");
+    ok(val === "", 'style.getPropertyValue("testVal") = ' + val);
+    ok(style.testVal === "test", "testVal = " + style.testVal);
+
+    style.setProperty("testVal", "1px");
+    val = style.getPropertyValue("testVal");
+    ok(val === "", 'style.getPropertyValue("testVal") = ' + val);
+    ok(style.testVal === "test", "testVal = " + style.testVal);
+
+    style.setProperty("test", "1px");
+    val = style.getPropertyValue("test");
+    ok(val === "", 'style.getPropertyValue("test") = ' + val);
+    ok(!("test" in style), "test in style");
+
     style["z-index"] = 1;
     ok(style.zIndex === 1, "zIndex = " + style.zIndex);
     ok(style["z-index"] === 1, "z-index = " + style["z-index"]);
@@ -378,12 +470,35 @@ sync_test("style_properties", function() {
     try {
         current_style.zIndex = 1;
         ok(false, "expected exception");
-    }catch(e) {}
+    }catch(e) {
+        todo_wine.
+        ok(e.name === "NoModificationAllowedError", "setting current_style.zIndex threw " + e.name);
+    }
 
     try {
         computed_style.zIndex = 1;
         ok(false, "expected exception");
-    }catch(e) {}
+    }catch(e) {
+        todo_wine.
+        ok(e.name === "NoModificationAllowedError", "setting computed_style.zIndex threw " + e.name);
+    }
+
+    /* prop not found in any IHTMLCurrentStyle* interfaces, but exposed from common CSSStyleDeclarationPrototype */
+    try {
+        current_style.perspective = 1;
+        ok(false, "expected exception");
+    }catch(e) {
+        todo_wine.
+        ok(e.name === "NoModificationAllowedError", "setting current_style.perspective threw " + e.name);
+    }
+
+    try {
+        computed_style.perspective = 1;
+        ok(false, "expected exception");
+    }catch(e) {
+        todo_wine.
+        ok(e.name === "NoModificationAllowedError", "setting computed_style.perspective threw " + e.name);
+    }
 
     elem = elem.nextSibling;
     computed_style = window.getComputedStyle(elem);
@@ -392,6 +507,21 @@ sync_test("style_properties", function() {
     ok(computed_style.zIndex === 4, "computed_style.zIndex = " + computed_style.zIndex);
 
     window.getComputedStyle(elem, null);
+
+    /* ms* prefixed styles alias */
+    var list = [
+        [ "transform", "translate(5px, 5px)" ],
+        [ "transition", "background-color 0.5s linear 0.1s" ]
+    ];
+    for(var i = 0; i < list.length; i++) {
+        var s = list[i][0], v = list[i][1], ms = "ms" + s[0].toUpperCase() + s.substring(1);
+        style[s] = v;
+        ok(style[s] === v, "style." + s + " = " + style[s] + ", expected " + v);
+        ok(style[ms] === v, "style." + ms + " = " + style[ms] + ", expected " + v);
+        elem.style[ms] = v;
+        ok(elem.style[s] === v, "elem.style." + s + " = " + elem.style[s] + ", expected " + v);
+        ok(elem.style[ms] === v, "elem.style." + ms + " = " + elem.style[ms] + ", expected " + v);
+    }
 });
 
 sync_test("stylesheets", function() {
@@ -458,7 +588,29 @@ sync_test("storage", function() {
        "typeof(window.localStorage) = " + typeof(window.localStorage));
 
     var item = sessionStorage.getItem("nonexisting");
-    ok(item === null, "item = " + item);
+    ok(item === null, "'nonexisting' item = " + item);
+    item = sessionStorage["nonexisting"];
+    ok(item === undefined, "[nonexisting] item = " + item);
+    ok(!("nonexisting" in sessionStorage), "nonexisting in sessionStorage");
+
+    sessionStorage.setItem("foobar", 42);
+    ok("foobar" in sessionStorage, "foobar not in sessionStorage");
+    ok(sessionStorage.hasOwnProperty("foobar"), "foobar not prop of sessionStorage");
+    item = sessionStorage.getItem("foobar");
+    ok(item === "42", "'foobar' item = " + item);
+    item = sessionStorage["foobar"];
+    ok(item === "42", "[foobar] item = " + item);
+    sessionStorage.removeItem("foobar");
+    item = sessionStorage["foobar"];
+    ok(item === undefined, "[foobar] item after removal = " + item);
+
+    sessionStorage["barfoo"] = true;
+    ok("barfoo" in sessionStorage, "barfoo not in sessionStorage");
+    ok(sessionStorage.hasOwnProperty("barfoo"), "barfoo not prop of sessionStorage");
+    item = sessionStorage["barfoo"];
+    ok(item === "true", "[barfoo] item = " + item);
+    item = sessionStorage.getItem("barfoo");
+    ok(item === "true", "'barfoo' item = " + item);
 });
 
 async_test("animation", function() {
@@ -494,13 +646,21 @@ sync_test("elem_props", function() {
 });
 
 async_test("animation_frame", function() {
-    var id = requestAnimationFrame(function(x) {
+    var id = requestAnimationFrame(function(x) { ok(false, "request was supposed to be cancelled"); });
+    id = cancelAnimationFrame(id);
+    ok(id === undefined, "cancelAnimationFrame returned " + id);
+
+    id = requestAnimationFrame(function(x) {
         ok(this === window, "this != window");
         ok(typeof(x) === "number", "x = " + x);
         ok(arguments.length === 1, "arguments.length = " + arguments.length);
         next_test();
     });
+    cancelAnimationFrame(0);
+    clearInterval(id);
+    clearTimeout(id);
     ok(typeof(id) === "number", "id = " + id);
+    ok(id !== 0, "id = 0");
 });
 
 sync_test("title", function() {
@@ -510,6 +670,24 @@ sync_test("title", function() {
     elem.title = "test";
     ok(elem.title === "test", "div.title = " + elem.title);
     ok(elem.getAttribute("title") === "test", "title attribute = " + elem.getAttribute("title"));
+
+    var orig = document.title;
+    document.title = "w i n e test";
+    var title = document.getElementsByTagName("title")[0];
+    ok(title.text === "w i n e test", "<title> element text = " + title.text);
+    title.text = "winetest";
+    ok(title.text === "winetest", "<title> element text after change = " + title.text);
+    ok(document.title === "winetest", "document.title after <title> change = " + document.title);
+
+    elem = document.createElement("title");
+    ok(elem.text === "", "detached <title> element text = " + elem.text);
+    elem.text = "foobar";
+    ok(elem.text === "foobar", "detached <title> element text after change = " + elem.text);
+    ok(document.title === "winetest", "document.title after detached <title> change = " + document.title);
+
+    title.parentNode.replaceChild(elem, title);
+    ok(document.title === "foobar", "document.title after <title> replaced = " + document.title);
+    document.title = orig;
 });
 
 sync_test("disabled", function() {
@@ -555,19 +733,31 @@ sync_test("hasAttribute", function() {
 
 sync_test("classList", function() {
     var elem = document.createElement("div");
-    var classList = elem.classList;
+    var classList = elem.classList, i, r;
+
+    var props = [ "add", "contains", "item", "length", "remove", "toggle" ];
+    for(i = 0; i < props.length; i++)
+        ok(props[i] in classList, props[i] + " not found in classList.");
+
+    props = [ "entries", "forEach", "keys", "replace", "supports", "value", "values"];
+    for(i = 0; i < props.length; i++)
+        ok(!(props[i] in classList), props[i] + " found in classList.");
 
     classList.add("a");
     ok(elem.className === "a", "Expected className 'a', got " + elem.className);
+    ok(classList.length === 1, "Expected length 1 for className 'a', got " + classList.length);
 
     classList.add("b");
     ok(elem.className === "a b", "Expected className 'a b', got " + elem.className);
+    ok(classList.length === 2, "Expected length 2 for className 'a b', got " + classList.length);
 
     classList.add("c");
     ok(elem.className === "a b c", "Expected className 'a b c', got " + elem.className);
+    ok(classList.length === 3, "Expected length 3 for className 'a b c', got " + classList.length);
 
     classList.add(4);
     ok(elem.className === "a b c 4", "Expected className 'a b c 4', got " + elem.className);
+    ok(classList.length === 4, "Expected length 4 for className 'a b c 4', got " + classList.length);
 
     classList.add("c");
     ok(elem.className === "a b c 4", "(2) Expected className 'a b c 4', got " + elem.className);
@@ -608,6 +798,56 @@ sync_test("classList", function() {
         exception = true;
     }
     ok(exception, "Expected exception for classList.add(\"e f\")");
+
+    exception = false;
+    try
+    {
+        classList.contains();
+    }
+    catch(e)
+    {
+        exception = true;
+    }
+    ok(exception, "Expected exception for classList.contains()");
+
+    exception = false;
+    try
+    {
+        classList.contains("");
+    }
+    catch(e)
+    {
+        exception = true;
+    }
+    ok(exception, "Expected exception for classList.contains(\"\")");
+
+    exception = false;
+    try
+    {
+        classList.contains("a b");
+    }
+    catch(e)
+    {
+        exception = true;
+    }
+    ok(exception, "Expected exception for classList.contains(\"a b\")");
+
+    ok(classList.contains("4") === true, "contains: expected '4' to return true");
+    ok(classList.contains("b") === true, "contains: expected 'b' to return true");
+    ok(classList.contains("d") === false, "contains: expected 'd' to return false");
+
+    r = classList.item(-1);
+    ok(r === null, "item(-1) = " + r);
+    r = classList.item(0);
+    ok(r === "a", "item(0) = " + r);
+    r = classList.item(1);
+    ok(r === "b", "item(1) = " + r);
+    r = classList.item(2);
+    ok(r === "c", "item(2) = " + r);
+    r = classList.item(3);
+    ok(r === "4", "item(3) = " + r);
+    r = classList.item(4);
+    ok(r === null, "item(4) = " + r);
 
     classList.remove("e");
     ok(elem.className === "a b c 4", "remove: expected className 'a b c 4', got " + elem.className);
@@ -652,7 +892,122 @@ sync_test("classList", function() {
     classList.remove("b");
     ok(elem.className === "", "remove: expected className '', got " + elem.className);
 
+    exception = false;
+    try
+    {
+        classList.toggle();
+    }
+    catch(e)
+    {
+        exception = true;
+    }
+    ok(exception, "Expected exception for classList.toggle()");
+
+    exception = false;
+    try
+    {
+        classList.toggle("");
+    }
+    catch(e)
+    {
+        exception = true;
+    }
+    ok(exception, "Expected exception for classList.toggle(\"\")");
+
+    exception = false;
+    try
+    {
+        classList.toggle("a b");
+    }
+    catch(e)
+    {
+        exception = true;
+    }
+    ok(exception, "Expected exception for classList.toggle(\"a b\")");
+
+    // toggle's second arg is not implemented by IE, and ignored
+    r = classList.toggle("abc");
+    ok(r === true, "toggle('abc') returned " + r);
+    ok(elem.className === "abc", "toggle('abc'): got className " + elem.className);
+
+    r = classList.toggle("def", false);
+    ok(r === true, "toggle('def', false) returned " + r);
+    ok(elem.className === "abc def", "toggle('def', false): got className " + elem.className);
+
+    r = classList.toggle("123", 1234);
+    ok(r === true, "toggle('123', 1234) returned " + r);
+    ok(elem.className === "abc def 123", "toggle('123', 1234): got className " + elem.className);
+
+    r = classList.toggle("def", true);
+    ok(r === false, "toggle('def', true) returned " + r);
+    ok(elem.className === "abc 123", "toggle('def', true): got className " + elem.className);
+
+    r = classList.toggle("123", null);
+    ok(r === false, "toggle('123', null) returned " + r);
+    ok(elem.className === "abc", "toggle('123', null): got className " + elem.className);
+
     elem.className = "  testclass    foobar  ";
+    ok(classList.length === 2, "Expected length 2 for className '  testclass    foobar  ', got " + classList.length);
     ok(("" + classList) === "  testclass    foobar  ", "Expected classList value '  testclass    foobar  ', got " + classList);
     ok(classList.toString() === "  testclass    foobar  ", "Expected classList toString '  testclass    foobar  ', got " + classList.toString());
+
+    r = classList[-1];
+    ok(r === null, "classList[-1] = " + r);
+    r = classList[0];
+    ok(r === "testclass", "classList[0] = " + r);
+    r = classList[1];
+    ok(r === "foobar", "classList[1] = " + r);
+    r = classList[2];
+    ok(r === null, "classList[2] = " + r);
+
+    classList[0] = "barfoo";
+    classList[2] = "added";
+    ok(classList.toString() === "  testclass    foobar  ", "Expected classList toString to not be changed after setting indexed props, got " + classList.toString());
+
+    try
+    {
+        classList[0]();
+        ok(false, "Expected exception calling classList[0]");
+    }
+    catch(e)
+    {
+        ok(e.number === 0xa138a - 0x80000000, "Calling classList[0] threw " + e.number);
+    }
+
+    try
+    {
+        new classList[0]();
+        ok(false, "Expected exception calling classList[0] as constructor");
+    }
+    catch(e)
+    {
+        ok(e.number === 0xa01bd - 0x80000000, "Calling classList[0] as constructor threw " + e.number);
+    }
+});
+
+sync_test("importNode", function() {
+    var node, node2, orig_node, doc = document.implementation.createHTMLDocument("TestDoc");
+    doc.body.innerHTML = '<div id="test"><span/></div>';
+    orig_node = doc.getElementById("test");
+
+    node = document.importNode(orig_node, false);
+    ok(node !== orig_node, "node = orig_node");
+    ok(orig_node.hasChildNodes() === true, "orig_node does not have child nodes");
+    ok(orig_node.parentNode === doc.body, "orig_node.parentNode = " + orig_node.parentNode);
+    ok(node.hasChildNodes() === false, "node has child nodes with shallow import");
+    ok(node.parentNode === null, "node.parentNode = " + node.parentNode);
+
+    node = document.importNode(orig_node, true);
+    ok(node !== orig_node, "node = orig_node");
+    ok(orig_node.hasChildNodes() === true, "orig_node does not have child nodes");
+    ok(orig_node.parentNode === doc.body, "orig_node.parentNode = " + orig_node.parentNode);
+    ok(node.hasChildNodes() === true, "node does not have child nodes with deep import");
+    ok(node.parentNode === null, "node.parentNode = " + node.parentNode);
+
+    node2 = document.importNode(node, false);
+    ok(node !== node2, "node = node2");
+    ok(node.hasChildNodes() === true, "node does not have child nodes");
+    ok(node.parentNode === null, "node.parentNode = " + node.parentNode);
+    ok(node2.hasChildNodes() === false, "node2 has child nodes");
+    ok(node2.parentNode === null, "node2.parentNode = " + node2.parentNode);
 });

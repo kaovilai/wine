@@ -23,12 +23,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <signal.h>
 #include <limits.h>
 #include <sys/types.h>
-#ifdef HAVE_SYS_SYSCTL_H
-# include <sys/sysctl.h>
-#endif
 
 #include "wmc.h"
 #include "utils.h"
@@ -98,7 +94,8 @@ char *output_name = NULL;	/* The name given by the -o option */
 const char *input_name = NULL;	/* The name given on the command-line */
 char *header_name = NULL;	/* The name given by the -H option */
 
-const char *nlsdirs[3] = { NULL, NLSDIR, NULL };
+static const char *bindir;
+const char *nlsdirs[3] = { NULL, DATADIR "/wine/nls", NULL };
 
 int line_number = 1;		/* The current line */
 int char_number = 1;		/* The current char pos within the line */
@@ -145,30 +142,6 @@ static void cleanup_files(void)
 static void exit_on_signal( int sig )
 {
     exit(1);  /* this will call the atexit functions */
-}
-
-static void init_argv0_dir( const char *argv0 )
-{
-#ifndef _WIN32
-    char *dir;
-
-#if defined(__linux__) || defined(__FreeBSD_kernel__) || defined(__NetBSD__)
-    dir = realpath( "/proc/self/exe", NULL );
-#elif defined (__FreeBSD__) || defined(__DragonFly__)
-    static int pathname[] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
-    size_t path_size = PATH_MAX;
-    char *path = malloc( path_size );
-    if (path && !sysctl( pathname, sizeof(pathname)/sizeof(pathname[0]), path, &path_size, NULL, 0 ))
-        dir = realpath( path, NULL );
-    free( path );
-#else
-    dir = realpath( argv0, NULL );
-#endif
-    if (!dir) return;
-    dir = get_dirname( dir );
-    if (strendswith( dir, "/tools/wmc" )) nlsdirs[0] = strmake( "%s/../../nls", dir );
-    else nlsdirs[0] = strmake( "%s/%s", dir, BIN_TO_NLSDIR );
-#endif
 }
 
 static void option_callback( int optc, char *optarg )
@@ -239,12 +212,9 @@ int main(int argc,char *argv[])
         struct strarray files;
 
 	atexit( cleanup_files );
-	signal( SIGTERM, exit_on_signal );
-	signal( SIGINT, exit_on_signal );
-#ifdef SIGHUP
-	signal( SIGHUP, exit_on_signal );
-#endif
-        init_argv0_dir( argv[0] );
+        init_signals( exit_on_signal );
+        bindir = get_bindir( argv[0] );
+        nlsdirs[0] = get_nlsdir( bindir, "/tools/wmc" );
 
 	/* First rebuild the commandline to put in destination */
 	/* Could be done through env[], but not all OS-es support it */

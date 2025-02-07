@@ -102,11 +102,11 @@ void set_dirty(GeckoBrowser *browser, VARIANT_BOOL dirty)
     if(dirty) {
         nsres = nsIEditor_IncrementModificationCount(browser->editor, 1);
         if(NS_FAILED(nsres))
-            ERR("IncrementModificationCount failed: %08x\n", nsres);
+            ERR("IncrementModificationCount failed: %08lx\n", nsres);
     }else {
         nsres = nsIEditor_ResetModificationCount(browser->editor);
         if(NS_FAILED(nsres))
-            ERR("ResetModificationCount failed: %08x\n", nsres);
+            ERR("ResetModificationCount failed: %08lx\n", nsres);
     }
 }
 
@@ -119,7 +119,7 @@ static void do_ns_editor_command(GeckoBrowser *This, const char *cmd)
 
     nsres = nsIController_DoCommand(This->editor_controller, cmd);
     if(NS_FAILED(nsres))
-        ERR("DoCommand(%s) failed: %08x\n", debugstr_a(cmd), nsres);
+        ERR("DoCommand(%s) failed: %08lx\n", debugstr_a(cmd), nsres);
 }
 
 static nsresult get_ns_command_state(GeckoBrowser *This, const char *cmd, nsICommandParams *nsparam)
@@ -129,13 +129,13 @@ static nsresult get_ns_command_state(GeckoBrowser *This, const char *cmd, nsICom
 
     nsres = get_nsinterface((nsISupports*)This->webbrowser, &IID_nsICommandManager, (void**)&cmdmgr);
     if(NS_FAILED(nsres)) {
-        ERR("Could not get nsICommandManager: %08x\n", nsres);
+        ERR("Could not get nsICommandManager: %08lx\n", nsres);
         return nsres;
     }
 
-    nsres = nsICommandManager_GetCommandState(cmdmgr, cmd, This->doc->basedoc.window->window_proxy, nsparam);
+    nsres = nsICommandManager_GetCommandState(cmdmgr, cmd, This->doc->window->window_proxy, nsparam);
     if(NS_FAILED(nsres))
-        ERR("GetCommandState(%s) failed: %08x\n", debugstr_a(cmd), nsres);
+        ERR("GetCommandState(%s) failed: %08lx\n", debugstr_a(cmd), nsres);
 
     nsICommandManager_Release(cmdmgr);
     return nsres;
@@ -146,7 +146,7 @@ static DWORD query_ns_edit_status(HTMLDocumentNode *doc, const char *nscmd)
     nsICommandParams *nsparam;
     cpp_bool b = FALSE;
 
-    if(doc->browser->usermode != EDITMODE || doc->basedoc.window->readystate < READYSTATE_INTERACTIVE)
+    if(doc->browser->usermode != EDITMODE || !doc->window->base.outer_window || doc->window->base.outer_window->readystate < READYSTATE_INTERACTIVE)
         return OLECMDF_SUPPORTED;
 
     if(nscmd) {
@@ -180,11 +180,16 @@ static DWORD query_align_status(HTMLDocumentNode *doc, const WCHAR *align)
     cpp_bool b;
     nsresult nsres;
 
-    if(doc->browser->usermode != EDITMODE || doc->basedoc.window->readystate < READYSTATE_INTERACTIVE)
+    if(doc->browser->usermode != EDITMODE || !doc->window->base.outer_window || doc->window->base.outer_window->readystate < READYSTATE_INTERACTIVE)
         return OLECMDF_SUPPORTED;
 
+    if(!doc->html_document) {
+        FIXME("Not implemented for XML document\n");
+        return E_NOTIMPL;
+    }
+
     nsAString_Init(&justify_str, align);
-    nsres = nsIDOMHTMLDocument_QueryCommandState(doc->nsdoc, &justify_str, &b);
+    nsres = nsIDOMHTMLDocument_QueryCommandState(doc->html_document, &justify_str, &b);
     nsAString_Finish(&justify_str);
     if(NS_SUCCEEDED(nsres) && b)
         ret |= OLECMDF_LATCHED;
@@ -198,9 +203,12 @@ static nsISelection *get_ns_selection(HTMLDocumentNode *doc)
     nsISelection *nsselection = NULL;
     nsresult nsres;
 
-    nsres = nsIDOMWindow_GetSelection(doc->basedoc.window->nswindow, &nsselection);
+    if(!doc->window)
+        return NULL;
+
+    nsres = nsIDOMWindow_GetSelection(doc->window->dom_window, &nsselection);
     if(NS_FAILED(nsres))
-        ERR("GetSelection failed %08x\n", nsres);
+        ERR("GetSelection failed %08lx\n", nsres);
 
     return nsselection;
 
@@ -330,7 +338,7 @@ static void set_font_size(HTMLDocumentNode *doc, LPCWSTR size)
 
     nsISelection_GetRangeCount(nsselection, &range_cnt);
     if(range_cnt != 1) {
-        FIXME("range_cnt %d not supprted\n", range_cnt);
+        FIXME("range_cnt %ld not supprted\n", range_cnt);
         if(!range_cnt) {
             nsISelection_Release(nsselection);
             return;
@@ -518,9 +526,9 @@ static HRESULT exec_fontname(HTMLDocumentNode *doc, DWORD cmdexecopt, VARIANT *i
 
         TRACE("%s\n", debugstr_w(V_BSTR(in)));
 
-        stra = heap_strdupWtoA(V_BSTR(in));
+        stra = strdupWtoA(V_BSTR(in));
         set_ns_fontname(doc, stra);
-        heap_free(stra);
+        free(stra);
 
         update_doc(doc->browser->doc, UPDATE_UI);
     }
@@ -545,12 +553,12 @@ static HRESULT exec_fontname(HTMLDocumentNode *doc, DWORD cmdexecopt, VARIANT *i
         nsICommandParams_Release(nsparam);
 
         len = MultiByteToWideChar(CP_ACP, 0, stra, -1, NULL, 0);
-        strw = heap_alloc(len*sizeof(WCHAR));
+        strw = malloc(len * sizeof(WCHAR));
         MultiByteToWideChar(CP_ACP, 0, stra, -1, strw, len);
         nsfree(stra);
 
         V_BSTR(out) = SysAllocString(strw);
-        heap_free(strw);
+        free(strw);
     }
 
     return S_OK;
@@ -565,7 +573,7 @@ static HRESULT exec_forecolor(HTMLDocumentNode *doc, DWORD cmdexecopt, VARIANT *
             nsICommandParams *nsparam = create_nscommand_params();
             char color_str[10];
 
-            sprintf(color_str, "#%02x%02x%02x",
+            sprintf(color_str, "#%02lx%02lx%02lx",
                     V_I4(in)&0xff, (V_I4(in)>>8)&0xff, (V_I4(in)>>16)&0xff);
 
             nsICommandParams_SetCStringValue(nsparam, NSSTATE_ATTRIBUTE, color_str);
@@ -661,7 +669,7 @@ static HRESULT query_justify(HTMLDocumentNode *doc, OLECMD *cmd)
     case IDM_JUSTIFYLEFT:
         TRACE("(%p) IDM_JUSTIFYLEFT\n", doc);
         /* FIXME: We should set OLECMDF_LATCHED only if it's set explicitly. */
-        if(doc->browser->usermode != EDITMODE || doc->basedoc.window->readystate < READYSTATE_INTERACTIVE)
+        if(doc->browser->usermode != EDITMODE || !doc->window->base.outer_window || doc->window->base.outer_window->readystate < READYSTATE_INTERACTIVE)
             cmd->cmdf = OLECMDF_SUPPORTED;
         else
             cmd->cmdf = OLECMDF_SUPPORTED | OLECMDF_ENABLED;
@@ -792,7 +800,7 @@ static HRESULT exec_composesettings(HTMLDocumentNode *doc, DWORD cmdexecopt, VAR
         return E_INVALIDARG;
     }
 
-    TRACE("(%p)->(%x %s)\n", doc, cmdexecopt, debugstr_w(V_BSTR(in)));
+    TRACE("(%p)->(%lx %s)\n", doc, cmdexecopt, debugstr_w(V_BSTR(in)));
 
     update_doc(doc->browser->doc, UPDATE_UI);
 
@@ -877,7 +885,7 @@ HRESULT editor_exec_paste(HTMLDocumentNode *doc, DWORD cmdexecopt, VARIANT *in, 
 
 static HRESULT exec_setdirty(HTMLDocumentNode *doc, DWORD cmdexecopt, VARIANT *in, VARIANT *out)
 {
-    TRACE("(%p)->(%08x %p %p)\n", doc, cmdexecopt, in, out);
+    TRACE("(%p)->(%08lx %p %p)\n", doc, cmdexecopt, in, out);
 
     if(!in)
         return S_OK;
@@ -1010,7 +1018,7 @@ static INT_PTR CALLBACK hyperlink_dlgproc(HWND hwnd, UINT msg, WPARAM wparam, LP
                     /* get string of currently selected hyperlink type */
                     item = SendMessageW((HWND)lparam, CB_GETCURSEL, 0, 0);
                     len = SendMessageW((HWND)lparam, CB_GETLBTEXTLEN, item, 0);
-                    type = HeapAlloc(GetProcessHeap(), 0, (len + 1) * sizeof(WCHAR));
+                    type = malloc((len + 1) * sizeof(WCHAR));
                     SendMessageW((HWND)lparam, CB_GETLBTEXT, item, (LPARAM)type);
 
                     if (!wcscmp(type, L"(other)"))
@@ -1018,7 +1026,7 @@ static INT_PTR CALLBACK hyperlink_dlgproc(HWND hwnd, UINT msg, WPARAM wparam, LP
 
                     /* get current URL */
                     len = GetWindowTextLengthW(hwndURL);
-                    url = HeapAlloc(GetProcessHeap(), 0, (len + lstrlenW(type) + 3) * sizeof(WCHAR));
+                    url = malloc((len + lstrlenW(type) + 3) * sizeof(WCHAR));
                     GetWindowTextW(hwndURL, url, len + 1);
 
                     /* strip off old protocol */
@@ -1038,8 +1046,8 @@ static INT_PTR CALLBACK hyperlink_dlgproc(HWND hwnd, UINT msg, WPARAM wparam, LP
 
                     SetWindowTextW(hwndURL, url);
 
-                    HeapFree(GetProcessHeap(), 0, url);
-                    HeapFree(GetProcessHeap(), 0, type);
+                    free(url);
+                    free(type);
                     return TRUE;
                 }
             }
@@ -1063,7 +1071,7 @@ static HRESULT exec_hyperlink(HTMLDocumentNode *doc, DWORD cmdexecopt, VARIANT *
     INT ret;
     HRESULT hres = E_FAIL;
 
-    TRACE("%p, 0x%x, %p, %p\n", doc, cmdexecopt, in, out);
+    TRACE("%p, 0x%lx, %p, %p\n", doc, cmdexecopt, in, out);
 
     if (cmdexecopt == OLECMDEXECOPT_DONTPROMPTUSER)
     {
@@ -1081,8 +1089,8 @@ static HRESULT exec_hyperlink(HTMLDocumentNode *doc, DWORD cmdexecopt, VARIANT *
             return OLECMDERR_E_CANCELED;
     }
 
-    if(!doc->nsdoc) {
-        WARN("NULL nsdoc\n");
+    if(!doc->dom_document) {
+        WARN("NULL dom_document\n");
         return E_UNEXPECTED;
     }
 
@@ -1105,7 +1113,7 @@ static HRESULT exec_hyperlink(HTMLDocumentNode *doc, DWORD cmdexecopt, VARIANT *
         nsIDOMNode *unused_node;
         nsIDOMText *text_node;
 
-        nsIDOMHTMLDocument_CreateTextNode(doc->nsdoc, &ns_url, &text_node);
+        nsIDOMDocument_CreateTextNode(doc->dom_document, &ns_url, &text_node);
 
         /* wrap the <a> tags around the text element */
         nsIDOMElement_AppendChild(anchor_elem, (nsIDOMNode*)text_node, &unused_node);
@@ -1136,7 +1144,7 @@ static HRESULT exec_hyperlink(HTMLDocumentNode *doc, DWORD cmdexecopt, VARIANT *
     if (cmdexecopt != OLECMDEXECOPT_DONTPROMPTUSER)
         SysFreeString(url);
 
-    TRACE("-- 0x%08x\n", hres);
+    TRACE("-- 0x%08lx\n", hres);
     return hres;
 }
 
@@ -1191,9 +1199,9 @@ HRESULT setup_edit_mode(HTMLDocumentObj *doc)
 
     doc->nscontainer->usermode = EDITMODE;
 
-    if(doc->basedoc.window->mon) {
+    if(doc->window->mon) {
         CLSID clsid = IID_NULL;
-        hres = IMoniker_GetClassID(doc->basedoc.window->mon, &clsid);
+        hres = IMoniker_GetClassID(doc->window->mon, &clsid);
         if(SUCCEEDED(hres)) {
             /* We should use IMoniker::Save here */
             FIXME("Use CLSID %s\n", debugstr_guid(&clsid));
@@ -1203,7 +1211,7 @@ HRESULT setup_edit_mode(HTMLDocumentObj *doc)
     if(doc->frame)
         IOleInPlaceFrame_SetStatusText(doc->frame, NULL);
 
-    doc->basedoc.window->readystate = READYSTATE_UNINITIALIZED;
+    doc->window->readystate = READYSTATE_UNINITIALIZED;
 
     if(doc->client) {
         IOleCommandTarget *cmdtrg;
@@ -1228,28 +1236,28 @@ HRESULT setup_edit_mode(HTMLDocumentObj *doc)
         hres = IDocHostUIHandler_GetHostInfo(doc->hostui, &hostinfo);
         if(SUCCEEDED(hres))
             /* FIXME: use hostinfo */
-            TRACE("hostinfo = {%u %08x %08x %s %s}\n",
+            TRACE("hostinfo = {%lu %08lx %08lx %s %s}\n",
                     hostinfo.cbSize, hostinfo.dwFlags, hostinfo.dwDoubleClick,
                     debugstr_w(hostinfo.pchHostCss), debugstr_w(hostinfo.pchHostNS));
     }
 
     update_doc(doc, UPDATE_UI);
 
-    if(doc->basedoc.window->mon) {
+    if(doc->window->mon) {
         /* FIXME: We should find nicer way to do this */
         remove_target_tasks(doc->task_magic);
 
-        mon = doc->basedoc.window->mon;
+        mon = doc->window->mon;
         IMoniker_AddRef(mon);
     }else {
         hres = CreateURLMoniker(NULL, L"about:blank", &mon);
         if(FAILED(hres)) {
-            FIXME("CreateURLMoniker failed: %08x\n", hres);
+            FIXME("CreateURLMoniker failed: %08lx\n", hres);
             return hres;
         }
     }
 
-    hres = IPersistMoniker_Load(&doc->basedoc.IPersistMoniker_iface, TRUE, mon, NULL, 0);
+    hres = IPersistMoniker_Load(&doc->IPersistMoniker_iface, TRUE, mon, NULL, 0);
     IMoniker_Release(mon);
     if(FAILED(hres))
         return hres;
@@ -1266,11 +1274,11 @@ HRESULT setup_edit_mode(HTMLDocumentObj *doc)
 
         if(doc->hostui)
             IDocHostUIHandler_ShowUI(doc->hostui, DOCHOSTUITYPE_AUTHOR,
-                    &doc->basedoc.IOleInPlaceActiveObject_iface, &doc->basedoc.IOleCommandTarget_iface,
+                    &doc->IOleInPlaceActiveObject_iface, &doc->IOleCommandTarget_iface,
                     doc->frame, doc->ip_window);
 
         if(doc->ip_window)
-            call_set_active_object(doc->ip_window, &doc->basedoc.IOleInPlaceActiveObject_iface);
+            call_set_active_object(doc->ip_window, &doc->IOleInPlaceActiveObject_iface);
 
         SetRectEmpty(&rcBorderWidths);
         if(doc->frame)

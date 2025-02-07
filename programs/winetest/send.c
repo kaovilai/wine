@@ -30,7 +30,7 @@
 #define URL_PATH "/submit"
 #define SEP "--8<--cut-here--8<--"
 #define CONTENT_HEADERS "Content-Type: multipart/form-data; boundary=\"" SEP "\"\r\n" \
-                        "Content-Length: %u\r\n\r\n"
+                        "Content-Length: %lu\r\n\r\n"
 static const char body1[] = "--" SEP "\r\n"
     "Content-Disposition: form-data; name=\"reportfile\"; filename=\"%s\"\r\n"
     "Content-Type: application/octet-stream\r\n\r\n";
@@ -103,19 +103,17 @@ send_buf (SOCKET s, const char *buf, size_t length)
     return 0;
 }
 
-static int WINAPIV send_str (SOCKET s, ...)
+static int send_str (SOCKET s, ...)
 {
     va_list ap;
     char *p;
     int ret;
-    size_t len;
 
     va_start (ap, s);
-    p = vstrmake (&len, ap);
+    p = vstrmake (ap);
     va_end (ap);
-    if (!p) return 1;
-    ret = send_buf (s, p, len);
-    heap_free (p);
+    ret = send_buf (s, p, strlen(p));
+    free(p);
     return ret;
 }
 
@@ -165,10 +163,11 @@ send_file_direct (const char * url, const char *name)
 
     report (R_STATUS, "Sending header");
     filesize = GetFileSize( file, NULL );
-    str = strmake (&total, body1, name);
+    str = strmake (body1, name);
+    total = strlen(str);
     ret = send_str (s, head, filesize + total + sizeof body2 - 1) ||
         send_buf (s, str, total);
-    heap_free (str);
+    free(str);
     if (ret) {
         report (R_WARNING, "Error sending header: %d, %d",
                 errno, WSAGetLastError ());
@@ -219,10 +218,10 @@ send_file_direct (const char * url, const char *name)
         return 1;
     }
 
-    str = strmake (&count, "Received %s (%d bytes).\n",
-                   name, filesize);
+    str = strmake("Received %s (%ld bytes).\n", name, filesize);
+    count = strlen(str);
     ret = total < count || memcmp (str, buffer + total - count, count) != 0;
-    heap_free (str);
+    free(str);
     if (ret) {
         buffer[total] = 0;
         str = strstr (buffer, "\r\n\r\n");
@@ -291,12 +290,12 @@ send_file_wininet (const char *url, const char *name)
         uc.dwSchemeLength = uc.dwHostNameLength = uc.dwUserNameLength =
             uc.dwPasswordLength = uc.dwUrlPathLength = uc.dwExtraInfoLength =
             strlen(url) + 1;
-        uc.lpszScheme = heap_alloc (uc.dwSchemeLength);
-        uc.lpszHostName = heap_alloc (uc.dwHostNameLength);
-        uc.lpszUserName = heap_alloc (uc.dwUserNameLength);
-        uc.lpszPassword = heap_alloc (uc.dwPasswordLength);
-        uc.lpszUrlPath = heap_alloc (uc.dwUrlPathLength);
-        uc.lpszExtraInfo = heap_alloc (uc.dwExtraInfoLength);
+        uc.lpszScheme = xalloc(uc.dwSchemeLength);
+        uc.lpszHostName = xalloc(uc.dwHostNameLength);
+        uc.lpszUserName = xalloc(uc.dwUserNameLength);
+        uc.lpszPassword = xalloc(uc.dwPasswordLength);
+        uc.lpszUrlPath = xalloc(uc.dwUrlPathLength);
+        uc.lpszExtraInfo = xalloc(uc.dwExtraInfoLength);
         if (!pInternetCrackUrlA(url, 0, 0, &uc)) {
             report (R_WARNING, "Can't parse submit URL '%s'", url);
             goto done;
@@ -308,11 +307,11 @@ send_file_wininet (const char *url, const char *name)
 
     } else {
         uc.nScheme = INTERNET_SCHEME_HTTP;
-        uc.lpszHostName = heap_strdup (SERVER_NAME);
+        uc.lpszHostName = xstrdup(SERVER_NAME);
         uc.nPort = INTERNET_DEFAULT_HTTP_PORT;
-        uc.lpszUserName = heap_strdup ("");
-        uc.lpszPassword = heap_strdup ("");
-        uc.lpszUrlPath = heap_strdup (URL_PATH);
+        uc.lpszUserName = xstrdup("");
+        uc.lpszPassword = xstrdup("");
+        uc.lpszUrlPath = xstrdup(URL_PATH);
     }
 
     ret = 1;
@@ -356,12 +355,13 @@ send_file_wininet (const char *url, const char *name)
 
     report (R_STATUS, "Sending request");
     filesize = GetFileSize( file, NULL );
-    str = strmake (&total, body1, name);
+    str = strmake(body1, name);
+    total = strlen(str);
     memset(&buffers_in, 0, sizeof(INTERNET_BUFFERSA));
     buffers_in.dwStructSize = sizeof(INTERNET_BUFFERSA);
     buffers_in.dwBufferTotal = filesize + total + sizeof body2 - 1;
-    buffers_in.lpcszHeader = strmake (&count, extra_headers, buffers_in.dwBufferTotal);
-    buffers_in.dwHeadersLength = count;
+    buffers_in.lpcszHeader = strmake(extra_headers, buffers_in.dwBufferTotal);
+    buffers_in.dwHeadersLength = strlen(buffers_in.lpcszHeader);
     if (! pHttpSendRequestEx(request, &buffers_in, NULL, 0, 0)) {
         report (R_WARNING, "Unable to send request, error %u", GetLastError());
         goto done;
@@ -412,9 +412,9 @@ send_file_wininet (const char *url, const char *name)
     }
     while (bytes_read != 0);
 
-    heap_free (str);
-    str = strmake (&count, "Received %s (%d bytes).\n",
-                   name, filesize);
+    free(str);
+    str = strmake("Received %s (%ld bytes).\n", name, filesize);
+    count = strlen(str);
     if (total < count || memcmp (str, buffer + total - count, count) != 0) {
         buffer[total] = 0;
         report (R_ERROR, "Can't submit logfile '%s'. "
@@ -422,14 +422,14 @@ send_file_wininet (const char *url, const char *name)
     }
 
  done:
-    heap_free (uc.lpszScheme);
-    heap_free (uc.lpszHostName);
-    heap_free (uc.lpszUserName);
-    heap_free (uc.lpszPassword);
-    heap_free (uc.lpszUrlPath);
-    heap_free (uc.lpszExtraInfo);
-    heap_free((void *)buffers_in.lpcszHeader);
-    heap_free(str);
+    free(uc.lpszScheme);
+    free(uc.lpszHostName);
+    free(uc.lpszUserName);
+    free(uc.lpszPassword);
+    free(uc.lpszUrlPath);
+    free(uc.lpszExtraInfo);
+    free((void *)buffers_in.lpcszHeader);
+    free(str);
     if (pInternetCloseHandle != NULL && request != NULL)
         pInternetCloseHandle (request);
     if (pInternetCloseHandle != NULL && connection != NULL)

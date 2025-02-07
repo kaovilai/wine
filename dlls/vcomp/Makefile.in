@@ -1,5 +1,5 @@
-EXTRADEFS = -DWINE_NO_LONG_TYPES
 MODULE = vcomp.dll
 
-C_SRCS = \
+SOURCES = \
+	fork.c \
 	main.c

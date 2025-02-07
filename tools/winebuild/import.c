@@ -28,8 +28,8 @@
 #include <string.h>
 #include <stdarg.h>
 
-#include "wine/list.h"
 #include "build.h"
+#include "wine/list.h"
 
 /* standard C functions that are also exported from ntdll */
 static const char *stdc_names[] =
@@ -62,6 +62,7 @@ static const char *stdc_names[] =
     "isxdigit",
     "labs",
     "log",
+    "longjmp",
     "mbstowcs",
     "memchr",
     "memcmp",
@@ -207,16 +208,18 @@ static const char valid_chars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS
 /* encode a dll name into a linker-compatible name */
 static char *encode_dll_name( const char *name )
 {
-    char *p, *ret;
+    char *p, *ret, *ret_end;
     int len = strlen(name);
 
     if (strendswith( name, ".dll" )) len -= 4;
     if (strspn( name, valid_chars ) >= len) return strmake( "%.*s", len, name );
 
     ret = p = xmalloc( len * 4 + 1 );
+    ret_end = ret + (len * 4 + 1);
     for ( ; len > 0; len--, name++)
     {
-        if (!strchr( valid_chars, *name )) p += sprintf( p, "$x%02x", *name );
+        if (!strchr( valid_chars, *name ))
+            p += snprintf( p, ret_end - p, "$x%02x", *name );
         else *p++ = *name;
     }
     *p = 0;
@@ -295,128 +298,21 @@ static struct import *find_import_dll( const char *name )
     return NULL;
 }
 
-/* open the .so library for a given dll in a specified path */
-static char *try_library_path( const char *path, const char *name )
+/* build the dll exported name from the import lib name */
+static char *get_dll_name( const char *name )
 {
-    char *buffer;
-    int fd;
+    char *ret = xmalloc( strlen(name) + 5 );
 
-    buffer = strmake( "%s/lib%s.def", path, name );
-
-    /* check if the file exists */
-    if ((fd = open( buffer, O_RDONLY )) != -1)
-    {
-        close( fd );
-        return buffer;
-    }
-    free( buffer );
-    return NULL;
-}
-
-/* find the .def import library for a given dll */
-static char *find_library( const char *name )
-{
-    char *fullname;
-    unsigned int i;
-
-    for (i = 0; i < lib_path.count; i++)
-    {
-        if ((fullname = try_library_path( lib_path.str[i], name ))) return fullname;
-    }
-    fatal_error( "could not open .def file for %s\n", name );
-    return NULL;
-}
-
-/* read in the list of exported symbols of an import library */
-static DLLSPEC *read_import_lib( struct import *imp )
-{
-    FILE *f;
-    int i;
-    struct stat stat;
-    struct import *prev_imp;
-    DLLSPEC *spec = alloc_dll_spec();
-
-    f = open_input_file( NULL, imp->full_name );
-    fstat( fileno(f), &stat );
-    imp->dev = stat.st_dev;
-    imp->ino = stat.st_ino;
-    if (!parse_def_file( f, spec )) exit( 1 );
-    close_input_file( f );
-
-    /* check if we already imported that library from a different file */
-    if ((prev_imp = find_import_dll( spec->file_name )))
-    {
-        if (prev_imp->dev != imp->dev || prev_imp->ino != imp->ino)
-            fatal_error( "%s and %s have the same export name '%s'\n",
-                         prev_imp->full_name, imp->full_name, spec->file_name );
-        free_dll_spec( spec );
-        return NULL;  /* the same file was already loaded, ignore this one */
-    }
-
-    if (spec->nb_entry_points)
-    {
-        imp->exports = xmalloc( spec->nb_entry_points * sizeof(*imp->exports) );
-        for (i = 0; i < spec->nb_entry_points; i++)
-            imp->exports[imp->nb_exports++] = &spec->entry_points[i];
-        qsort( imp->exports, imp->nb_exports, sizeof(*imp->exports), func_cmp );
-    }
-    return spec;
-}
-
-/* build the dll exported name from the import lib name or path */
-static char *get_dll_name( const char *name, const char *filename )
-{
-    char *ret;
-
-    if (filename)
-    {
-        const char *basename = get_basename( filename );
-        if (!strncmp( basename, "lib", 3 )) basename += 3;
-        ret = xmalloc( strlen(basename) + 5 );
-        strcpy( ret, basename );
-        if (strendswith( ret, ".def" )) ret[strlen(ret)-4] = 0;
-    }
-    else
-    {
-        ret = xmalloc( strlen(name) + 5 );
-        strcpy( ret, name );
-    }
+    strcpy( ret, name );
     if (!strchr( ret, '.' )) strcat( ret, ".dll" );
     return ret;
-}
-
-/* add a dll to the list of imports */
-void add_import_dll( const char *name, const char *filename )
-{
-    DLLSPEC *spec;
-    char *dll_name = get_dll_name( name, filename );
-    struct import *imp = xmalloc( sizeof(*imp) );
-
-    memset( imp, 0, sizeof(*imp) );
-
-    if (filename) imp->full_name = xstrdup( filename );
-    else imp->full_name = find_library( name );
-
-    if (!(spec = read_import_lib( imp )))
-    {
-        free_imports( imp );
-        return;
-    }
-
-    imp->dll_name = spec->file_name ? spec->file_name : dll_name;
-    imp->c_name = make_c_identifier( imp->dll_name );
-
-    if (is_delayed_import( imp->dll_name ))
-        list_add_tail( &dll_delayed, &imp->entry );
-    else
-        list_add_tail( &dll_imports, &imp->entry );
 }
 
 /* add a library to the list of delayed imports */
 void add_delayed_import( const char *name )
 {
     struct import *imp;
-    char *fullname = get_dll_name( name, NULL );
+    char *fullname = get_dll_name( name );
 
     strarray_add( &delayed_imports, fullname );
     if ((imp = find_import_dll( fullname )))
@@ -493,15 +389,13 @@ static void add_undef_import( const char *name, int is_ordinal )
 }
 
 /* check if the spec file exports any stubs */
-static int has_stubs( const DLLSPEC *spec )
+static int has_stubs( const struct exports *exports )
 {
     int i;
 
-    if (unix_lib) return 0;
-
-    for (i = 0; i < spec->nb_entry_points; i++)
+    for (i = 0; i < exports->nb_entry_points; i++)
     {
-        ORDDEF *odp = &spec->entry_points[i];
+        ORDDEF *odp = exports->entry_points[i];
         if (odp->type == TYPE_STUB) return 1;
     }
     return 0;
@@ -512,12 +406,12 @@ static void add_extra_undef_symbols( DLLSPEC *spec )
 {
     add_extra_ld_symbol( spec->init_func );
     if (spec->type == SPEC_WIN16) add_extra_ld_symbol( "DllMain" );
-    if (has_stubs( spec )) add_extra_ld_symbol( "__wine_spec_unimplemented_stub" );
-    if (delayed_imports.count) add_extra_ld_symbol( "__wine_spec_delay_load" );
+    if (has_stubs( &spec->exports )) add_extra_ld_symbol( "__wine_spec_unimplemented_stub" );
+    if (delayed_imports.count) add_extra_ld_symbol( "__delayLoadHelper2" );
 }
 
 /* check if a given imported dll is not needed, taking forwards into account */
-static int check_unused( const struct import* imp, const DLLSPEC *spec )
+static int check_unused( const struct import* imp, const struct exports *exports )
 {
     int i;
     const char *file_name = imp->dll_name;
@@ -525,9 +419,9 @@ static int check_unused( const struct import* imp, const DLLSPEC *spec )
     const char *p = strchr( file_name, '.' );
     if (p && !strcasecmp( p, ".dll" )) len = p - file_name;
 
-    for (i = spec->base; i <= spec->limit; i++)
+    for (i = exports->base; i <= exports->limit; i++)
     {
-        ORDDEF *odp = spec->ordinals[i];
+        ORDDEF *odp = exports->ordinals[i];
         if (!odp || !(odp->flags & FLAG_FORWARD)) continue;
         if (!strncasecmp( odp->link_name, file_name, len ) &&
             odp->link_name[len] == '.')
@@ -543,11 +437,9 @@ static void check_undefined_forwards( DLLSPEC *spec )
     char *link_name, *api_name, *dll_name, *p;
     int i;
 
-    if (unix_lib) return;
-
-    for (i = 0; i < spec->nb_entry_points; i++)
+    for (i = 0; i < spec->exports.nb_entry_points; i++)
     {
-        ORDDEF *odp = &spec->entry_points[i];
+        ORDDEF *odp = spec->exports.entry_points[i];
 
         if (!(odp->flags & FLAG_FORWARD)) continue;
 
@@ -555,7 +447,7 @@ static void check_undefined_forwards( DLLSPEC *spec )
         p = strrchr( link_name, '.' );
         *p = 0;
         api_name = p + 1;
-        dll_name = get_dll_name( link_name, NULL );
+        dll_name = get_dll_name( link_name );
 
         if ((imp = find_import_dll( dll_name )))
         {
@@ -575,14 +467,11 @@ static void check_undefined_exports( DLLSPEC *spec )
 {
     int i;
 
-    if (unix_lib) return;
-
-    for (i = 0; i < spec->nb_entry_points; i++)
+    for (i = 0; i < spec->exports.nb_entry_points; i++)
     {
-        ORDDEF *odp = &spec->entry_points[i];
+        ORDDEF *odp = spec->exports.entry_points[i];
         if (odp->type == TYPE_STUB || odp->type == TYPE_ABS || odp->type == TYPE_VARIABLE) continue;
         if (odp->flags & FLAG_FORWARD) continue;
-        if (odp->flags & FLAG_SYSCALL) continue;
         if (find_name( odp->link_name, undef_symbols ))
         {
             switch(odp->type)
@@ -600,7 +489,6 @@ static void check_undefined_exports( DLLSPEC *spec )
                             spec->src_name, odp->lineno, odp->link_name );
                 break;
             default:
-                if (!strcmp( odp->link_name, "__wine_syscall_dispatcher" )) break;
                 error( "%s:%d: external symbol '%s' is not a function\n",
                        spec->src_name, odp->lineno, odp->link_name );
                 break;
@@ -616,24 +504,23 @@ static char *create_undef_symbols_file( DLLSPEC *spec )
     int i;
     unsigned int j;
 
-    if (unix_lib) return NULL;
-
     as_file = open_temp_output_file( ".s" );
     output( "\t.data\n" );
 
-    for (i = 0; i < spec->nb_entry_points; i++)
+    for (i = 0; i < spec->exports.nb_entry_points; i++)
     {
-        ORDDEF *odp = &spec->entry_points[i];
+        ORDDEF *odp = spec->exports.entry_points[i];
         if (odp->type == TYPE_STUB || odp->type == TYPE_ABS || odp->type == TYPE_VARIABLE) continue;
         if (odp->flags & FLAG_FORWARD) continue;
-        if (odp->flags & FLAG_SYSCALL) continue;
         output( "\t%s %s\n", get_asm_ptr_keyword(), asm_name( get_link_name( odp )));
     }
     for (j = 0; j < extra_ld_symbols.count; j++)
         output( "\t%s %s\n", get_asm_ptr_keyword(), asm_name(extra_ld_symbols.str[j]) );
+
+    output_gnu_stack_note();
     fclose( output_file );
 
-    obj_file = get_temp_file_name( output_file_name, ".o" );
+    obj_file = make_temp_file( output_file_name, ".o" );
     assemble_file( as_file, obj_file );
     return obj_file;
 }
@@ -646,7 +533,7 @@ static const char *ldcombine_files( DLLSPEC *spec, struct strarray files )
     struct strarray args = get_ld_command();
 
     undef_file = create_undef_symbols_file( spec );
-    ld_tmp_file = get_temp_file_name( output_file_name, ".o" );
+    ld_tmp_file = make_temp_file( output_file_name, ".o" );
 
     strarray_add( &args, "-r" );
     strarray_add( &args, "-o" );
@@ -730,7 +617,7 @@ void resolve_dll_imports( DLLSPEC *spec, struct list *list )
         if (!imp->nb_imports)
         {
             /* the dll is not used, get rid of it */
-            if (check_unused( imp, spec ))
+            if (check_unused( imp, &spec->exports ))
                 warning( "winebuild: %s imported but no symbols used\n", imp->dll_name );
             list_remove( &imp->entry );
             free_imports( imp );
@@ -758,24 +645,16 @@ int is_undefined( const char *name )
 void output_get_pc_thunk(void)
 {
     assert( target.cpu == CPU_i386 );
-    output( "\n\t.text\n" );
-    output( "\t.align %d\n", get_alignment(4) );
-    output( "\t%s\n", func_declaration("__wine_spec_get_pc_thunk_eax") );
-    output( "%s:\n", asm_name("__wine_spec_get_pc_thunk_eax") );
-    output_cfi( ".cfi_startproc" );
+    output_function_header( "__wine_spec_get_pc_thunk_eax", 0 );
     output( "\tmovl (%%esp),%%eax\n" );
     output( "\tret\n" );
-    output_cfi( ".cfi_endproc" );
     output_function_size( "__wine_spec_get_pc_thunk_eax" );
 }
 
 /* output a single import thunk */
 static void output_import_thunk( const char *name, const char *table, int pos )
 {
-    output( "\n\t.align %d\n", get_alignment(4) );
-    output( "\t%s\n", func_declaration(name) );
-    output( "%s\n", asm_globl(name) );
-    output_cfi( ".cfi_startproc" );
+    output_function_header( name, 1 );
 
     switch (target.cpu)
     {
@@ -794,30 +673,10 @@ static void output_import_thunk( const char *name, const char *table, int pos )
     case CPU_x86_64:
         output( "\tjmpq *%s+%d(%%rip)\n", table, pos );
         break;
-    case CPU_ARM:
-        if (UsePIC)
-        {
-            output( "\tldr ip, 2f\n");
-            output( "1:\tadd ip, pc\n" );
-            output( "\tldr pc, [ip]\n");
-            output( "2:\t.long %s+%u-1b-%u\n", table, pos, thumb_mode ? 4 : 8 );
-        }
-        else
-        {
-            output( "\tldr ip, 1f\n");
-            output( "\tldr pc, [ip]\n");
-            output( "1:\t.long %s+%u\n", table, pos );
-        }
-        break;
-    case CPU_ARM64:
-        output( "\tadrp x16, %s\n", arm64_page( table ) );
-        output( "\tadd x16, x16, #%s\n", arm64_pageoff( table ) );
-        if (pos & ~0x7fff) output( "\tadd x16, x16, #%u\n", pos & ~0x7fff );
-        output( "\tldr x16, [x16, #%u]\n", pos & 0x7fff );
-        output( "\tbr x16\n" );
+    default:
+        assert( 0 );
         break;
     }
-    output_cfi( ".cfi_endproc" );
     output_function_size( name );
 }
 
@@ -825,6 +684,12 @@ static void output_import_thunk( const char *name, const char *table, int pos )
 int has_imports(void)
 {
     return !list_empty( &dll_imports );
+}
+
+/* check if we need a delayed import directory */
+int has_delay_imports(void)
+{
+    return !list_empty( &dll_delayed );
 }
 
 /* output the import table of a Win32 module */
@@ -839,7 +704,7 @@ static void output_immediate_imports(void)
 
     output( "\n/* import table */\n" );
     output( "\n\t.data\n" );
-    output( "\t.align %d\n", get_alignment(4) );
+    output( "\t.balign 4\n" );
     output( ".L__wine_spec_imports:\n" );
 
     /* list of dlls */
@@ -860,7 +725,7 @@ static void output_immediate_imports(void)
     output( "\t.long 0\n" );     /* Name */
     output( "\t.long 0\n" );     /* FirstThunk */
 
-    output( "\n\t.align %d\n", get_alignment(get_ptr_size()) );
+    output( "\n\t.balign %u\n", get_ptr_size() );
     /* output the names twice, once for OriginalFirstThunk and once for FirstThunk */
     for (i = 0; i < 2; i++)
     {
@@ -875,16 +740,8 @@ static void output_immediate_imports(void)
                     if (func->name) output( "__imp_%s:\n", asm_name( func->name ));
                     else if (func->export_name) output( "__imp_%s:\n", asm_name( func->export_name ));
                 }
-                if (func->name)
-                    output( "\t%s .L__wine_spec_import_data_%s_%s-.L__wine_spec_rva_base\n",
-                            get_asm_ptr_keyword(), import->c_name, func->name );
-                else
-                {
-                    if (get_ptr_size() == 8)
-                        output( "\t.quad 0x800000000000%04x\n", func->ordinal );
-                    else
-                        output( "\t.long 0x8000%04x\n", func->ordinal );
-                }
+                output_thunk_rva( func->name ? -1 : func->ordinal,
+                                  ".L__wine_spec_import_data_%s_%s", import->c_name, func->name );
             }
             output( "\t%s 0\n", get_asm_ptr_keyword() );
         }
@@ -897,7 +754,7 @@ static void output_immediate_imports(void)
         {
             struct import_func *func = &import->imports[j];
             if (!func->name) continue;
-            output( "\t.align %d\n", get_alignment(2) );
+            output( "\t.balign 2\n" );
             output( ".L__wine_spec_import_data_%s_%s:\n", import->c_name, func->name );
             output( "\t.short %d\n", func->hint );
             output( "\t%s \"%s\"\n", get_asm_string_keyword(), func->name );
@@ -922,7 +779,7 @@ static void output_immediate_import_thunks(void)
 
     output( "\n/* immediate import thunks */\n\n" );
     output( "\t.text\n" );
-    output( "\t.align %d\n", get_alignment(8) );
+    output( "\t.balign 8\n" );
     output( "%s:\n", asm_name(import_thunks));
 
     pos = 0;
@@ -942,44 +799,35 @@ static void output_immediate_import_thunks(void)
 /* output the delayed import table of a Win32 module */
 static void output_delayed_imports( const DLLSPEC *spec )
 {
-    int j, mod;
+    int j, iat_pos, int_pos, mod_pos;
     struct import *import;
 
     if (list_empty( &dll_delayed )) return;
 
     output( "\n/* delayed imports */\n\n" );
     output( "\t.data\n" );
-    output( "\t.align %d\n", get_alignment(get_ptr_size()) );
-    output( "%s\n", asm_globl("__wine_spec_delay_imports") );
+    output( "\t.balign %u\n", get_ptr_size() );
+    output( ".L__wine_spec_delay_imports:\n" );
 
     /* list of dlls */
 
-    j = mod = 0;
+    iat_pos = int_pos = mod_pos = 0;
     LIST_FOR_EACH_ENTRY( import, &dll_delayed, struct import, entry )
     {
-        output( "\t%s 0\n", get_asm_ptr_keyword() );   /* grAttrs */
-        output( "\t%s .L__wine_delay_name_%s\n",       /* szName */
-                 get_asm_ptr_keyword(), import->c_name );
-        output( "\t%s .L__wine_delay_modules+%d\n",    /* phmod */
-                 get_asm_ptr_keyword(), mod * get_ptr_size() );
-        output( "\t%s .L__wine_delay_IAT+%d\n",        /* pIAT */
-                 get_asm_ptr_keyword(), j * get_ptr_size() );
-        output( "\t%s .L__wine_delay_INT+%d\n",        /* pINT */
-                 get_asm_ptr_keyword(), j * get_ptr_size() );
-        output( "\t%s 0\n", get_asm_ptr_keyword() );   /* pBoundIAT */
-        output( "\t%s 0\n", get_asm_ptr_keyword() );   /* pUnloadIAT */
-        output( "\t%s 0\n", get_asm_ptr_keyword() );   /* dwTimeStamp */
-        j += import->nb_imports;
-        mod++;
+        output( "\t.long 1\n" );                                /* Attributes */
+        output_rva( ".L__wine_delay_name_%s", import->c_name ); /* DllNameRVA */
+        output_rva( ".L__wine_delay_modules+%d", mod_pos );     /* ModuleHandleRVA */
+        output_rva( ".L__wine_delay_IAT+%d", iat_pos );         /* ImportAddressTableRVA */
+        output_rva( ".L__wine_delay_INT+%d", int_pos );         /* ImportNameTableRVA */
+        output( "\t.long 0\n" );                                /* BoundImportAddressTableRVA */
+        output( "\t.long 0\n" );                                /* UnloadInformationTableRVA */
+        output( "\t.long 0\n" );                                /* TimeDateStamp */
+        iat_pos += import->nb_imports * get_ptr_size();
+        int_pos += (import->nb_imports + 1) * get_ptr_size();
+        mod_pos += get_ptr_size();
     }
-    output( "\t%s 0\n", get_asm_ptr_keyword() );   /* grAttrs */
-    output( "\t%s 0\n", get_asm_ptr_keyword() );   /* szName */
-    output( "\t%s 0\n", get_asm_ptr_keyword() );   /* phmod */
-    output( "\t%s 0\n", get_asm_ptr_keyword() );   /* pIAT */
-    output( "\t%s 0\n", get_asm_ptr_keyword() );   /* pINT */
-    output( "\t%s 0\n", get_asm_ptr_keyword() );   /* pBoundIAT */
-    output( "\t%s 0\n", get_asm_ptr_keyword() );   /* pUnloadIAT */
-    output( "\t%s 0\n", get_asm_ptr_keyword() );   /* dwTimeStamp */
+    output( "\t.long 0,0,0,0,0,0,0,0\n" );
+    output( ".L__wine_spec_delay_imports_end:\n" );
 
     output( "\n.L__wine_delay_IAT:\n" );
     LIST_FOR_EACH_ENTRY( import, &dll_delayed, struct import, entry )
@@ -1000,12 +848,10 @@ static void output_delayed_imports( const DLLSPEC *spec )
         for (j = 0; j < import->nb_imports; j++)
         {
             struct import_func *func = &import->imports[j];
-            if (!func->name)
-                output( "\t%s %d\n", get_asm_ptr_keyword(), func->ordinal );
-            else
-                output( "\t%s .L__wine_delay_data_%s_%s\n",
-                        get_asm_ptr_keyword(), import->c_name, func->name );
+            output_thunk_rva( func->name ? -1 : func->ordinal,
+                                ".L__wine_delay_data_%s_%s", import->c_name, func->name );
         }
+        output( "\t%s 0\n", get_asm_ptr_keyword() );
     }
 
     output( "\n.L__wine_delay_modules:\n" );
@@ -1026,17 +872,18 @@ static void output_delayed_imports( const DLLSPEC *spec )
         {
             struct import_func *func = &import->imports[j];
             if (!func->name) continue;
+            output( "\t.balign 2\n" );
             output( ".L__wine_delay_data_%s_%s:\n", import->c_name, func->name );
+            output( "\t.short %d\n", func->hint );
             output( "\t%s \"%s\"\n", get_asm_string_keyword(), func->name );
         }
     }
-    output_function_size( "__wine_spec_delay_imports" );
 }
 
 /* output the delayed import thunks of a Win32 module */
 static void output_delayed_import_thunks( const DLLSPEC *spec )
 {
-    int idx, j, pos;
+    int j, pos, iat_pos;
     struct import *import;
     static const char delayed_import_loaders[] = "__wine_spec_delayed_import_loaders";
     static const char delayed_import_thunks[] = "__wine_spec_delayed_import_thunks";
@@ -1045,127 +892,116 @@ static void output_delayed_import_thunks( const DLLSPEC *spec )
 
     output( "\n/* delayed import thunks */\n\n" );
     output( "\t.text\n" );
-    output( "\t.align %d\n", get_alignment(8) );
+    output( "\t.balign 8\n" );
     output( "%s:\n", asm_name(delayed_import_loaders));
-    output( "\t%s\n", func_declaration("__wine_delay_load_asm") );
-    output( "%s:\n", asm_name("__wine_delay_load_asm") );
-    output_cfi( ".cfi_startproc" );
-    switch (target.cpu)
-    {
-    case CPU_i386:
-        output( "\tpushl %%ecx\n" );
-        output_cfi( ".cfi_adjust_cfa_offset 4" );
-        output( "\tpushl %%edx\n" );
-        output_cfi( ".cfi_adjust_cfa_offset 4" );
-        output( "\tpushl %%eax\n" );
-        output_cfi( ".cfi_adjust_cfa_offset 4" );
-        output( "\tcall %s\n", asm_name("__wine_spec_delay_load") );
-        output_cfi( ".cfi_adjust_cfa_offset -4" );
-        output( "\tpopl %%edx\n" );
-        output_cfi( ".cfi_adjust_cfa_offset -4" );
-        output( "\tpopl %%ecx\n" );
-        output_cfi( ".cfi_adjust_cfa_offset -4" );
-        output( "\tjmp *%%eax\n" );
-        break;
-    case CPU_x86_64:
-        output( "\tsubq $0x98,%%rsp\n" );
-        output_cfi( ".cfi_adjust_cfa_offset 0x98" );
-        output( "\tmovq %%rdx,0x88(%%rsp)\n" );
-        output( "\tmovq %%rcx,0x80(%%rsp)\n" );
-        output( "\tmovq %%r8,0x78(%%rsp)\n" );
-        output( "\tmovq %%r9,0x70(%%rsp)\n" );
-        output( "\tmovq %%r10,0x68(%%rsp)\n" );
-        output( "\tmovq %%r11,0x60(%%rsp)\n" );
-        output( "\tmovups %%xmm0,0x50(%%rsp)\n" );
-        output( "\tmovups %%xmm1,0x40(%%rsp)\n" );
-        output( "\tmovups %%xmm2,0x30(%%rsp)\n" );
-        output( "\tmovups %%xmm3,0x20(%%rsp)\n" );
-        output( "\tmovq %%rax,%%rcx\n" );
-        output( "\tcall %s\n", asm_name("__wine_spec_delay_load") );
-        output( "\tmovups 0x20(%%rsp),%%xmm3\n" );
-        output( "\tmovups 0x30(%%rsp),%%xmm2\n" );
-        output( "\tmovups 0x40(%%rsp),%%xmm1\n" );
-        output( "\tmovups 0x50(%%rsp),%%xmm0\n" );
-        output( "\tmovq 0x60(%%rsp),%%r11\n" );
-        output( "\tmovq 0x68(%%rsp),%%r10\n" );
-        output( "\tmovq 0x70(%%rsp),%%r9\n" );
-        output( "\tmovq 0x78(%%rsp),%%r8\n" );
-        output( "\tmovq 0x80(%%rsp),%%rcx\n" );
-        output( "\tmovq 0x88(%%rsp),%%rdx\n" );
-        output( "\taddq $0x98,%%rsp\n" );
-        output_cfi( ".cfi_adjust_cfa_offset -0x98" );
-        output( "\tjmp *%%rax\n" );
-        break;
-    case CPU_ARM:
-        output( "\tpush {r0-r3,FP,LR}\n" );
-        output( "\tmov r0,IP\n" );
-        output( "\tbl %s\n", asm_name("__wine_spec_delay_load") );
-        output( "\tmov IP,r0\n");
-        output( "\tpop {r0-r3,FP,LR}\n" );
-        output( "\tbx IP\n");
-        break;
-    case CPU_ARM64:
-        output( "\tstp x29, x30, [sp,#-80]!\n" );
-        output( "\tmov x29, sp\n" );
-        output( "\tstp x0, x1, [sp,#16]\n" );
-        output( "\tstp x2, x3, [sp,#32]\n" );
-        output( "\tstp x4, x5, [sp,#48]\n" );
-        output( "\tstp x6, x7, [sp,#64]\n" );
-        output( "\tmov x0, x16\n" );
-        output( "\tbl %s\n", asm_name("__wine_spec_delay_load") );
-        output( "\tmov x16, x0\n" );
-        output( "\tldp x0, x1, [sp,#16]\n" );
-        output( "\tldp x2, x3, [sp,#32]\n" );
-        output( "\tldp x4, x5, [sp,#48]\n" );
-        output( "\tldp x6, x7, [sp,#64]\n" );
-        output( "\tldp x29, x30, [sp],#80\n" );
-        output( "\tbr x16\n" );
-        break;
-    }
-    output_cfi( ".cfi_endproc" );
-    output_function_size( "__wine_delay_load_asm" );
-    output( "\n" );
 
-    idx = 0;
+    pos = iat_pos = 0;
     LIST_FOR_EACH_ENTRY( import, &dll_delayed, struct import, entry )
     {
+        char *module_func = strmake( "__wine_delay_load_asm_%s", import->c_name );
+        output_function_header( module_func, 0 );
+        output_cfi( ".cfi_startproc" );
+        switch (target.cpu)
+        {
+        case CPU_i386:
+            output( "\tpushl %%ecx\n" );
+            output_cfi( ".cfi_adjust_cfa_offset 4" );
+            output( "\tpushl %%edx\n" );
+            output_cfi( ".cfi_adjust_cfa_offset 4" );
+            output( "\tpushl %%eax\n" );
+            output_cfi( ".cfi_adjust_cfa_offset 4" );
+            if (UsePIC)
+            {
+                output( "\tcall %s\n", asm_name("__wine_spec_get_pc_thunk_eax") );
+                output( "1:\tleal .L__wine_spec_delay_imports+%d-1b(%%eax),%%eax\n", pos );
+                output( "\tpushl %%eax\n" );
+                output_cfi( ".cfi_adjust_cfa_offset 4" );
+                needs_get_pc_thunk = 1;
+            }
+            else
+            {
+                output( "\tpushl $.L__wine_spec_delay_imports+%d\n", pos );
+                output_cfi( ".cfi_adjust_cfa_offset 4" );
+            }
+            output( "\tcall %s\n", asm_name("__delayLoadHelper2") );
+            output_cfi( ".cfi_adjust_cfa_offset -8" );
+            output( "\tpopl %%edx\n" );
+            output_cfi( ".cfi_adjust_cfa_offset -4" );
+            output( "\tpopl %%ecx\n" );
+            output_cfi( ".cfi_adjust_cfa_offset -4" );
+            output( "\tjmp *%%eax\n" );
+            break;
+        case CPU_x86_64:
+            output( "\tsubq $0x98,%%rsp\n" );
+            output_cfi( ".cfi_adjust_cfa_offset 0x98" );
+            output( "\tmovq %%rdx,0x88(%%rsp)\n" );
+            output( "\tmovq %%rcx,0x80(%%rsp)\n" );
+            output( "\tmovq %%r8,0x78(%%rsp)\n" );
+            output( "\tmovq %%r9,0x70(%%rsp)\n" );
+            output( "\tmovq %%r10,0x68(%%rsp)\n" );
+            output( "\tmovq %%r11,0x60(%%rsp)\n" );
+            output( "\tmovups %%xmm0,0x50(%%rsp)\n" );
+            output( "\tmovups %%xmm1,0x40(%%rsp)\n" );
+            output( "\tmovups %%xmm2,0x30(%%rsp)\n" );
+            output( "\tmovups %%xmm3,0x20(%%rsp)\n" );
+            output( "\tleaq .L__wine_spec_delay_imports+%d(%%rip),%%rcx\n", pos );
+            output( "\tmovq %%rax,%%rdx\n" );
+            output( "\tcall %s\n", asm_name("__delayLoadHelper2") );
+            output( "\tmovups 0x20(%%rsp),%%xmm3\n" );
+            output( "\tmovups 0x30(%%rsp),%%xmm2\n" );
+            output( "\tmovups 0x40(%%rsp),%%xmm1\n" );
+            output( "\tmovups 0x50(%%rsp),%%xmm0\n" );
+            output( "\tmovq 0x60(%%rsp),%%r11\n" );
+            output( "\tmovq 0x68(%%rsp),%%r10\n" );
+            output( "\tmovq 0x70(%%rsp),%%r9\n" );
+            output( "\tmovq 0x78(%%rsp),%%r8\n" );
+            output( "\tmovq 0x80(%%rsp),%%rcx\n" );
+            output( "\tmovq 0x88(%%rsp),%%rdx\n" );
+            output( "\taddq $0x98,%%rsp\n" );
+            output_cfi( ".cfi_adjust_cfa_offset -0x98" );
+            output( "\tjmp *%%rax\n" );
+            break;
+        default:
+            assert( 0 );
+            break;
+        }
+        output_cfi( ".cfi_endproc" );
+        output_function_size( module_func );
+        output( "\n" );
+
         for (j = 0; j < import->nb_imports; j++)
         {
             struct import_func *func = &import->imports[j];
             const char *name = func->name ? func->name : func->export_name;
 
-            if (thumb_mode) output( "\t.thumb_func\n" );
             output( "__wine_delay_imp_%s_%s:\n", import->c_name, name );
-            output_cfi( ".cfi_startproc" );
             switch (target.cpu)
             {
             case CPU_i386:
-            case CPU_x86_64:
-                output( "\tmovl $%d,%%eax\n", (idx << 16) | j );
-                output( "\tjmp %s\n", asm_name("__wine_delay_load_asm") );
-                break;
-            case CPU_ARM:
-                output( "\tmov ip, #%u\n", j );
-                if (idx) output( "\tmovt ip, #%u\n", idx );
-                output( "\tb %s\n", asm_name("__wine_delay_load_asm") );
-                break;
-            case CPU_ARM64:
-                if (idx)
+                if (UsePIC)
                 {
-                    output( "\tmov x16, #0x%x\n", idx << 16 );
-                    if (j) output( "\tmovk x16, #0x%x\n", j );
+                    output( "\tcall %s\n", asm_name("__wine_spec_get_pc_thunk_eax") );
+                    output( "1:\tleal .L__wine_delay_IAT+%d-1b(%%eax),%%eax\n", iat_pos );
+                    needs_get_pc_thunk = 1;
                 }
-                else output( "\tmov x16, #0x%x\n", j );
-                output( "\tb %s\n", asm_name("__wine_delay_load_asm") );
+                else output( "\tmovl $.L__wine_delay_IAT+%d,%%eax\n", iat_pos );
+                output( "\tjmp %s\n", asm_name(module_func) );
+                break;
+            case CPU_x86_64:
+                output( "\tleaq .L__wine_delay_IAT+%d(%%rip),%%rax\n", iat_pos );
+                output( "\tjmp %s\n", asm_name(module_func) );
+                break;
+            default:
+                assert( 0 );
                 break;
             }
-            output_cfi( ".cfi_endproc" );
+            iat_pos += get_ptr_size();
         }
-        idx++;
+        pos += 8 * 4;  /* IMAGE_DELAYLOAD_DESCRIPTOR is 8 DWORDs */
     }
     output_function_size( delayed_import_loaders );
 
-    output( "\n\t.align %d\n", get_alignment(get_ptr_size()) );
+    output( "\n\t.balign %u\n", get_ptr_size() );
     output( "%s:\n", asm_name(delayed_import_thunks));
     pos = 0;
     LIST_FOR_EACH_ENTRY( import, &dll_delayed, struct import, entry )
@@ -1198,13 +1034,13 @@ static void output_external_link_imports( DLLSPEC *spec )
 
     output( "\n/* external link thunks */\n\n" );
     output( "\t.data\n" );
-    output( "\t.align %d\n", get_alignment(get_ptr_size()) );
+    output( "\t.balign %u\n", get_ptr_size() );
     output( ".L__wine_spec_external_links:\n" );
     for (i = 0; i < ext_link_imports.count; i++)
         output( "\t%s %s\n", get_asm_ptr_keyword(), asm_name(ext_link_imports.str[i]) );
 
     output( "\n\t.text\n" );
-    output( "\t.align %d\n", get_alignment(get_ptr_size()) );
+    output( "\t.balign %u\n", get_ptr_size() );
     output( "%s:\n", asm_name("__wine_spec_external_link_thunks") );
 
     for (i = pos = 0; i < ext_link_imports.count; i++)
@@ -1224,29 +1060,27 @@ static void output_external_link_imports( DLLSPEC *spec )
  */
 void output_stubs( DLLSPEC *spec )
 {
+    struct exports *exports = &spec->exports;
     const char *name, *exp_name;
     int i;
 
-    if (!has_stubs( spec )) return;
+    if (!has_stubs( exports )) return;
 
     output( "\n/* stub functions */\n\n" );
-    output( "\t.text\n" );
 
-    for (i = 0; i < spec->nb_entry_points; i++)
+    for (i = 0; i < exports->nb_entry_points; i++)
     {
-        ORDDEF *odp = &spec->entry_points[i];
+        ORDDEF *odp = exports->entry_points[i];
         if (odp->type != TYPE_STUB) continue;
 
         name = get_stub_name( odp, spec );
         exp_name = odp->name ? odp->name : odp->export_name;
-        output( "\t.align %d\n", get_alignment(4) );
-        output( "\t%s\n", func_declaration(name) );
-        output( "%s:\n", asm_name(name) );
-        output_cfi( ".cfi_startproc" );
+        output_function_header( name, 0 );
 
         switch (target.cpu)
         {
         case CPU_i386:
+            output_cfi( ".cfi_startproc" );
             /* flesh out the stub a bit to make safedisc happy */
             output(" \tnop\n" );
             output(" \tnop\n" );
@@ -1284,69 +1118,64 @@ void output_stubs( DLLSPEC *spec )
                 output( "\tmovl $.L__wine_spec_file_name,(%%esp)\n" );
             }
             output( "\tcall %s\n", asm_name("__wine_spec_unimplemented_stub") );
+            output_cfi( ".cfi_endproc" );
             break;
         case CPU_x86_64:
+            output_cfi( ".cfi_startproc" );
+            output_seh( ".seh_proc %s", asm_name(name) );
             output( "\tsubq $0x28,%%rsp\n" );
-            output_cfi( ".cfi_adjust_cfa_offset 8" );
+            output_cfi( ".cfi_adjust_cfa_offset 0x28" );
+            output_seh( ".seh_stackalloc 0x28" );
+            output_seh( ".seh_endprologue" );
             output( "\tleaq .L__wine_spec_file_name(%%rip),%%rcx\n" );
             if (exp_name)
                 output( "leaq .L%s_string(%%rip),%%rdx\n", name );
             else
                 output( "\tmovq $%d,%%rdx\n", odp->ordinal );
             output( "\tcall %s\n", asm_name("__wine_spec_unimplemented_stub") );
+            output_cfi( ".cfi_endproc" );
+            output_seh( ".seh_endproc" );
             break;
         case CPU_ARM:
-            if (UsePIC)
-            {
-                output( "\tldr r0,3f\n");
-                output( "1:\tadd r0,PC\n");
-                output( "\tldr r1,3f+4\n");
-                if (exp_name) output( "2:\tadd r1,PC\n");
-                output( "\tbl %s\n", asm_name("__wine_spec_unimplemented_stub") );
-                output( "3:\t.long .L__wine_spec_file_name-1b-%u\n", thumb_mode ? 4 : 8 );
-                if (exp_name) output( "\t.long .L%s_string-2b-%u\n", name, thumb_mode ? 4 : 8 );
-                else output( "\t.long %u\n", odp->ordinal );
-            }
-            else
-            {
-                output( "\tmovw r0,:lower16:.L__wine_spec_file_name\n");
-                output( "\tmovt r0,:upper16:.L__wine_spec_file_name\n");
-                if (exp_name)
-                {
-                    output( "\tmovw r1,:lower16:.L%s_string\n", name );
-                    output( "\tmovt r1,:upper16:.L%s_string\n", name );
-                }
-                else output( "\tmov r1,#%u\n", odp->ordinal );
-                output( "\tbl %s\n", asm_name("__wine_spec_unimplemented_stub") );
-            }
-            break;
-        case CPU_ARM64:
-            output( "\tadrp x0, %s\n", arm64_page(".L__wine_spec_file_name") );
-            output( "\tadd x0, x0, #%s\n", arm64_pageoff(".L__wine_spec_file_name") );
+            output( "\t.seh_proc %s\n", asm_name(name) );
+            output( "\t.seh_endprologue\n" );
+            output( "\tmovw r0,:lower16:.L__wine_spec_file_name\n");
+            output( "\tmovt r0,:upper16:.L__wine_spec_file_name\n");
             if (exp_name)
             {
-                char *sym = strmake( ".L%s_string", name );
-                output( "\tadrp x1, %s\n", arm64_page( sym ) );
-                output( "\tadd x1, x1, #%s\n", arm64_pageoff( sym ) );
-                free( sym );
+                output( "\tmovw r1,:lower16:.L%s_string\n", name );
+                output( "\tmovt r1,:upper16:.L%s_string\n", name );
+            }
+            else output( "\tmov r1,#%u\n", odp->ordinal );
+            output( "\tb %s\n", asm_name("__wine_spec_unimplemented_stub") );
+            output( "\t.seh_endproc\n" );
+            break;
+        case CPU_ARM64:
+        case CPU_ARM64EC:
+            output( "\t.seh_proc %s\n", arm64_name(name) );
+            output( "\t.seh_endprologue\n" );
+            output( "\tadrp x0, .L__wine_spec_file_name\n" );
+            output( "\tadd x0, x0, #:lo12:.L__wine_spec_file_name\n" );
+            if (exp_name)
+            {
+                output( "\tadrp x1, .L%s_string\n", name );
+                output( "\tadd x1, x1, #:lo12:.L%s_string\n", name );
             }
             else
                 output( "\tmov x1, %u\n", odp->ordinal );
-            output( "\tbl %s\n", asm_name("__wine_spec_unimplemented_stub") );
+            output( "\tb %s\n", arm64_name("__wine_spec_unimplemented_stub") );
+            output( "\t.seh_endproc\n" );
             break;
-        default:
-            assert(0);
         }
-        output_cfi( ".cfi_endproc" );
         output_function_size( name );
     }
 
     output( "\t%s\n", get_asm_string_section() );
     output( ".L__wine_spec_file_name:\n" );
     output( "\t%s \"%s\"\n", get_asm_string_keyword(), spec->file_name );
-    for (i = 0; i < spec->nb_entry_points; i++)
+    for (i = 0; i < exports->nb_entry_points; i++)
     {
-        ORDDEF *odp = &spec->entry_points[i];
+        ORDDEF *odp = exports->entry_points[i];
         if (odp->type != TYPE_STUB) continue;
         exp_name = odp->name ? odp->name : odp->export_name;
         if (exp_name)
@@ -1357,160 +1186,6 @@ void output_stubs( DLLSPEC *spec )
         }
     }
 }
-
-static int cmp_link_name( const void *e1, const void *e2 )
-{
-    const ORDDEF *odp1 = *(const ORDDEF * const *)e1;
-    const ORDDEF *odp2 = *(const ORDDEF * const *)e2;
-
-    return strcmp( odp1->link_name, odp2->link_name );
-}
-
-
-/* output the functions for system calls */
-void output_syscalls( DLLSPEC *spec )
-{
-    int i, count;
-    ORDDEF **syscalls = NULL;
-
-    if (unix_lib) return;
-
-    for (i = count = 0; i < spec->nb_entry_points; i++)
-    {
-        ORDDEF *odp = &spec->entry_points[i];
-        if (!(odp->flags & FLAG_SYSCALL)) continue;
-        if (!syscalls) syscalls = xmalloc( (spec->nb_entry_points - i) * sizeof(*syscalls) );
-        syscalls[count++] = odp;
-    }
-    if (!count) return;
-    count = sort_func_list( syscalls, count, cmp_link_name );
-
-    output( "\n/* system calls */\n\n" );
-    output( "\t.text\n" );
-
-    for (i = 0; i < count; i++)
-    {
-        ORDDEF *odp = syscalls[i];
-        const char *name = get_link_name(odp);
-        unsigned int id = (spec->syscall_table << 12) + i;
-
-        output( "\t.align %d\n", get_alignment(16) );
-        output( "\t%s\n", func_declaration(name) );
-        output( "%s\n", asm_globl(name) );
-        output_cfi( ".cfi_startproc" );
-        switch (target.cpu)
-        {
-        case CPU_i386:
-            if (UsePIC)
-            {
-                output( "\tcall %s\n", asm_name("__wine_spec_get_pc_thunk_eax") );
-                output( "1:\tmovl %s-1b(%%eax),%%edx\n", asm_name("__wine_syscall_dispatcher") );
-                output( "\tmovl $%u,%%eax\n", id );
-                needs_get_pc_thunk = 1;
-            }
-            else
-            {
-                output( "\tmovl $%u,%%eax\n", id );
-                output( "\tmovl $%s,%%edx\n", asm_name("__wine_syscall") );
-            }
-            output( "\tcall *%%edx\n" );
-            output( "\tret $%u\n", odp->type == TYPE_STDCALL ? get_args_size( odp ) : 0 );
-            break;
-        case CPU_x86_64:
-            /* Chromium depends on syscall thunks having the same form as on
-             * Windows. For 64-bit systems the only viable form we can emulate is
-             * having an int $0x2e fallback. Since actually using an interrupt is
-             * expensive, and since for some reason Chromium doesn't actually
-             * validate that instruction, we can just put a jmp there instead. */
-            output( "\t.byte 0x4c,0x8b,0xd1\n" ); /* movq %rcx,%r10 */
-            output( "\t.byte 0xb8\n" );           /* movl $i,%eax */
-            output( "\t.long %u\n", id );
-            output( "\t.byte 0xf6,0x04,0x25,0x08,0x03,0xfe,0x7f,0x01\n" ); /* testb $1,0x7ffe0308 */
-            output( "\t.byte 0x75,0x03\n" );      /* jne 1f */
-            output( "\t.byte 0x0f,0x05\n" );      /* syscall */
-            output( "\t.byte 0xc3\n" );           /* ret */
-            output( "\tjmp 1f\n" );
-            output( "\t.byte 0xc3\n" );           /* ret */
-            if (is_pe())
-            {
-                output( "1:\t.byte 0xff,0x14,0x25\n" ); /* 1: callq *(0x7ffe1000) */
-                output( "\t.long 0x7ffe1000\n" );
-            }
-            else
-            {
-                output( "\tnop\n" );
-                output( "1:\tcallq *%s(%%rip)\n", asm_name("__wine_syscall_dispatcher") );
-            }
-            output( "\tret\n" );
-            break;
-        case CPU_ARM:
-            output( "\tpush {r0-r3}\n" );
-            output( "\tmovw ip, #%u\n", id );
-            output( "\tmov r3, lr\n" );
-            output( "\tbl %s\n", asm_name("__wine_syscall") );
-            output( "\tbx lr\n" );
-            break;
-        case CPU_ARM64:
-            output( "\tmov x8, #%u\n", id );
-            output( "\tmov x9, x30\n" );
-            output( "\tbl %s\n", asm_name("__wine_syscall" ));
-            output( "\tret\n" );
-            break;
-        default:
-            assert(0);
-        }
-        output_cfi( ".cfi_endproc" );
-        output_function_size( name );
-    }
-
-    switch (target.cpu)
-    {
-    case CPU_i386:
-        if (UsePIC) break;
-        output( "\t.align %d\n", get_alignment(16) );
-        output( "\t%s\n", func_declaration("__wine_syscall") );
-        output( "%s:\n", asm_name("__wine_syscall") );
-        output( "\tjmp *(%s)\n", asm_name("__wine_syscall_dispatcher") );
-        output_function_size( "__wine_syscall" );
-        break;
-    case CPU_ARM:
-        output( "\t.align %d\n", get_alignment(16) );
-        output( "\t%s\n", func_declaration("__wine_syscall") );
-        output( "%s:\n", asm_name("__wine_syscall") );
-        if (UsePIC)
-        {
-            output( "\tldr r0, 2f\n");
-            output( "1:\tadd r0, pc\n" );
-        }
-        else
-        {
-            output( "\tmovw r0, :lower16:%s\n", asm_name("__wine_syscall_dispatcher") );
-            output( "\tmovt r0, :upper16:%s\n", asm_name("__wine_syscall_dispatcher") );
-        }
-        output( "\tldr r0, [r0]\n");
-        output( "\tbx r0\n");
-        if (UsePIC) output( "2:\t.long %s-1b-%u\n", asm_name("__wine_syscall_dispatcher"), thumb_mode ? 4 : 8 );
-        output_function_size( "__wine_syscall" );
-        break;
-    case CPU_ARM64:
-        output( "\t.align %d\n", get_alignment(16) );
-        output( "\t%s\n", func_declaration("__wine_syscall") );
-        output( "%s:\n", asm_name("__wine_syscall") );
-        output( "\tadrp x16, %s\n", arm64_page( asm_name("__wine_syscall_dispatcher") ) );
-        output( "\tldr x16, [x16, #%s]\n", arm64_pageoff( asm_name("__wine_syscall_dispatcher") ) );
-        output( "\tbr x16\n");
-        output_function_size( "__wine_syscall" );
-    default:
-        break;
-    }
-    output( "\t.data\n" );
-    output( "\t.align %d\n", get_alignment( get_ptr_size() ) );
-    output( "%s\n", asm_globl("__wine_syscall_dispatcher") );
-    output( "\t%s 0\n", get_asm_ptr_keyword() );
-    output( "\t.short %u\n", count );
-    for (i = 0; i < count; i++) output( "\t.byte %u\n", get_args_size( syscalls[i] ));
-}
-
 
 /* output the import and delayed import tables of a Win32 module */
 void output_imports( DLLSPEC *spec )
@@ -1543,14 +1218,28 @@ static void assemble_files( const char *prefix )
 
     for (i = 0; i < as_files.count; i++)
     {
-        char *obj = get_temp_file_name( prefix, ".o" );
+        char *obj = make_temp_file( prefix, ".o" );
         assemble_file( as_files.str[i], obj );
         as_files.str[i] = obj;
     }
 }
 
+static const char *get_target_machine(void)
+{
+    static const char *machine_names[] =
+    {
+        [CPU_i386]    = "x86",
+        [CPU_x86_64]  = "x64",
+        [CPU_ARM]     = "arm",
+        [CPU_ARM64]   = "arm64",
+        [CPU_ARM64EC] = "arm64ec",
+    };
+
+    return machine_names[target.cpu];
+}
+
 /* build a library from the current asm files and any additional object files in argv */
-static void build_library( const char *output_name, struct strarray files, int create )
+void output_static_lib( const char *output_name, struct strarray files, int create )
 {
     struct strarray args;
 
@@ -1564,6 +1253,7 @@ static void build_library( const char *output_name, struct strarray files, int c
     {
         args = find_link_tool();
         strarray_add( &args, "/lib" );
+        strarray_add( &args, strmake( "-machine:%s", get_target_machine() ));
         strarray_add( &args, strmake( "-out:%s", output_name ));
     }
     strarray_addall( &args, as_files );
@@ -1579,15 +1269,22 @@ static void build_library( const char *output_name, struct strarray files, int c
     }
 }
 
-/* create a Windows-style import library */
-static void build_windows_import_lib( const char *lib_name, DLLSPEC *spec )
+/* create a Windows-style import library using dlltool */
+static void build_dlltool_import_lib( const char *lib_name, DLLSPEC *spec, struct strarray files )
 {
+    const char *def_file, *native_def_file = NULL;
     struct strarray args;
-    char *def_file;
 
     def_file = open_temp_output_file( ".def" );
-    output_def_file( spec, 1 );
+    output_def_file( spec, &spec->exports, 1 );
     fclose( output_file );
+
+    if (native_arch != -1)
+    {
+        native_def_file = open_temp_output_file( ".def" );
+        output_def_file( spec, &spec->native_exports, 1 );
+        fclose( output_file );
+    }
 
     args = find_tool( "dlltool", NULL );
     strarray_add( &args, "-k" );
@@ -1595,6 +1292,11 @@ static void build_windows_import_lib( const char *lib_name, DLLSPEC *spec )
     strarray_add( &args, lib_name );
     strarray_add( &args, "-d" );
     strarray_add( &args, def_file );
+    if (native_def_file)
+    {
+        strarray_add( &args, "-N" );
+        strarray_add( &args, native_def_file );
+    }
 
     switch (target.cpu)
     {
@@ -1616,15 +1318,317 @@ static void build_windows_import_lib( const char *lib_name, DLLSPEC *spec )
             strarray_add( &args, "-m" );
             strarray_add( &args, "arm64" );
             break;
+        case CPU_ARM64EC:
+            strarray_add( &args, "-m" );
+            strarray_add( &args, "arm64ec" );
+            break;
         default:
             break;
     }
 
     spawn( args );
+
+    if (files.count) output_static_lib( output_file_name, files, 0 );
+}
+
+/* create a Windows-style import library */
+static void build_windows_import_lib( const char *lib_name, DLLSPEC *spec, struct strarray files )
+{
+    char *dll_name, *import_desc, *import_name, *delay_load;
+    struct strarray objs = empty_strarray;
+    int i, total, by_name;
+    int is_delay = strendswith( lib_name, ".delay.a" );
+    const char *name;
+
+    /* make sure assemble_files doesn't strip suffixes */
+    dll_name = encode_dll_name( spec->file_name );
+    for (i = 0; i < strlen( dll_name ); ++i) if (dll_name[i] == '.') dll_name[i] = '_';
+
+    import_desc = strmake( "__wine_import_%s_desc", dll_name );
+    import_name = strmake( "__wine_import_%s_name", dll_name );
+    delay_load = strmake( "__wine_delay_load_%s", dll_name );
+
+    new_output_as_file();
+
+    if (is_delay)
+    {
+        output_function_header( delay_load, 1 );
+
+        switch (target.cpu)
+        {
+        case CPU_i386:
+            output_cfi( ".cfi_startproc" );
+            output( "\tpushl %%ecx\n" );
+            output_cfi( ".cfi_adjust_cfa_offset 4" );
+            output( "\tpushl %%edx\n" );
+            output_cfi( ".cfi_adjust_cfa_offset 4" );
+            output( "\tpushl %%eax\n" );
+            output_cfi( ".cfi_adjust_cfa_offset 4" );
+            output( "\tpushl $%s\n", asm_name( import_desc ) );
+            output( "\tcalll ___delayLoadHelper2@8\n" );
+            output_cfi( ".cfi_adjust_cfa_offset -8" );
+            output( "\tpopl %%edx\n" );
+            output_cfi( ".cfi_adjust_cfa_offset -4" );
+            output( "\tpopl %%ecx\n" );
+            output_cfi( ".cfi_adjust_cfa_offset -4" );
+            output( "\tjmp *%%eax\n" );
+            output_cfi( ".cfi_endproc" );
+            break;
+        case CPU_x86_64:
+            output_seh( ".seh_proc %s", asm_name( delay_load ) );
+            output( "\tsubq $0x48, %%rsp\n" );
+            output_seh( ".seh_stackalloc 0x48" );
+            output_seh( ".seh_endprologue" );
+            output( "\tmovq %%rcx, 0x40(%%rsp)\n" );
+            output( "\tmovq %%rdx, 0x38(%%rsp)\n" );
+            output( "\tmovq %%r8, 0x30(%%rsp)\n" );
+            output( "\tmovq %%r9, 0x28(%%rsp)\n" );
+            output( "\tmovq %%rax, %%rdx\n" );
+            output( "\tleaq %s(%%rip), %%rcx\n", asm_name( import_desc ) );
+            output( "\tcall __delayLoadHelper2\n" );
+            output( "\tmovq 0x28(%%rsp), %%r9\n" );
+            output( "\tmovq 0x30(%%rsp), %%r8\n" );
+            output( "\tmovq 0x38(%%rsp), %%rdx\n" );
+            output( "\tmovq 0x40(%%rsp), %%rcx\n" );
+            output( "\taddq $0x48, %%rsp\n" );
+            output( "\tjmp *%%rax\n" );
+            output_seh( ".seh_endproc" );
+            break;
+        case CPU_ARM:
+            output( "\t.seh_proc %s\n", asm_name( delay_load ) );
+            output( "\tpush {r0-r3, FP, LR}\n" );
+            output( "\t.seh_save_regs {r0-r3,fp,lr}\n" );
+            output( "\t.seh_endprologue\n" );
+            output( "\tmov r1, IP\n" );
+            output( "\tldr r0, 1f\n" );
+            output( "\tldr r0, [r0]\n" );
+            output( "\tbl __delayLoadHelper2\n" );
+            output( "\tmov IP, r0\n" );
+            output( "\tpop {r0-r3, FP, LR}\n" );
+            output( "\tbx IP\n" );
+            output( "1:\t.long %s\n", asm_name( import_desc ) );
+            output( "\t.seh_endproc\n" );
+            break;
+        case CPU_ARM64:
+            output( "\t.seh_proc %s\n", asm_name( delay_load ) );
+            output( "\tstp x29, x30, [sp, #-80]!\n" );
+            output( "\t.seh_save_fplr_x 80\n" );
+            output( "\tmov x29, sp\n" );
+            output( "\t.seh_set_fp\n" );
+            output( "\t.seh_endprologue\n" );
+            output( "\tstp x0, x1, [sp, #16]\n" );
+            output( "\tstp x2, x3, [sp, #32]\n" );
+            output( "\tstp x4, x5, [sp, #48]\n" );
+            output( "\tstp x6, x7, [sp, #64]\n" );
+            output( "\tmov x1, x16\n" );
+            output( "\tadrp x0, %s\n", asm_name( import_desc ) );
+            output( "\tadd x0, x0, #:lo12:%s\n", asm_name( import_desc ) );
+            output( "\tbl __delayLoadHelper2\n" );
+            output( "\tmov x16, x0\n" );
+            output( "\tldp x0, x1, [sp, #16]\n" );
+            output( "\tldp x2, x3, [sp, #32]\n" );
+            output( "\tldp x4, x5, [sp, #48]\n" );
+            output( "\tldp x6, x7, [sp, #64]\n" );
+            output( "\tldp x29, x30, [sp], #80\n" );
+            output( "\tbr x16\n" );
+            output( "\t.seh_endproc\n" );
+            break;
+        case CPU_ARM64EC:
+            assert( 0 );
+            break;
+        }
+        output_function_size( delay_load );
+        output_gnu_stack_note();
+
+        output( "\n\t.data\n" );
+        output( ".L__wine_delay_import_handle:\n" );
+        output( "\t%s 0\n", get_asm_ptr_keyword() );
+
+        output( "%s\n", asm_globl( import_desc ) );
+        output( "\t.long 1\n" );                         /* DllAttributes */
+        output_rva( "%s", asm_name( import_name ) );     /* DllNameRVA */
+        output_rva( ".L__wine_delay_import_handle" );    /* ModuleHandleRVA */
+        output_rva( ".L__wine_import_addrs" );           /* ImportAddressTableRVA */
+        output_rva( ".L__wine_import_names" );           /* ImportNameTableRVA */
+        output( "\t.long 0\n" );                         /* BoundImportAddressTableRVA */
+        output( "\t.long 0\n" );                         /* UnloadInformationTableRVA */
+        output( "\t.long 0\n" );                         /* TimeDateStamp */
+
+        output( "\n\t.section .idata$5\n" );
+        output( "\t%s 0\n", get_asm_ptr_keyword() );     /* FirstThunk tail */
+        output( ".L__wine_import_addrs:\n" );
+
+        output( "\n\t.section .idata$4\n" );
+        output( "\t%s 0\n", get_asm_ptr_keyword() );     /* OriginalFirstThunk tail */
+        output( ".L__wine_import_names:\n" );
+
+        /* required to avoid internal linker errors with some binutils versions */
+        output( "\n\t.section .idata$2\n" );
+    }
+    else
+    {
+        output( "\n\t.section .idata$2\n" );
+        output( "%s\n", asm_globl( import_desc ) );
+        output_rva( ".L__wine_import_names" );           /* OriginalFirstThunk */
+        output( "\t.long 0\n" );                         /* TimeDateStamp */
+        output( "\t.long 0\n" );                         /* ForwarderChain */
+        output_rva( "%s", asm_name( import_name ) );     /* Name */
+        output_rva( ".L__wine_import_addrs" );           /* FirstThunk */
+
+        output( "\n\t.section .idata$4\n" );
+        output( ".L__wine_import_names:\n" );            /* OriginalFirstThunk head */
+
+        output( "\n\t.section .idata$5\n" );
+        output( ".L__wine_import_addrs:\n" );            /* FirstThunk head */
+    }
+
+    /* _head suffix to keep this object sections first */
+    assemble_files( strmake( "%s_head", dll_name ) );
+    strarray_addall( &objs, as_files );
+    as_files = empty_strarray;
+
+    new_output_as_file();
+
+    output( "\n\t.section .idata$4\n" );
+    output( "\t%s 0\n", get_asm_ptr_keyword() );         /* OriginalFirstThunk tail */
+    output( "\n\t.section .idata$5\n" );
+    output( "\t%s 0\n", get_asm_ptr_keyword() );         /* FirstThunk tail */
+    output( "\n\t.section .idata$7\n" );
+    output( "%s\n", asm_globl( import_name ) );
+    output( "\t%s \"%s\"\n", get_asm_string_keyword(), spec->file_name );
+
+    /* _tail suffix to keep this object sections last */
+    assemble_files( strmake( "%s_tail", dll_name ) );
+    strarray_addall( &objs, as_files );
+    as_files = empty_strarray;
+
+    for (i = total = 0; i < spec->exports.nb_entry_points; i++)
+    {
+        const ORDDEF *odp = spec->exports.entry_points[i];
+        const char *abi_name;
+        char *imp_name;
+
+        if (odp->name) name = odp->name;
+        else if (odp->export_name) name = odp->export_name;
+        else continue;
+
+        if (odp->flags & FLAG_PRIVATE) continue;
+        total++;
+
+        /* C++ mangled names cannot be imported */
+        if (strpbrk( name, "?@" )) continue;
+
+        switch (odp->type)
+        {
+        case TYPE_VARARGS:
+        case TYPE_CDECL:
+        case TYPE_STDCALL:
+            by_name = odp->name && !(odp->flags & FLAG_ORDINAL);
+            abi_name = get_abi_name( odp, name );
+            imp_name = strmake( "%s_imp_%s", target.cpu != CPU_i386 ? "_" : "",
+                                asm_name( abi_name ) );
+
+            new_output_as_file();
+            output_function_header( abi_name, 1 );
+
+            switch (target.cpu)
+            {
+            case CPU_i386:
+                output( "\tjmp *%s\n", asm_name( imp_name ) );
+                if (is_delay)
+                {
+                    output( "\n\t.section .text$1\n" );
+                    output( ".L__wine_delay_import:\n" );
+                    output( "\tmov $%s,%%eax\n", asm_name( imp_name ) );
+                    output( "\tjmp %s\n", asm_name( delay_load ) );
+                }
+                break;
+            case CPU_x86_64:
+                output( "\tjmp *%s(%%rip)\n", asm_name( imp_name ) );
+                if (is_delay)
+                {
+                    output( "\n\t.section .text$1\n" );
+                    output( ".L__wine_delay_import:\n" );
+                    output( "\tlea %s(%%rip),%%rax\n", asm_name( imp_name ) );
+                    output( "\tjmp %s\n", asm_name( delay_load ) );
+                }
+                break;
+            case CPU_ARM:
+                output( "\tldr IP, 1f\n" );
+                output( "\tldr PC, [IP]\n" );
+                if (is_delay)
+                {
+                    output( "\n\t.section .text$1\n" );
+                    output( ".L__wine_delay_import:\n" );
+                    output( "\tldr IP, 1f\n" );
+                    output( "\tldr IP, [IP]\n" );
+                    output( "\tb %s\n", asm_name( delay_load ) );
+                }
+                output( "1:\t.long %s\n", asm_name( imp_name ) );
+                break;
+            case CPU_ARM64:
+                output( "\tadrp x16, %s\n", asm_name( imp_name ) );
+                output( "\tadd x16, x16, #:lo12:%s\n", asm_name( imp_name ) );
+                output( "\tbr x16\n" );
+                if (is_delay)
+                {
+                    output( "\n\t.section .text$1\n" );
+                    output( ".L__wine_delay_import:\n" );
+                    output( "\tadrp x16, %s\n", asm_name( imp_name ) );
+                    output( "\tadd x16, x16, #:lo12:%s\n", asm_name( imp_name ) );
+                    output( "\tb %s\n", asm_name( delay_load ) );
+                }
+                break;
+            case CPU_ARM64EC:
+                assert( 0 );
+                break;
+            }
+
+            output( "\n\t.section .idata$4\n" );
+            output_thunk_rva( by_name ? -1 : odp->ordinal, ".L__wine_import_name" );
+
+            output( "\n\t.section .idata$5\n" );
+            output( "%s\n", asm_globl( imp_name ) );
+            if (is_delay)
+                output( "\t%s .L__wine_delay_import\n", get_asm_ptr_keyword() );
+            else
+                output_thunk_rva( by_name ? -1 : odp->ordinal, ".L__wine_import_name" );
+
+            if (by_name)
+            {
+                output( "\n\t.section .idata$6\n" );
+                output( ".L__wine_import_name:\n" );
+                output( "\t.short %d\n", odp->hint );
+                output( "\t%s \"%s\"\n", get_asm_string_keyword(), name );
+            }
+
+            /* reference head object to always pull its sections */
+            output( "\n\t.section .idata$7\n" );
+            output_rva( "%s", asm_name( import_desc ) );
+
+            free( imp_name );
+            break;
+
+        default:
+            break;
+        }
+    }
+
+    /* _syms suffix to keep these objects sections in between _head and _tail */
+    assemble_files( strmake( "%s_syms", dll_name ) );
+    strarray_addall( &objs, as_files );
+    as_files = objs;
+
+    free( import_desc );
+    free( import_name );
+    free( delay_load );
+    free( dll_name );
+
+    output_static_lib( output_file_name, files, 1 );
 }
 
 /* create a Unix-style import library */
-static void build_unix_import_lib( DLLSPEC *spec )
+static void build_unix_import_lib( DLLSPEC *spec, struct strarray files )
 {
     int i, total;
     const char *name, *prefix;
@@ -1632,9 +1636,9 @@ static void build_unix_import_lib( DLLSPEC *spec )
 
     /* entry points */
 
-    for (i = total = 0; i < spec->nb_entry_points; i++)
+    for (i = total = 0; i < spec->exports.nb_entry_points; i++)
     {
-        const ORDDEF *odp = &spec->entry_points[i];
+        const ORDDEF *odp = spec->exports.entry_points[i];
 
         if (odp->name) name = odp->name;
         else if (odp->export_name) name = odp->export_name;
@@ -1653,10 +1657,7 @@ static void build_unix_import_lib( DLLSPEC *spec )
         case TYPE_STDCALL:
             prefix = (!odp->name || (odp->flags & FLAG_ORDINAL)) ? import_ord_prefix : import_func_prefix;
             new_output_as_file();
-            output( "\t.text\n" );
-            output( "\n\t.align %d\n", get_alignment( get_ptr_size() ));
-            output( "\t%s\n", func_declaration( name ) );
-            output( "%s\n", asm_globl( name ) );
+            output_function_header( name, 1 );
             output( "\t%s %s%s$%u$%s\n", get_asm_ptr_keyword(),
                     asm_name( prefix ), dll_name, odp->ordinal, name );
             output_function_size( name );
@@ -1677,19 +1678,14 @@ static void build_unix_import_lib( DLLSPEC *spec )
 
     assemble_files( spec->file_name );
     free( dll_name );
+
+    output_static_lib( output_file_name, files, 1 );
 }
 
 /* output an import library for a Win32 module and additional object files */
-void output_static_lib( DLLSPEC *spec, struct strarray files )
+void output_import_lib( DLLSPEC *spec, struct strarray files )
 {
-    if (is_pe())
-    {
-        if (spec) build_windows_import_lib( output_file_name, spec );
-        if (files.count || !spec) build_library( output_file_name, files, !spec );
-    }
-    else
-    {
-        if (spec) build_unix_import_lib( spec );
-        build_library( output_file_name, files, 1 );
-    }
+    if (!is_pe()) build_unix_import_lib( spec, files );
+    else if (use_dlltool) build_dlltool_import_lib( output_file_name, spec, files );
+    else build_windows_import_lib( output_file_name, spec, files );
 }

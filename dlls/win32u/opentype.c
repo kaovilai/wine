@@ -473,8 +473,8 @@ static const LANGID mac_langid_table[] =
     0,
     0,
     0,
-    MAKELANGID(LANG_MALAGASY, SUBLANG_DEFAULT),
-    MAKELANGID(LANG_ESPERANTO, SUBLANG_DEFAULT),
+    0,
+    0,
     0,
     0,
     0,
@@ -525,7 +525,7 @@ static const LANGID mac_langid_table[] =
     MAKELANGID(LANG_BRETON, SUBLANG_DEFAULT),
     MAKELANGID(LANG_INUKTITUT, SUBLANG_DEFAULT),
     MAKELANGID(LANG_SCOTTISH_GAELIC, SUBLANG_DEFAULT),
-    MAKELANGID(LANG_MANX_GAELIC, SUBLANG_DEFAULT),
+    0,
     MAKELANGID(LANG_IRISH, SUBLANG_IRISH_IRELAND),
     0,
     0,
@@ -724,7 +724,7 @@ BOOL opentype_enum_full_names( const struct tt_name_v0 *header, opentype_enum_na
 }
 
 BOOL opentype_get_properties( const void *data, size_t size, const struct ttc_sfnt_v1 *ttc_sfnt_v1,
-                              DWORD *version, FONTSIGNATURE *fs, DWORD *ntm_flags )
+                              DWORD *version, FONTSIGNATURE *fs, DWORD *ntm_flags, UINT *weight )
 {
     const struct tt_os2_v1 *tt_os2_v1;
     const struct tt_head *tt_head;
@@ -762,6 +762,7 @@ BOOL opentype_get_properties( const void *data, size_t size, const struct ttc_sf
     if (selection & OS2_FSSELECTION_BOLD) flags |= NTM_BOLD;
     if (selection & OS2_FSSELECTION_REGULAR) flags |= NTM_REGULAR;
     if (flags == 0) flags = NTM_REGULAR;
+    *weight = GET_BE_WORD( tt_os2_v1->usWeightClass );
 
     if (opentype_get_table_ptr( data, size, ttc_sfnt_v1, MS_CFF__TAG, &cff_header, &table_size ))
         flags |= NTM_PS_OPENTYPE;

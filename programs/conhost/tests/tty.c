@@ -153,6 +153,7 @@ enum req_type
     REQ_READ_CONSOLE,
     REQ_READ_CONSOLE_A,
     REQ_READ_CONSOLE_FILE,
+    REQ_READ_CONSOLE_CONTROL,
     REQ_SCROLL,
     REQ_SET_ACTIVE,
     REQ_SET_CURSOR,
@@ -201,6 +202,12 @@ struct pseudoconsole_req
             DWORD count;
             COORD coord;
         } fill;
+        struct
+        {
+            size_t size;
+            DWORD mask;
+            WCHAR initial[1];
+        } control;
     } u;
 };
 
@@ -415,6 +422,21 @@ static void child_read_console_file(HANDLE pipe, size_t size)
     ok(ret, "WriteFile failed: %lu\n", GetLastError());
 }
 
+static void child_read_console_control(HANDLE pipe, size_t size, DWORD control, const WCHAR* recall)
+{
+    char tmp[4096];
+    struct pseudoconsole_req *req = (void *)tmp;
+    DWORD count;
+    BOOL ret;
+
+    req->type = REQ_READ_CONSOLE_CONTROL;
+    req->u.control.size = size;
+    req->u.control.mask = control;
+    wcscpy(req->u.control.initial, recall);
+    ret = WriteFile(pipe, req, sizeof(*req) + wcslen(recall) * sizeof(WCHAR), &count, NULL);
+    ok(ret, "WriteFile failed: %lu\n", GetLastError());
+}
+
 #define child_expect_read_result(a,b) child_expect_read_result_(__LINE__,a,b)
 static void child_expect_read_result_(unsigned int line, HANDLE pipe, const WCHAR *expect)
 {
@@ -429,6 +451,25 @@ static void child_expect_read_result_(unsigned int line, HANDLE pipe, const WCHA
                        count, exlen * sizeof(WCHAR));
     buf[count / sizeof(WCHAR)] = 0;
     ok_(__FILE__,line)(!memcmp(expect, buf, count), "unexpected data %s\n", wine_dbgstr_w(buf));
+}
+
+#define child_expect_read_control_result(a,b,c) child_expect_read_control_result_(__LINE__,a,b,c)
+static void child_expect_read_control_result_(unsigned int line, HANDLE pipe, const WCHAR *expect, DWORD state)
+{
+    size_t exlen = wcslen(expect);
+    WCHAR buf[4096];
+    WCHAR *ptr = (void *)((char *)buf + sizeof(DWORD));
+    DWORD count;
+    BOOL ret;
+
+    ret = ReadFile(pipe, buf, sizeof(buf), &count, NULL);
+    ok_(__FILE__,line)(ret, "ReadFile failed: %lu\n", GetLastError());
+    ok_(__FILE__,line)(count == sizeof(DWORD) + exlen * sizeof(WCHAR), "got %lu, expected %Iu\n",
+                       count, sizeof(DWORD) + exlen * sizeof(WCHAR));
+    buf[count / sizeof(WCHAR)] = 0;
+    todo_wine_if(*(DWORD *)buf != state && *(DWORD *)buf == 0)
+    ok_(__FILE__,line)(*(DWORD *)buf == state, "keyboard state: got %lx, expected %lx\n", *(DWORD *)buf, state);
+    ok_(__FILE__,line)(!memcmp(expect, ptr, count - sizeof(DWORD)), "unexpected data %s %s\n", wine_dbgstr_w(ptr), wine_dbgstr_w(expect));
 }
 
 #define child_expect_read_result_a(a,b) child_expect_read_result_a_(__LINE__,a,b)
@@ -502,7 +543,7 @@ static void expect_key_input_(unsigned int line, unsigned int ctx, WCHAR ch, uns
                        "%x: wVirtualScanCode = %x expected %x\n", ctx,
                        record.Event.KeyEvent.wVirtualScanCode, vs);
     ok_(__FILE__,line)(record.Event.KeyEvent.dwControlKeyState == ctrl_state,
-                       "%x: dwControlKeyState = %lx\n", ctx, record.Event.KeyEvent.dwControlKeyState);
+                       "%x: dwControlKeyState = %lx expected %x\n", ctx, record.Event.KeyEvent.dwControlKeyState, ctrl_state);
 }
 
 #define get_input_key_vt() get_input_key_vt_(__LINE__)
@@ -526,12 +567,17 @@ static void expect_key_pressed_(unsigned int line, unsigned int ctx, WCHAR ch, u
     if (ctrl_state & LEFT_ALT_PRESSED)
         expect_key_input_(line, ctx, 0, VK_MENU, TRUE,
                           LEFT_ALT_PRESSED | (ctrl_state & SHIFT_PRESSED));
-    if (ctrl_state & LEFT_CTRL_PRESSED)
+    if (ctrl_state & RIGHT_ALT_PRESSED)
+        expect_key_input_(line, ctx, 0, VK_MENU, TRUE,
+                          RIGHT_ALT_PRESSED | LEFT_CTRL_PRESSED | ENHANCED_KEY | (ctrl_state & SHIFT_PRESSED));
+    else if (ctrl_state & LEFT_CTRL_PRESSED)
         expect_key_input_(line, ctx, 0, VK_CONTROL, TRUE,
                           LEFT_CTRL_PRESSED | (ctrl_state & (SHIFT_PRESSED | LEFT_ALT_PRESSED)));
     expect_key_input_(line, ctx, ch, vk, TRUE, ctrl_state);
     expect_key_input_(line, ctx, ch, vk, FALSE, ctrl_state);
-    if (ctrl_state & LEFT_CTRL_PRESSED)
+    if (ctrl_state & RIGHT_ALT_PRESSED)
+        expect_key_input_(line, ctx, 0, VK_MENU, FALSE, ENHANCED_KEY | (ctrl_state & SHIFT_PRESSED));
+    else if (ctrl_state & LEFT_CTRL_PRESSED)
         expect_key_input_(line, ctx, 0, VK_CONTROL, FALSE,
                           ctrl_state & (SHIFT_PRESSED | LEFT_ALT_PRESSED));
     if (ctrl_state & LEFT_ALT_PRESSED)
@@ -540,31 +586,41 @@ static void expect_key_pressed_(unsigned int line, unsigned int ctx, WCHAR ch, u
         expect_key_input_(line, ctx, 0, VK_SHIFT, FALSE, 0);
 }
 
-#define expect_char_key(a) expect_char_key_(__LINE__,a)
-static void expect_char_key_(unsigned int line, WCHAR ch)
+#define expect_char_key(a) expect_char_key_(__LINE__,a,0)
+#define expect_char_key_ctrl(a,c) expect_char_key_(__LINE__,a,c)
+static void expect_char_key_(unsigned int line, WCHAR ch, unsigned int ctrl)
 {
-    unsigned int ctrl = 0, vk;
+    unsigned int vk;
+
     vk = VkKeyScanW(ch);
     if (vk == ~0) vk = 0;
     if (vk & 0x0100) ctrl |= SHIFT_PRESSED;
+    /* Some keyboard (like German or French one) report right alt as ctrl+alt */
+    if ((vk & 0x0600) == 0x0600 && !(ctrl & LEFT_ALT_PRESSED)) ctrl |= RIGHT_ALT_PRESSED;
     if (vk & 0x0200) ctrl |= LEFT_CTRL_PRESSED;
     vk &= 0xff;
     expect_key_pressed_(line, ch, ch, vk, ctrl);
 }
 
-#define test_cursor_pos(a,b) _test_cursor_pos(__LINE__,a,b)
-static void _test_cursor_pos(unsigned line, int expect_x, int expect_y)
+static void fetch_child_sb_info(CONSOLE_SCREEN_BUFFER_INFO *info)
 {
     struct pseudoconsole_req req = { REQ_GET_SB_INFO };
-    CONSOLE_SCREEN_BUFFER_INFO info;
     DWORD read;
     BOOL ret;
 
     ret = WriteFile(child_pipe, &req, sizeof(req), &read, NULL);
     ok(ret, "WriteFile failed: %lu\n", GetLastError());
 
-    ret = ReadFile(child_pipe, &info, sizeof(info), &read, NULL);
+    ret = ReadFile(child_pipe, info, sizeof(*info), &read, NULL);
     ok(ret, "ReadFile failed: %lu\n", GetLastError());
+}
+
+#define test_cursor_pos(a,b) _test_cursor_pos(__LINE__,a,b)
+static void _test_cursor_pos(unsigned line, int expect_x, int expect_y)
+{
+    CONSOLE_SCREEN_BUFFER_INFO info;
+
+    fetch_child_sb_info(&info);
 
     ok_(__FILE__,line)(info.dwCursorPosition.X == expect_x, "dwCursorPosition.X = %u, expected %u\n",
                        info.dwCursorPosition.X, expect_x);
@@ -572,12 +628,22 @@ static void _test_cursor_pos(unsigned line, int expect_x, int expect_y)
                        info.dwCursorPosition.Y, expect_y);
 }
 
-static void test_write_console(void)
+static BOOL test_write_console(void)
 {
     child_set_output_mode(ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 
     child_string_request(REQ_WRITE_CONSOLE, L"abc");
     skip_hide_cursor();
+    if (skip_sequence("\x1b[H       \x1b[32m0\x1b[41m1\x1b[30m2"))
+    {
+        /* we get this on w1064v1909 (and more discrepancies afterwards).
+         * This is inconsistent with ulterior w10 versions. Assume it's
+         * immature result, and skip rest of tests.
+         */
+        console_output_count = 0;
+        return FALSE;
+    }
+
     expect_output_sequence("abc");
     skip_sequence("\x1b[?25h");            /* show cursor */
 
@@ -905,9 +971,11 @@ static void test_write_console(void)
     skip_sequence("\x1b[?25h");               /* show cursor */
     expect_empty_output();
     test_cursor_pos(1, 23);
+
+    return TRUE;
 }
 
-static void test_tty_output(void)
+static BOOL test_tty_output(void)
 {
     CHAR_INFO char_info_buf[2048], char_info;
     HANDLE sb, sb2;
@@ -1141,7 +1209,7 @@ static void test_tty_output(void)
     expect_output_sequence("\x1b[?25h");   /* show cursor */
     expect_empty_output();
 
-    test_write_console();
+    if (!test_write_console()) return FALSE;
 
     sb = child_create_screen_buffer();
     child_set_active(sb);
@@ -1188,6 +1256,8 @@ static void test_tty_output(void)
     expect_output_sequence("\x1b[H");      /* set cursor */
     expect_output_sequence("\x1b[?25h");   /* show cursor */
     expect_empty_output();
+
+    return TRUE;
 }
 
 static void write_console_pipe(const char *buf)
@@ -1276,6 +1346,114 @@ static void test_read_console(void)
     expect_empty_output();
 }
 
+static void test_read_console_control(void)
+{
+    CONSOLE_SCREEN_BUFFER_INFO info1, info2;
+    char ctrl;
+    char buf[16];
+    WCHAR bufw[16];
+
+    child_set_input_mode(child_pipe, ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT |
+                         ENABLE_ECHO_INPUT | ENABLE_MOUSE_INPUT | ENABLE_INSERT_MODE |
+                         ENABLE_QUICK_EDIT_MODE | ENABLE_EXTENDED_FLAGS | ENABLE_AUTO_POSITION);
+
+    /* test simple behavior */
+    for (ctrl = 0; ctrl < ' '; ctrl++)
+    {
+        DWORD state;
+        SHORT cc;
+
+        /* don't play with fire */
+        if (ctrl == 0 || ctrl == 3 || ctrl == '\n' || ctrl == 27) continue;
+
+        /* Simulate initial characters
+         * Note: as ReadConsole with CONTROL structure will need to back up the cursor
+         * up to the length of the initial characters, all the following tests ensure that
+         * this backup doesn't imply backing up to the previous line.
+         * This is the "regular" behavior when using completion.
+         */
+        child_string_request(REQ_WRITE_CONSOLE, L"\rabc");
+        skip_sequence("\x1b[25l");  /* broken hide cursor */
+        skip_sequence("\x1b[?25l"); /* hide cursor */
+        skip_sequence("\x1b[H");
+        skip_sequence("\r");
+        expect_output_sequence("abc");
+        skip_sequence("\x1b[?25h"); /* show cursor */
+
+        fetch_child_sb_info(&info1);
+        child_read_console_control(child_pipe, 100, 1ul << ctrl, L"abc");
+        strcpy(buf, "def."); buf[3] = ctrl;
+        write_console_pipe(buf);
+        wcscpy(bufw, L"abcdef."); bufw[6] = (WCHAR)ctrl;
+        /* ^H requires special handling */
+        cc = (ctrl == 8) ? 0x0200 : VkKeyScanA(ctrl);
+        if (cc == -1) cc = 0;
+        state = 0;
+        if (cc & 0x0100) state |= SHIFT_PRESSED;
+        if (cc & 0x0200) state |= LEFT_CTRL_PRESSED;
+        child_expect_read_control_result(child_pipe, bufw, state);
+        skip_sequence("\x1b[?25l"); /* hide cursor */
+        expect_output_sequence("def");
+        skip_sequence("\x1b[?25h"); /* show cursor */
+        fetch_child_sb_info(&info2);
+        ok(info1.dwCursorPosition.X + 3 == info2.dwCursorPosition.X,
+           "Bad x-position: expected %u => %u but got => %u instead\n",
+           info1.dwCursorPosition.X, info1.dwCursorPosition.X + 3, info2.dwCursorPosition.X);
+        ok(info1.dwCursorPosition.Y == info2.dwCursorPosition.Y, "Cursor shouldn't have changed line\n");
+    }
+
+    /* test two different control characters in input */
+    fetch_child_sb_info(&info1);
+    child_read_console_control(child_pipe, 100, 1ul << '\x01', L"abc");
+    write_console_pipe("d\x02""ef\x01");
+    child_expect_read_control_result(child_pipe, L"abcd\x02""ef\x01", LEFT_CTRL_PRESSED);
+    skip_sequence("\x1b[?25l"); /* hide cursor */
+    expect_output_sequence("d^Bef");
+    skip_sequence("\x1b[?25h"); /* show cursor */
+    fetch_child_sb_info(&info2);
+    ok(info1.dwCursorPosition.X + 5 == info2.dwCursorPosition.X,
+       "Bad x-position: expected %u => %u but got => %u instead\n",
+       info1.dwCursorPosition.X, info1.dwCursorPosition.X + 5, info2.dwCursorPosition.X);
+    ok(info1.dwCursorPosition.Y == info2.dwCursorPosition.Y, "Cursor shouldn't have changed line\n");
+
+    /* test that ctrl character not in mask is handled as without ctrl mask */
+    child_read_console_control(child_pipe, 100, 1ul << '\x01', L"abc");
+    write_console_pipe("d\ref\x01");
+    child_expect_read_control_result(child_pipe, L"abcd\r\n", 0);
+    skip_sequence("\x1b[?25l"); /* hide cursor */
+    expect_output_sequence("d\r\n");
+    skip_sequence("\x1b[?25h"); /* show cursor */
+    expect_empty_output();
+    /* see note above... ditto */
+    child_string_request(REQ_WRITE_CONSOLE, L"abc");
+    skip_sequence("\x1b[?25l"); /* hide cursor */
+    expect_output_sequence("abc");
+    skip_sequence("\x1b[?25h"); /* show cursor */
+
+    child_read_console_control(child_pipe, 100, 1ul << '\x01', L"abc");
+    child_expect_read_control_result(child_pipe, L"abcef\x01", LEFT_CTRL_PRESSED);
+    skip_sequence("\x1b[?25l"); /* hide cursor */
+    expect_output_sequence("ef");
+    skip_sequence("\x1b[?25h"); /* show cursor */
+
+    /* test when output buffer becomes full before control event */
+    child_read_console_control(child_pipe, 4, 1ul << '\x01', L"abc");
+    write_console_pipe("def\x01");
+    child_expect_read_control_result(child_pipe, L"abcd", LEFT_CTRL_PRESSED);
+    skip_sequence("\x1b[?25l"); /* hide cursor */
+    expect_output_sequence("def");
+    skip_sequence("\x1b[?25h"); /* show cursor */
+    expect_empty_output();
+    child_read_console_control(child_pipe, 20, 1ul << '\x01', L"abc");
+    child_expect_read_control_result(child_pipe, L"ef\x01", 0);
+
+    /* TODO: add tests:
+     * - when initial characters go back to previous line
+     * - edition inside initial characters can occur
+     */
+    expect_empty_output();
+}
+
 static void test_tty_input(void)
 {
     INPUT_RECORD ir;
@@ -1285,60 +1463,67 @@ static void test_tty_input(void)
     static const struct
     {
         const char *str;
-        WCHAR ch;
         unsigned int vk;
         unsigned int ctrl;
     } escape_test[] = {
-        { "\x1b[A",          0,      VK_UP,       0 },
-        { "\x1b[B",          0,      VK_DOWN,     0 },
-        { "\x1b[C",          0,      VK_RIGHT,    0 },
-        { "\x1b[D",          0,      VK_LEFT,     0 },
-        { "\x1b[H",          0,      VK_HOME,     0 },
-        { "\x1b[F",          0,      VK_END,      0 },
-        { "\x1b[2~",         0,      VK_INSERT,   0 },
-        { "\x1b[3~",         0,      VK_DELETE,   0 },
-        { "\x1b[5~",         0,      VK_PRIOR,    0 },
-        { "\x1b[6~",         0,      VK_NEXT,     0 },
-        { "\x1b[15~",        0,      VK_F5,       0 },
-        { "\x1b[17~",        0,      VK_F6,       0 },
-        { "\x1b[18~",        0,      VK_F7,       0 },
-        { "\x1b[19~",        0,      VK_F8,       0 },
-        { "\x1b[20~",        0,      VK_F9,       0 },
-        { "\x1b[21~",        0,      VK_F10,      0 },
+        { "\x1b[A",          VK_UP,       0 },
+        { "\x1b[B",          VK_DOWN,     0 },
+        { "\x1b[C",          VK_RIGHT,    0 },
+        { "\x1b[D",          VK_LEFT,     0 },
+        { "\x1b[H",          VK_HOME,     0 },
+        { "\x1b[F",          VK_END,      0 },
+        { "\x1b[2~",         VK_INSERT,   0 },
+        { "\x1b[3~",         VK_DELETE,   0 },
+        { "\x1b[5~",         VK_PRIOR,    0 },
+        { "\x1b[6~",         VK_NEXT,     0 },
+        { "\x1b[15~",        VK_F5,       0 },
+        { "\x1b[17~",        VK_F6,       0 },
+        { "\x1b[18~",        VK_F7,       0 },
+        { "\x1b[19~",        VK_F8,       0 },
+        { "\x1b[20~",        VK_F9,       0 },
+        { "\x1b[21~",        VK_F10,      0 },
         /* 0x10 */
-        { "\x1b[23~",        0,      VK_F11,      0 },
-        { "\x1b[24~",        0,      VK_F12,      0 },
-        { "\x1bOP",          0,      VK_F1,       0 },
-        { "\x1bOQ",          0,      VK_F2,       0 },
-        { "\x1bOR",          0,      VK_F3,       0 },
-        { "\x1bOS",          0,      VK_F4,       0 },
-        { "\x1b[1;1A",       0,      VK_UP,       0 },
-        { "\x1b[1;2A",       0,      VK_UP,       SHIFT_PRESSED },
-        { "\x1b[1;3A",       0,      VK_UP,       LEFT_ALT_PRESSED },
-        { "\x1b[1;4A",       0,      VK_UP,       SHIFT_PRESSED | LEFT_ALT_PRESSED },
-        { "\x1b[1;5A",       0,      VK_UP,       LEFT_CTRL_PRESSED },
-        { "\x1b[1;6A",       0,      VK_UP,       SHIFT_PRESSED | LEFT_CTRL_PRESSED },
-        { "\x1b[1;7A",       0,      VK_UP,       LEFT_ALT_PRESSED  | LEFT_CTRL_PRESSED },
-        { "\x1b[1;8A",       0,      VK_UP,       SHIFT_PRESSED | LEFT_ALT_PRESSED  | LEFT_CTRL_PRESSED },
-        { "\x1b[1;9A",       0,      VK_UP,       0 },
-        { "\x1b[1;10A",      0,      VK_UP,       SHIFT_PRESSED },
+        { "\x1b[23~",        VK_F11,      0 },
+        { "\x1b[24~",        VK_F12,      0 },
+        { "\x1bOP",          VK_F1,       0 },
+        { "\x1bOQ",          VK_F2,       0 },
+        { "\x1bOR",          VK_F3,       0 },
+        { "\x1bOS",          VK_F4,       0 },
+        { "\x1b[1;1A",       VK_UP,       0 },
+        { "\x1b[1;2A",       VK_UP,       SHIFT_PRESSED },
+        { "\x1b[1;3A",       VK_UP,       LEFT_ALT_PRESSED },
+        { "\x1b[1;4A",       VK_UP,       SHIFT_PRESSED | LEFT_ALT_PRESSED },
+        { "\x1b[1;5A",       VK_UP,       LEFT_CTRL_PRESSED },
+        { "\x1b[1;6A",       VK_UP,       SHIFT_PRESSED | LEFT_CTRL_PRESSED },
+        { "\x1b[1;7A",       VK_UP,       LEFT_ALT_PRESSED  | LEFT_CTRL_PRESSED },
+        { "\x1b[1;8A",       VK_UP,       SHIFT_PRESSED | LEFT_ALT_PRESSED  | LEFT_CTRL_PRESSED },
+        { "\x1b[1;9A",       VK_UP,       0 },
+        { "\x1b[1;10A",      VK_UP,       SHIFT_PRESSED },
         /* 0x20 */
-        { "\x1b[1;11A",      0,      VK_UP,       LEFT_ALT_PRESSED },
-        { "\x1b[1;12A",      0,      VK_UP,       SHIFT_PRESSED | LEFT_ALT_PRESSED },
-        { "\x1b[1;13A",      0,      VK_UP,       LEFT_CTRL_PRESSED },
-        { "\x1b[1;14A",      0,      VK_UP,       SHIFT_PRESSED | LEFT_CTRL_PRESSED },
-        { "\x1b[1;15A",      0,      VK_UP,       LEFT_ALT_PRESSED  | LEFT_CTRL_PRESSED },
-        { "\x1b[1;16A",      0,      VK_UP,       SHIFT_PRESSED | LEFT_ALT_PRESSED  | LEFT_CTRL_PRESSED },
-        { "\x1b[1;2P",       0,      VK_F1,       SHIFT_PRESSED },
-        { "\x1b[2;3~",       0,      VK_INSERT,   LEFT_ALT_PRESSED },
-        { "\x1b[2;3;5;6~",   0,      VK_INSERT,   0 },
-        { "\x1b[6;2;3;5;1~", 0,      VK_NEXT,     0 },
-        { "\xe4\xb8\x80",    0x4e00, 0,           0 },
-        { "\x1b\x1b",        0x1b,   VK_ESCAPE,   LEFT_ALT_PRESSED },
-        { "\x1b""1",         '1',    '1',         LEFT_ALT_PRESSED },
-        { "\x1b""x",         'x',    'X',         LEFT_ALT_PRESSED },
-        { "\x1b""[",         '[',    VK_OEM_4,    LEFT_ALT_PRESSED },
-        { "\x7f",            '\b',   VK_BACK,     0 },
+        { "\x1b[1;11A",      VK_UP,       LEFT_ALT_PRESSED },
+        { "\x1b[1;12A",      VK_UP,       SHIFT_PRESSED | LEFT_ALT_PRESSED },
+        { "\x1b[1;13A",      VK_UP,       LEFT_CTRL_PRESSED },
+        { "\x1b[1;14A",      VK_UP,       SHIFT_PRESSED | LEFT_CTRL_PRESSED },
+        { "\x1b[1;15A",      VK_UP,       LEFT_ALT_PRESSED  | LEFT_CTRL_PRESSED },
+        { "\x1b[1;16A",      VK_UP,       SHIFT_PRESSED | LEFT_ALT_PRESSED  | LEFT_CTRL_PRESSED },
+        { "\x1b[1;2P",       VK_F1,       SHIFT_PRESSED },
+        { "\x1b[2;3~",       VK_INSERT,   LEFT_ALT_PRESSED },
+        { "\x1b[2;3;5;6~",   VK_INSERT,   0 },
+        { "\x1b[6;2;3;5;1~", VK_NEXT,     0 },
+    };
+    static const struct
+    {
+        const char *str;
+        WCHAR ch;
+        unsigned int ctrl;
+    } escape_char_test[] = {
+        { "\x1b[Z",          0x9,    SHIFT_PRESSED },
+        { "\xe4\xb8\x80",    0x4e00, 0 },
+        { "\x1b\x1b",        0x1b,   LEFT_ALT_PRESSED },
+        { "\x1b""1",         '1',    LEFT_ALT_PRESSED },
+        { "\x1b""x",         'x',    LEFT_ALT_PRESSED },
+        { "\x1b""[",         '[',    LEFT_ALT_PRESSED },
+        { "\x7f",            '\b',   0 },
     };
 
     write_console_pipe("x");
@@ -1390,7 +1575,13 @@ static void test_tty_input(void)
     for (i = 0; i < ARRAY_SIZE(escape_test); i++)
     {
         write_console_pipe(escape_test[i].str);
-        expect_key_pressed_ctx(i, escape_test[i].ch, escape_test[i].vk, escape_test[i].ctrl);
+        expect_key_pressed_ctx(i, 0, escape_test[i].vk, escape_test[i].ctrl);
+    }
+
+    for (i = 0; i < ARRAY_SIZE(escape_char_test); i++)
+    {
+        write_console_pipe(escape_char_test[i].str);
+        expect_char_key_ctrl(escape_char_test[i].ch, escape_char_test[i].ctrl);
     }
 
     for (i = 0x80; i < 0x100; i += 11)
@@ -1477,6 +1668,27 @@ static void child_process(HANDLE pipe)
             ok(ret, "ReadFile failed: %lu\n", GetLastError());
             ret = WriteFile(pipe, buf, count, NULL, NULL);
             ok(ret, "WriteFile failed: %lu\n", GetLastError());
+            break;
+
+        case REQ_READ_CONSOLE_CONTROL:
+            {
+                CONSOLE_READCONSOLE_CONTROL crc;
+                WCHAR result[1024];
+                WCHAR *ptr = (void *)((char *)result + sizeof(DWORD));
+
+                count = req->u.control.size;
+                memset(result, 0xcc, sizeof(result));
+                crc.nLength = sizeof(crc);
+                crc.dwCtrlWakeupMask = req->u.control.mask;
+                crc.nInitialChars = wcslen(req->u.control.initial);
+                crc.dwConsoleKeyState = 0xa5;
+                memcpy(ptr, req->u.control.initial, crc.nInitialChars * sizeof(WCHAR));
+                ret = ReadConsoleW(input, ptr, count, &count, &crc);
+                ok(ret, "ReadConsoleW failed: %lu\n", GetLastError());
+                *(DWORD *)result = crc.dwConsoleKeyState;
+                ret = WriteFile(pipe, result, sizeof(DWORD) + count * sizeof(WCHAR), NULL, NULL);
+                ok(ret, "WriteFile failed: %lu\n", GetLastError());
+            }
             break;
 
         case REQ_SCROLL:
@@ -1638,11 +1850,16 @@ static void test_pseudoconsole(void)
 
     if (!broken_version)
     {
-        test_tty_output();
-        test_read_console();
-        test_tty_input();
+        if (test_tty_output())
+        {
+            test_read_console_control();
+            test_read_console();
+            test_tty_input();
+        }
+        else
+            win_skip("Partially supported windows version. Skipping rest of the tests\n");
     }
-    else win_skip("Skipping tty output tests on broken Windows version\n");
+    else win_skip("Skipping tty tests on broken Windows version\n");
 
     CloseHandle(child_pipe);
     wait_child_process(child_process);
@@ -1659,6 +1876,16 @@ static void test_pseudoconsole(void)
             if (i != 39) expect_output_sequence("\r\n");
         }
         skip_sequence("\x1b[H\x1b[?25h");
+        /* native sometimes redraws the screen afterwards */
+        if (skip_sequence("\x1b[25l"))
+        {
+            unsigned int line_feed = 0;
+            /* not checking exact output, depends too heavily on previous tests */
+            for (i = 0; i < console_output_count - 2; i++)
+                if (!memcmp(console_output + i, "\r\n", 2)) line_feed++;
+            ok(line_feed == 39, "Wrong number of line feeds %u\n", line_feed);
+            console_output_count = 0;
+        }
     }
     expect_empty_output();
 

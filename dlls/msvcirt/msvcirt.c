@@ -38,9 +38,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(msvcirt);
 #define RESERVE_SIZE 512
 #define STATEBUF_SIZE 8
 
-void* (__cdecl *operator_new)(SIZE_T);
-void (__cdecl *operator_delete)(void*);
-
 /* ?sh_none@filebuf@@2HB */
 const int filebuf_sh_none = 0x800;
 /* ?sh_read@filebuf@@2HB */
@@ -634,7 +631,7 @@ DEFINE_THISCALL_WRAPPER(streambuf_seekoff, 16)
 #define call_streambuf_seekoff(this, off, dir, mode) CALL_VTBL_FUNC(this, 12, streampos, (streambuf*, streamoff, ios_seek_dir, int), (this, off, dir, mode))
 streampos __thiscall streambuf_seekoff(streambuf *this, streamoff offset, ios_seek_dir dir, int mode)
 {
-    TRACE("(%p %d %d %d)\n", this, offset, dir, mode);
+    TRACE("(%p %ld %d %d)\n", this, offset, dir, mode);
     return EOF;
 }
 
@@ -643,7 +640,7 @@ streampos __thiscall streambuf_seekoff(streambuf *this, streamoff offset, ios_se
 DEFINE_THISCALL_WRAPPER(streambuf_seekpos, 12)
 streampos __thiscall streambuf_seekpos(streambuf *this, streampos pos, int mode)
 {
-    TRACE("(%p %d %d)\n", this, pos, mode);
+    TRACE("(%p %ld %d)\n", this, pos, mode);
     return call_streambuf_seekoff(this, pos, SEEKDIR_beg, mode);
 }
 
@@ -820,7 +817,7 @@ int __thiscall streambuf_xsputn(streambuf *this, const char *data, int length)
 
     while (copied < length) {
         if (this->unbuffered || this->pptr == this->epptr) {
-            if (call_streambuf_overflow(this, data[copied]) == EOF)
+            if (call_streambuf_overflow(this, (unsigned char)data[copied]) == EOF)
                 break;
             copied++;
         } else {
@@ -1181,7 +1178,7 @@ int __thiscall filebuf_overflow(filebuf *this, int c)
 DEFINE_THISCALL_WRAPPER(filebuf_seekoff, 16)
 streampos __thiscall filebuf_seekoff(filebuf *this, streamoff offset, ios_seek_dir dir, int mode)
 {
-    TRACE("(%p %d %d %d)\n", this, offset, dir, mode);
+    TRACE("(%p %ld %d %d)\n", this, offset, dir, mode);
     if (call_streambuf_sync(&this->base) == EOF)
         return EOF;
     return _lseek(this->fd, offset, dir);
@@ -1520,7 +1517,7 @@ streampos __thiscall strstreambuf_seekoff(strstreambuf *this, streamoff offset, 
 {
     char *base[3];
 
-    TRACE("(%p %d %d %d)\n", this, offset, dir, mode);
+    TRACE("(%p %ld %d %d)\n", this, offset, dir, mode);
 
     if ((unsigned int)dir > SEEKDIR_end || !(mode & (OPENMODE_in|OPENMODE_out)))
         return EOF;
@@ -1720,7 +1717,7 @@ int __thiscall stdiobuf_pbackfail(stdiobuf *this, int c)
 DEFINE_THISCALL_WRAPPER(stdiobuf_seekoff, 16)
 streampos __thiscall stdiobuf_seekoff(stdiobuf *this, streamoff offset, ios_seek_dir dir, int mode)
 {
-    TRACE("(%p %d %d %d)\n", this, offset, dir, mode);
+    TRACE("(%p %ld %d %d)\n", this, offset, dir, mode);
     call_streambuf_overflow(&this->base, EOF);
     if (fseek(this->file, offset, dir))
         return EOF;
@@ -2070,7 +2067,7 @@ LONG __thiscall ios_flags_set(ios *this, LONG flags)
 {
     LONG prev = this->flags;
 
-    TRACE("(%p %x)\n", this, flags);
+    TRACE("(%p %lx)\n", this, flags);
 
     this->flags = flags;
     return prev;
@@ -2225,7 +2222,7 @@ LONG __thiscall ios_setf(ios *this, LONG flags)
 {
     LONG prev = this->flags;
 
-    TRACE("(%p %x)\n", this, flags);
+    TRACE("(%p %lx)\n", this, flags);
 
     ios_lock(this);
     this->flags |= flags;
@@ -2240,7 +2237,7 @@ LONG __thiscall ios_setf_mask(ios *this, LONG flags, LONG mask)
 {
     LONG prev = this->flags;
 
-    TRACE("(%p %x %x)\n", this, flags, mask);
+    TRACE("(%p %lx %lx)\n", this, flags, mask);
 
     ios_lock(this);
     this->flags = (this->flags & (~mask)) | (flags & mask);
@@ -2311,7 +2308,7 @@ LONG __thiscall ios_unsetf(ios *this, LONG flags)
 {
     LONG prev = this->flags;
 
-    TRACE("(%p %x)\n", this, flags);
+    TRACE("(%p %lx)\n", this, flags);
 
     ios_lock(this);
     this->flags &= ~flags;
@@ -2607,7 +2604,7 @@ ostream* __thiscall ostream_seekp(ostream *this, streampos pos)
 {
     ios *base = ostream_get_ios(this);
 
-    TRACE("(%p %d)\n", this, pos);
+    TRACE("(%p %ld)\n", this, pos);
 
     ios_lockbuf(base);
     if (streambuf_seekpos(base->sb, pos, OPENMODE_out) == EOF)
@@ -2623,7 +2620,7 @@ ostream* __thiscall ostream_seekp_offset(ostream *this, streamoff off, ios_seek_
 {
     ios *base = ostream_get_ios(this);
 
-    TRACE("(%p %d %d)\n", this, off, dir);
+    TRACE("(%p %ld %d)\n", this, off, dir);
 
     ios_lockbuf(base);
     if (call_streambuf_seekoff(base->sb, off, dir, OPENMODE_out) == EOF)
@@ -2670,15 +2667,12 @@ ostream* __thiscall ostream_write(ostream *this, const char *str, int count)
     return this;
 }
 
-/* ?writepad@ostream@@AAEAAV1@PBD0@Z */
-/* ?writepad@ostream@@AEAAAEAV1@PEBD0@Z */
-DEFINE_THISCALL_WRAPPER(ostream_writepad, 12)
-ostream* __thiscall ostream_writepad(ostream *this, const char *str1, const char *str2)
+static ostream* ostream_writepad_len(ostream *this, const char *str1, const char *str2, int len2)
 {
     ios *base = ostream_get_ios(this);
-    int len1 = strlen(str1), len2 = strlen(str2), i;
+    int len1 = strlen(str1), i;
 
-    TRACE("(%p %p %p)\n", this, str1, str2);
+    TRACE("(%p %p %p %d)\n", this, str1, str2, len2);
 
     /* left of the padding */
     if (base->flags & (FLAGS_left|FLAGS_internal)) {
@@ -2701,6 +2695,14 @@ ostream* __thiscall ostream_writepad(ostream *this, const char *str1, const char
             base->state |= IOSTATE_failbit | IOSTATE_badbit;
     }
     return this;
+}
+
+/* ?writepad@ostream@@AAEAAV1@PBD0@Z */
+/* ?writepad@ostream@@AEAAAEAV1@PEBD0@Z */
+DEFINE_THISCALL_WRAPPER(ostream_writepad, 12)
+ostream* __thiscall ostream_writepad(ostream *this, const char *str1, const char *str2)
+{
+    return ostream_writepad_len(this, str1, str2, strlen(str2));
 }
 
 static ostream* ostream_internal_print_integer(ostream *ostr, int n, BOOL unsig, BOOL shrt)
@@ -2792,12 +2794,10 @@ static ostream* ostream_internal_print_float(ostream *ostr, double d, BOOL dbl)
 DEFINE_THISCALL_WRAPPER(ostream_print_char, 8)
 ostream* __thiscall ostream_print_char(ostream *this, char c)
 {
-    const char c_str[2] = {c, 0};
-
-    TRACE("(%p %c)\n", this, c);
+    TRACE("(%p %d)\n", this, c);
 
     if (ostream_opfx(this)) {
-        ostream_writepad(this, "", c_str);
+        ostream_writepad_len(this, "", &c, 1);
         ostream_osfx(this);
     }
     return this;
@@ -3749,7 +3749,7 @@ istream* __thiscall istream_seekg(istream *this, streampos pos)
 {
     ios *base = istream_get_ios(this);
 
-    TRACE("(%p %d)\n", this, pos);
+    TRACE("(%p %ld)\n", this, pos);
 
     ios_lockbuf(base);
     if (streambuf_seekpos(base->sb, pos, OPENMODE_in) == EOF)
@@ -3765,7 +3765,7 @@ istream* __thiscall istream_seekg_offset(istream *this, streamoff off, ios_seek_
 {
     ios *base = istream_get_ios(this);
 
-    TRACE("(%p %d %d)\n", this, off, dir);
+    TRACE("(%p %ld %d)\n", this, off, dir);
 
     ios_lockbuf(base);
     if (call_streambuf_seekoff(base->sb, off, dir, OPENMODE_in) == EOF)
@@ -4010,7 +4010,7 @@ static LONG istream_internal_read_integer(istream *this, LONG min_value, LONG ma
     int num_base;
     LONG ret;
 
-    TRACE("(%p %d %d %d)\n", this, min_value, max_value, set_flag);
+    TRACE("(%p %ld %ld %d)\n", this, min_value, max_value, set_flag);
 
     num_base = istream_getint(this, buffer);
     errno = 0;
@@ -4035,7 +4035,7 @@ static ULONG istream_internal_read_unsigned_integer(istream *this, LONG min_valu
     int num_base;
     ULONG ret;
 
-    TRACE("(%p %d %u)\n", this, min_value, max_value);
+    TRACE("(%p %ld %lu)\n", this, min_value, max_value);
 
     num_base = istream_getint(this, buffer);
     errno = 0;
@@ -5129,19 +5129,32 @@ void __cdecl _mtunlock(CRITICAL_SECTION *crit)
     LeaveCriticalSection(crit);
 }
 
+static void* (__cdecl __WINE_ALLOC_SIZE(1) *MSVCRT_operator_new)(SIZE_T);
+static void (__cdecl *MSVCRT_operator_delete)(void*);
+
+void* __cdecl operator_new(SIZE_T size)
+{
+    return MSVCRT_operator_new(size);
+}
+
+void __cdecl operator_delete(void *mem)
+{
+    MSVCRT_operator_delete(mem);
+}
+
 static void init_cxx_funcs(void)
 {
     HMODULE hmod = GetModuleHandleA("msvcrt.dll");
 
     if (sizeof(void *) > sizeof(int))  /* 64-bit has different names */
     {
-        operator_new = (void*)GetProcAddress(hmod, "??2@YAPEAX_K@Z");
-        operator_delete = (void*)GetProcAddress(hmod, "??3@YAXPEAX@Z");
+        MSVCRT_operator_new = (void*)GetProcAddress(hmod, "??2@YAPEAX_K@Z");
+        MSVCRT_operator_delete = (void*)GetProcAddress(hmod, "??3@YAXPEAX@Z");
     }
     else
     {
-        operator_new = (void*)GetProcAddress(hmod, "??2@YAPAXI@Z");
-        operator_delete = (void*)GetProcAddress(hmod, "??3@YAXPAX@Z");
+        MSVCRT_operator_new = (void*)GetProcAddress(hmod, "??2@YAPAXI@Z");
+        MSVCRT_operator_delete = (void*)GetProcAddress(hmod, "??3@YAXPAX@Z");
     }
 }
 
@@ -5149,7 +5162,7 @@ static void init_io(void *base)
 {
     filebuf *fb;
 
-#ifdef __x86_64__
+#ifdef RTTI_USE_RVA
     init_streambuf_rtti(base);
     init_filebuf_rtti(base);
     init_strstreambuf_rtti(base);

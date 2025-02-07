@@ -52,7 +52,7 @@ static HRESULT WINAPI client_security_QueryInterface(
     if ( IsEqualGUID( riid, &IID_IClientSecurity ) ||
          IsEqualGUID( riid, &IID_IUnknown ) )
     {
-        *ppvObject = cs;
+        *ppvObject = &cs->IClientSecurity_iface;
     }
     else
     {
@@ -122,8 +122,8 @@ static HRESULT WINAPI client_security_SetBlanket(
     const OLECHAR *princname = (pServerPrincName == COLE_DEFAULT_PRINCIPAL) ?
                                L"<COLE_DEFAULT_PRINCIPAL>" : pServerPrincName;
 
-    FIXME("%p, %p, %u, %u, %s, %u, %u, %p, 0x%08x\n", iface, pProxy, AuthnSvc, AuthzSvc,
-          debugstr_w(princname), AuthnLevel, ImpLevel, pAuthInfo, Capabilities);
+    FIXME( "%p, %p, %lu, %lu, %s, %lu, %lu, %p, %#lx\n", iface, pProxy, AuthnSvc, AuthzSvc,
+           debugstr_w(princname), AuthnLevel, ImpLevel, pAuthInfo, Capabilities );
     return WBEM_NO_ERROR;
 }
 
@@ -264,7 +264,7 @@ static HRESULT WINAPI wbem_services_QueryInterface(
     if ( IsEqualGUID( riid, &IID_IWbemServices ) ||
          IsEqualGUID( riid, &IID_IUnknown ) )
     {
-        *ppvObject = ws;
+        *ppvObject = &ws->IWbemServices_iface;
     }
     else if ( IsEqualGUID( riid, &IID_IClientSecurity ) )
     {
@@ -290,8 +290,8 @@ static HRESULT WINAPI wbem_services_OpenNamespace(
 {
     struct wbem_services *ws = impl_from_IWbemServices( iface );
 
-    TRACE("%p, %s, 0x%08x, %p, %p, %p\n", iface, debugstr_w(strNamespace), lFlags,
-          pCtx, ppWorkingNamespace, ppResult);
+    TRACE( "%p, %s, %#lx, %p, %p, %p\n", iface, debugstr_w(strNamespace), lFlags,
+           pCtx, ppWorkingNamespace, ppResult );
 
     if (ws->ns != WBEMPROX_NAMESPACE_LAST || !strNamespace)
         return WBEM_E_INVALID_NAMESPACE;
@@ -334,6 +334,14 @@ static HRESULT WINAPI wbem_services_QueryObjectSink(
 {
     FIXME("\n");
     return WBEM_E_FAILED;
+}
+
+void free_path( struct path *path )
+{
+    if (!path) return;
+    free( path->class );
+    free( path->filter );
+    free( path );
 }
 
 HRESULT parse_path( const WCHAR *str, struct path **ret )
@@ -391,7 +399,7 @@ HRESULT parse_path( const WCHAR *str, struct path **ret )
     }
 
     q = p;
-    while (*p && *p != '.') p++;
+    while (*p && *p != '.' && *p != '=') p++;
 
     len = p - q;
     if (!(path->class = malloc( (len + 1) * sizeof(WCHAR) )))
@@ -411,24 +419,48 @@ HRESULT parse_path( const WCHAR *str, struct path **ret )
         len = q - p;
         if (!(path->filter = malloc( (len + 1) * sizeof(WCHAR) )))
         {
-            free( path->class );
-            free( path );
+            free_path( path );
             return E_OUTOFMEMORY;
         }
         memcpy( path->filter, p, len * sizeof(WCHAR) );
         path->filter[len] = 0;
         path->filter_len = len;
     }
+    else if (p[0] == '=' && p[1])
+    {
+        WCHAR *key;
+        UINT len_key;
+
+        while (*q) q++;
+        len = q - p;
+
+        if (!(key = get_first_key_property( WBEMPROX_NAMESPACE_CIMV2, path->class )))
+        {
+            free_path( path );
+            return WBEM_E_INVALID_OBJECT_PATH;
+        }
+        len_key = wcslen( key );
+
+        if (!(path->filter = malloc( (len + len_key + 1) * sizeof(WCHAR) )))
+        {
+            free( key );
+            free_path( path );
+            return E_OUTOFMEMORY;
+        }
+        wcscpy( path->filter, key );
+        memcpy( path->filter + len_key, p, len * sizeof(WCHAR) );
+        path->filter_len = len + len_key;
+        path->filter[path->filter_len] = 0;
+        free( key );
+    }
+    else if (p[0])
+    {
+        free_path( path );
+        return WBEM_E_INVALID_OBJECT_PATH;
+    }
+
     *ret = path;
     return S_OK;
-}
-
-void free_path( struct path *path )
-{
-    if (!path) return;
-    free( path->class );
-    free( path->filter );
-    free( path );
 }
 
 WCHAR *query_from_path( const struct path *path )
@@ -502,10 +534,10 @@ static HRESULT WINAPI wbem_services_GetObject(
 {
     struct wbem_services *services = impl_from_IWbemServices( iface );
 
-    TRACE("%p, %s, 0x%08x, %p, %p, %p\n", iface, debugstr_w(strObjectPath), lFlags,
-          pCtx, ppObject, ppCallResult);
+    TRACE( "%p, %s, %#lx, %p, %p, %p\n", iface, debugstr_w(strObjectPath), lFlags,
+           pCtx, ppObject, ppCallResult );
 
-    if (lFlags) FIXME("unsupported flags 0x%08x\n", lFlags);
+    if (lFlags) FIXME( "unsupported flags %#lx\n", lFlags );
 
     if (!strObjectPath || !strObjectPath[0])
         return create_class_object( services->ns, NULL, NULL, 0, NULL, ppObject );
@@ -645,9 +677,9 @@ static HRESULT WINAPI wbem_services_CreateInstanceEnum(
     struct path *path;
     HRESULT hr;
 
-    TRACE("%p, %s, 0%08x, %p, %p\n", iface, debugstr_w(strClass), lFlags, pCtx, ppEnum);
+    TRACE( "%p, %s, %#lx, %p, %p\n", iface, debugstr_w(strClass), lFlags, pCtx, ppEnum );
 
-    if (lFlags) FIXME("unsupported flags 0x%08x\n", lFlags);
+    if (lFlags) FIXME( "unsupported flags %#lx\n", lFlags );
 
     hr = parse_path( strClass, &path );
     if (hr != S_OK) return hr;
@@ -678,8 +710,8 @@ static HRESULT WINAPI wbem_services_ExecQuery(
 {
     struct wbem_services *services = impl_from_IWbemServices( iface );
 
-    TRACE("%p, %s, %s, 0x%08x, %p, %p\n", iface, debugstr_w(strQueryLanguage),
-          debugstr_w(strQuery), lFlags, pCtx, ppEnum);
+    TRACE( "%p, %s, %s, %#lx, %p, %p\n", iface, debugstr_w(strQueryLanguage),
+           debugstr_w(strQuery), lFlags, pCtx, ppEnum );
 
     if (!strQueryLanguage || !strQuery || !strQuery[0]) return WBEM_E_INVALID_PARAMETER;
     if (wcsicmp( strQueryLanguage, L"WQL" )) return WBEM_E_INVALID_QUERY_TYPE;
@@ -724,8 +756,8 @@ static HRESULT WINAPI wbem_services_ExecQueryAsync(
     struct async_header *async;
     struct async_query *query;
 
-    TRACE("%p, %s, %s, 0x%08x, %p, %p\n", iface, debugstr_w(strQueryLanguage), debugstr_w(strQuery),
-          lFlags, pCtx, pResponseHandler);
+    TRACE( "%p, %s, %s, %#lx, %p, %p\n", iface, debugstr_w(strQueryLanguage), debugstr_w(strQuery),
+           lFlags, pCtx, pResponseHandler );
 
     if (!pResponseHandler) return WBEM_E_INVALID_PARAMETER;
 
@@ -749,7 +781,7 @@ static HRESULT WINAPI wbem_services_ExecQueryAsync(
         free_async( async );
         goto done;
     }
-    if (!(query->str = heap_strdupW( strQuery )))
+    if (!(query->str = wcsdup( strQuery )))
     {
         free_async( async );
         goto done;
@@ -794,8 +826,8 @@ static HRESULT WINAPI wbem_services_ExecNotificationQueryAsync(
     struct async_header *async;
     struct async_query *query;
 
-    TRACE("%p, %s, %s, 0x%08x, %p, %p\n", iface, debugstr_w(strQueryLanguage), debugstr_w(strQuery),
-          lFlags, pCtx, pResponseHandler);
+    TRACE( "%p, %s, %s, %#lx, %p, %p\n", iface, debugstr_w(strQueryLanguage), debugstr_w(strQuery),
+           lFlags, pCtx, pResponseHandler );
 
     if (!pResponseHandler) return WBEM_E_INVALID_PARAMETER;
 
@@ -818,7 +850,7 @@ static HRESULT WINAPI wbem_services_ExecNotificationQueryAsync(
         free_async( async );
         goto done;
     }
-    if (!(query->str = heap_strdupW( strQuery )))
+    if (!(query->str = wcsdup( strQuery )))
     {
         free_async( async );
         goto done;
@@ -857,10 +889,10 @@ static HRESULT WINAPI wbem_services_ExecMethod(
     struct table *table;
     HRESULT hr;
 
-    TRACE("%p, %s, %s, %08x, %p, %p, %p, %p\n", iface, debugstr_w(strObjectPath),
-          debugstr_w(strMethodName), lFlags, context, pInParams, ppOutParams, ppCallResult);
+    TRACE( "%p, %s, %s, %#lx, %p, %p, %p, %p\n", iface, debugstr_w(strObjectPath),
+           debugstr_w(strMethodName), lFlags, context, pInParams, ppOutParams, ppCallResult );
 
-    if (lFlags) FIXME("flags %08x not supported\n", lFlags);
+    if (lFlags) FIXME( "flags %#lx not supported\n", lFlags );
 
     if ((hr = parse_path( strObjectPath, &path )) != S_OK) return hr;
     if (!(str = query_from_path( path )))
@@ -960,7 +992,7 @@ HRESULT WbemServices_create( const WCHAR *namespace, IWbemContext *context, LPVO
     ws->IWbemServices_iface.lpVtbl = &wbem_services_vtbl;
     ws->refs      = 1;
     ws->ns        = ns;
-    InitializeCriticalSection( &ws->cs );
+    InitializeCriticalSectionEx( &ws->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
     ws->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": wbemprox_services.cs");
     if (context)
         IWbemContext_Clone( context, &ws->context );
@@ -1058,7 +1090,7 @@ static HRESULT WINAPI wbem_context_Clone(
 
     TRACE("%p, %p\n", iface, newcopy);
 
-    if (SUCCEEDED(hr = WbemContext_create( (void **)&cloned_context )))
+    if (SUCCEEDED(hr = WbemContext_create( (void **)&cloned_context, &IID_IWbemContext )))
     {
         LIST_FOR_EACH_ENTRY( value, &context->values, struct wbem_context_value, entry )
         {
@@ -1084,7 +1116,7 @@ static HRESULT WINAPI wbem_context_GetNames(
     LONG flags,
     SAFEARRAY **names )
 {
-    FIXME("%p, %#x, %p\n", iface, flags, names);
+    FIXME( "%p, %#lx, %p\n", iface, flags, names );
 
     return E_NOTIMPL;
 }
@@ -1093,7 +1125,7 @@ static HRESULT WINAPI wbem_context_BeginEnumeration(
     IWbemContext *iface,
     LONG flags )
 {
-    FIXME("%p, %#x\n", iface, flags);
+    FIXME( "%p, %#lx\n", iface, flags );
 
     return E_NOTIMPL;
 }
@@ -1104,7 +1136,7 @@ static HRESULT WINAPI wbem_context_Next(
     BSTR *name,
     VARIANT *value )
 {
-    FIXME("%p, %#x, %p, %p\n", iface, flags, name, value);
+    FIXME( "%p, %#lx, %p, %p\n", iface, flags, name, value );
 
     return E_NOTIMPL;
 }
@@ -1139,7 +1171,7 @@ static HRESULT WINAPI wbem_context_SetValue(
     struct wbem_context_value *value;
     HRESULT hr;
 
-    TRACE("%p, %s, %#x, %s\n", iface, debugstr_w(name), flags, debugstr_variant(var));
+    TRACE( "%p, %s, %#lx, %s\n", iface, debugstr_w(name), flags, debugstr_variant(var) );
 
     if (!name || !var)
         return WBEM_E_INVALID_PARAMETER;
@@ -1152,7 +1184,7 @@ static HRESULT WINAPI wbem_context_SetValue(
     else
     {
         if (!(value = calloc( 1, sizeof(*value) ))) return E_OUTOFMEMORY;
-        if (!(value->name = heap_strdupW( name )))
+        if (!(value->name = wcsdup( name )))
         {
             free( value );
             return E_OUTOFMEMORY;
@@ -1179,7 +1211,7 @@ static HRESULT WINAPI wbem_context_GetValue(
     struct wbem_context *context = impl_from_IWbemContext( iface );
     struct wbem_context_value *value;
 
-    TRACE("%p, %s, %#x, %p\n", iface, debugstr_w(name), flags, var);
+    TRACE( "%p, %s, %#lx, %p\n", iface, debugstr_w(name), flags, var );
 
     if (!name || !var)
         return WBEM_E_INVALID_PARAMETER;
@@ -1196,7 +1228,7 @@ static HRESULT WINAPI wbem_context_DeleteValue(
     LPCWSTR name,
     LONG flags )
 {
-    FIXME("%p, %s, %#x\n", iface, debugstr_w(name), flags);
+    FIXME( "%p, %s, %#lx\n", iface, debugstr_w(name), flags );
 
     return E_NOTIMPL;
 }
@@ -1225,11 +1257,15 @@ static const IWbemContextVtbl wbem_context_vtbl =
     wbem_context_DeleteAll,
 };
 
-HRESULT WbemContext_create( void **obj )
+HRESULT WbemContext_create( void **obj, REFIID riid )
 {
     struct wbem_context *context;
 
     TRACE("(%p)\n", obj);
+
+    if ( !IsEqualGUID( riid, &IID_IWbemContext ) &&
+         !IsEqualGUID( riid, &IID_IUnknown ) )
+        return E_NOINTERFACE;
 
     if (!(context = malloc( sizeof(*context) ))) return E_OUTOFMEMORY;
 

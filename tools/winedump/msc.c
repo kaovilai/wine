@@ -30,7 +30,6 @@
 #include "winbase.h"
 #include "winedump.h"
 #include "cvconst.h"
-#include "wine/mscvpdb.h"
 
 #define PSTRING(adr, ofs) \
     ((const struct p_string*)((const char*)(adr) + (ofs)))
@@ -53,11 +52,12 @@ struct full_value
     } v;
 };
 
-static int full_numeric_leaf(struct full_value* fv, const unsigned short int* leaf)
+static int full_numeric_leaf(struct full_value *fv, const unsigned char *leaf)
 {
-    unsigned short int type = *leaf++;
+    unsigned short int type = *(const unsigned short *)leaf;
     int length = 2;
 
+    leaf += length;
     fv->type = fv_integer;
     if (type < LF_NUMERIC)
     {
@@ -185,7 +185,7 @@ static const char* full_value_string(const struct full_value* fv)
     return tmp;
 }
 
-static int numeric_leaf(int* value, const unsigned short int* leaf)
+static int numeric_leaf(int* value, const unsigned char* leaf)
 {
     struct full_value fv;
     int len = full_numeric_leaf(&fv, leaf);
@@ -227,28 +227,28 @@ static const char* get_attr(unsigned attr)
     return tmp;
 }
 
-static const char* get_property(unsigned prop)
+static const char* get_property(cv_property_t prop)
 {
     static char tmp[1024];
     unsigned    pos = 0;
 
-    if (!prop) return "none";
 #define X(s) {if (pos) tmp[pos++] = ';'; strcpy(tmp + pos, s); pos += strlen(s);}
-    if (prop & 0x0001) X("packed");
-    if (prop & 0x0002) X("w/{cd}tor");
-    if (prop & 0x0004) X("w/overloaded-ops");
-    if (prop & 0x0008) X("nested-class");
-    if (prop & 0x0010) X("has-nested-classes");
-    if (prop & 0x0020) X("w/overloaded-assign");
-    if (prop & 0x0040) X("w/casting-methods");
-    if (prop & 0x0080) X("forward");
-    if (prop & 0x0100) X("scoped");
-    if (prop & 0x0200) X("decorated-name");
-    if (prop & 0x0400) X("sealed-name");
-    if (prop & 0x1800) pos += sprintf(tmp, "hfa%x", (prop >> 11) & 3);
-    if (prop & 0x2000) X("intrinsic");
-    if (prop & 0xC000) pos += sprintf(tmp, "mocom%x", prop >> 14);
+    if (prop.is_packed)                 X("packed");
+    if (prop.has_ctor)                  X("w/{cd}tor");
+    if (prop.has_overloaded_operator)   X("w/overloaded-ops");
+    if (prop.is_nested)                 X("nested-class");
+    if (prop.has_nested)                X("has-nested-classes");
+    if (prop.has_overloaded_assign)     X("w/overloaded-assign");
+    if (prop.has_operator_cast)         X("w/casting-methods");
+    if (prop.is_forward_defn)           X("forward");
+    if (prop.is_scoped)                 X("scoped");
+    if (prop.has_decorated_name)        X("decorated-name");
+    if (prop.is_sealed)                 X("sealed");
+    if (prop.hfa)                       pos += sprintf(tmp, "hfa%x", prop.hfa);
+    if (prop.is_intrinsic)              X("intrinsic");
+    if (prop.mocom)                     pos += sprintf(tmp, "mocom%x", prop.mocom);
 #undef X
+    if (!pos) return "none";
 
     tmp[pos] = '\0';
     assert(pos < sizeof(tmp));
@@ -275,27 +275,27 @@ static const char* get_funcattr(unsigned attr)
     return tmp;
 }
 
-static const char* get_varflags(unsigned flags)
+static const char* get_varflags(struct cv_local_varflag flags)
 {
     static char tmp[1024];
     unsigned    pos = 0;
 
-    if (!flags) return "none";
 #define X(s) {if (pos) tmp[pos++] = ';'; strcpy(tmp + pos, s); pos += strlen(s);}
-    if (flags & 0x0001) X("param");
-    if (flags & 0x0002) X("addr-taken");
-    if (flags & 0x0004) X("compiler-gen");
-    if (flags & 0x0008) X("aggregated");
-    if (flags & 0x0010) X("in-aggregate");
-    if (flags & 0x0020) X("aliased");
-    if (flags & 0x0040) X("alias");
-    if (flags & 0x0080) X("retval");
-    if (flags & 0x0100) X("optimized-out");
-    if (flags & 0x0200) X("enreg-global");
-    if (flags & 0x0400) X("enreg-static");
-    if (flags & 0xf800) pos += sprintf(tmp, "unk:%x", flags & 0xf800);
+    if (flags.is_param)        X("param");
+    if (flags.address_taken)   X("addr-taken");
+    if (flags.from_compiler)   X("compiler-gen");
+    if (flags.is_aggregate)    X("aggregated");
+    if (flags.from_aggregate)  X("in-aggregate");
+    if (flags.is_aliased)      X("aliased");
+    if (flags.from_alias)      X("alias");
+    if (flags.is_return_value) X("retval");
+    if (flags.optimized_out)   X("optimized-out");
+    if (flags.enreg_global)    X("enreg-global");
+    if (flags.enreg_static)    X("enreg-static");
+    if (flags.unused)          pos += sprintf(tmp, "unk:%x", flags.unused);
 #undef X
 
+    if (!pos) return "none";
     tmp[pos] = '\0';
     assert(pos < sizeof(tmp));
 
@@ -462,7 +462,7 @@ static const char* get_callconv(unsigned cc)
     case CV_CALL_RESERVED:      callconv = "reserved"; break;
     default:
         {
-            static char tmp[16];
+            static char tmp[20];
             sprintf(tmp, "callconv=%x", cc);
             callconv = tmp;
         }
@@ -519,24 +519,24 @@ static void do_field(const unsigned char* start, const unsigned char* end)
         switch (fieldtype->generic.id)
         {
         case LF_ENUMERATE_V1:
-            leaf_len = full_numeric_leaf(&full_value, &fieldtype->enumerate_v1.value);
-            pstr = PSTRING(&fieldtype->enumerate_v1.value, leaf_len);
+            leaf_len = full_numeric_leaf(&full_value, fieldtype->enumerate_v1.data);
+            pstr = (const struct p_string*)&fieldtype->enumerate_v1.data[leaf_len];
             printf("\t\tEnumerate V1: '%s' value:%s\n",
                    p_string(pstr), full_value_string(&full_value));
             ptr += 2 + 2 + leaf_len + 1 + pstr->namelen;
             break;
 
         case LF_ENUMERATE_V3:
-            leaf_len = full_numeric_leaf(&full_value, &fieldtype->enumerate_v3.value);
-            cstr = (const char*)&fieldtype->enumerate_v3.value + leaf_len;
+            leaf_len = full_numeric_leaf(&full_value, fieldtype->enumerate_v3.data);
+            cstr = (const char*)&fieldtype->enumerate_v3.data[leaf_len];
             printf("\t\tEnumerate V3: '%s' value:%s\n",
                    cstr, full_value_string(&full_value));
             ptr += 2 + 2 + leaf_len + strlen(cstr) + 1;
             break;
 
         case LF_MEMBER_V1:
-            leaf_len = numeric_leaf(&value, &fieldtype->member_v1.offset);
-            pstr = PSTRING(&fieldtype->member_v1.offset, leaf_len);
+            leaf_len = numeric_leaf(&value, fieldtype->member_v1.data);
+            pstr = (const struct p_string *)&fieldtype->member_v1.data[leaf_len];
             printf("\t\tMember V1: '%s' type:%x attr:%s @%d\n",
                    p_string(pstr), fieldtype->member_v1.type,
                    get_attr(fieldtype->member_v1.attribute), value);
@@ -544,8 +544,8 @@ static void do_field(const unsigned char* start, const unsigned char* end)
             break;
 
         case LF_MEMBER_V2:
-            leaf_len = numeric_leaf(&value, &fieldtype->member_v2.offset);
-            pstr = PSTRING(&fieldtype->member_v2.offset, leaf_len);
+            leaf_len = numeric_leaf(&value, fieldtype->member_v2.data);
+            pstr = (const struct p_string *)&fieldtype->member_v2.data[leaf_len];
             printf("\t\tMember V2: '%s' type:%x attr:%s @%d\n",
                    p_string(pstr), fieldtype->member_v2.type,
                    get_attr(fieldtype->member_v2.attribute), value);
@@ -553,10 +553,10 @@ static void do_field(const unsigned char* start, const unsigned char* end)
             break;
 
         case LF_MEMBER_V3:
-            leaf_len = numeric_leaf(&value, &fieldtype->member_v3.offset);
-            cstr = (const char*)&fieldtype->member_v3.offset + leaf_len;
+            leaf_len = numeric_leaf(&value, fieldtype->member_v3.data);
+            cstr = (const char*)&fieldtype->member_v3.data[leaf_len];
             printf("\t\tMember V3: '%s' type:%x attr:%s @%d\n",
-                   cstr, fieldtype->member_v3.type, 
+                   cstr, fieldtype->member_v3.type,
                    get_attr(fieldtype->member_v3.attribute), value);
             ptr += 2 + 2 + 4 + leaf_len + strlen(cstr) + 1;
             break;
@@ -694,43 +694,43 @@ static void do_field(const unsigned char* start, const unsigned char* end)
             break;
 
         case LF_BCLASS_V1:
-            leaf_len = numeric_leaf(&value, &fieldtype->bclass_v1.offset);
+            leaf_len = numeric_leaf(&value, fieldtype->bclass_v1.data);
             printf("\t\tBase class V1: type:%x attr:%s @%d\n",
-                   fieldtype->bclass_v1.type, 
+                   fieldtype->bclass_v1.type,
                    get_attr(fieldtype->bclass_v1.attribute), value);
             ptr += 2 + 2 + 2 + leaf_len;
             break;
 
         case LF_BCLASS_V2:
-            leaf_len = numeric_leaf(&value, &fieldtype->bclass_v2.offset);
+            leaf_len = numeric_leaf(&value, fieldtype->bclass_v2.data);
             printf("\t\tBase class V2: type:%x attr:%s @%d\n",
-                   fieldtype->bclass_v2.type, 
+                   fieldtype->bclass_v2.type,
                    get_attr(fieldtype->bclass_v2.attribute), value);
             ptr += 2 + 2 + 4 + leaf_len;
             break;
 
         case LF_VBCLASS_V1:
         case LF_IVBCLASS_V1:
-            leaf_len = numeric_leaf(&value, &fieldtype->vbclass_v1.vbpoff);
+            leaf_len = numeric_leaf(&value, fieldtype->vbclass_v1.data);
             printf("\t\t%sirtual base class V1: type:%x (ptr:%x) attr:%s vbpoff:%d ",
                    (fieldtype->generic.id == LF_VBCLASS_V2) ? "V" : "Indirect v",
                    fieldtype->vbclass_v1.btype, fieldtype->vbclass_v1.vbtype,
                    get_attr(fieldtype->vbclass_v1.attribute), value);
             ptr += 2 + 2 + 2 + 2 + leaf_len;
-            leaf_len = numeric_leaf(&value, (const unsigned short*)ptr);
+            leaf_len = numeric_leaf(&value, ptr);
             printf("vboff:%d\n", value);
             ptr += leaf_len;
             break;
 
         case LF_VBCLASS_V2:
         case LF_IVBCLASS_V2:
-            leaf_len = numeric_leaf(&value, &fieldtype->vbclass_v1.vbpoff);
+            leaf_len = numeric_leaf(&value, fieldtype->vbclass_v1.data);
             printf("\t\t%sirtual base class V2: type:%x (ptr:%x) attr:%s vbpoff:%d ",
                    (fieldtype->generic.id == LF_VBCLASS_V2) ? "V" : "Indirect v",
                    fieldtype->vbclass_v2.btype, fieldtype->vbclass_v2.vbtype,
                    get_attr(fieldtype->vbclass_v2.attribute), value);
             ptr += 2 + 2 + 4 + 4 + leaf_len;
-            leaf_len = numeric_leaf(&value, (const unsigned short*)ptr);
+            leaf_len = numeric_leaf(&value, ptr);
             printf("vboff:%d\n", value);
             ptr += leaf_len;
             break;
@@ -827,20 +827,20 @@ static void codeview_dump_one_type(unsigned curr_type, const union codeview_type
                curr_type, type->pointer_v2.datatype);
         break;
     case LF_ARRAY_V1:
-        leaf_len = numeric_leaf(&value, &type->array_v1.arrlen);
+        leaf_len = numeric_leaf(&value, type->array_v1.data);
         printf("\t%x => Array V1-'%s'[%u type:%x] type:%x\n",
-               curr_type, p_string(PSTRING(&type->array_v1.arrlen, leaf_len)),
+               curr_type, p_string((const struct p_string *)&type->array_v1.data[leaf_len]),
                value, type->array_v1.idxtype, type->array_v1.elemtype);
         break;
     case LF_ARRAY_V2:
-        leaf_len = numeric_leaf(&value, &type->array_v2.arrlen);
+        leaf_len = numeric_leaf(&value, type->array_v2.data);
         printf("\t%x => Array V2-'%s'[%u type:%x] type:%x\n",
-               curr_type, p_string(PSTRING(&type->array_v2.arrlen, leaf_len)),
+               curr_type, p_string((const struct p_string *)&type->array_v2.data[leaf_len]),
                value, type->array_v2.idxtype, type->array_v2.elemtype);
         break;
     case LF_ARRAY_V3:
-        leaf_len = numeric_leaf(&value, &type->array_v3.arrlen);
-        str = (const char*)&type->array_v3.arrlen + leaf_len;
+        leaf_len = numeric_leaf(&value, type->array_v3.data);
+        str = (const char*)&type->array_v3.data[leaf_len];
         printf("\t%x => Array V3-'%s'[%u type:%x] type:%x\n",
                curr_type, str, value,
                type->array_v3.idxtype, type->array_v3.elemtype);
@@ -871,10 +871,10 @@ static void codeview_dump_one_type(unsigned curr_type, const union codeview_type
 
     case LF_STRUCTURE_V1:
     case LF_CLASS_V1:
-        leaf_len = numeric_leaf(&value, &type->struct_v1.structlen);
+        leaf_len = numeric_leaf(&value, type->struct_v1.data);
         printf("\t%x => %s V1 '%s' elts:%u property:%s fieldlist-type:%x derived-type:%x vshape:%x size:%u\n",
                curr_type, type->generic.id == LF_CLASS_V1 ? "Class" : "Struct",
-               p_string(PSTRING(&type->struct_v1.structlen, leaf_len)),
+               p_string((const struct p_string *)&type->struct_v1.data[leaf_len]),
                type->struct_v1.n_element, get_property(type->struct_v1.property),
                type->struct_v1.fieldlist, type->struct_v1.derived,
                type->struct_v1.vshape, value);
@@ -882,11 +882,11 @@ static void codeview_dump_one_type(unsigned curr_type, const union codeview_type
 
     case LF_STRUCTURE_V2:
     case LF_CLASS_V2:
-        leaf_len = numeric_leaf(&value, &type->struct_v2.structlen);
+        leaf_len = numeric_leaf(&value, type->struct_v2.data);
         printf("\t%x => %s V2 '%s' elts:%u property:%s\n"
                "                fieldlist-type:%x derived-type:%x vshape:%x size:%u\n",
                curr_type, type->generic.id == LF_CLASS_V2 ? "Class" : "Struct",
-               p_string(PSTRING(&type->struct_v2.structlen, leaf_len)),
+               p_string((const struct p_string *)&type->struct_v2.data[leaf_len]),
                type->struct_v2.n_element, get_property(type->struct_v2.property),
                type->struct_v2.fieldlist, type->struct_v2.derived,
                type->struct_v2.vshape, value);
@@ -894,42 +894,42 @@ static void codeview_dump_one_type(unsigned curr_type, const union codeview_type
 
     case LF_STRUCTURE_V3:
     case LF_CLASS_V3:
-        leaf_len = numeric_leaf(&value, &type->struct_v3.structlen);
-        str = (const char*)&type->struct_v3.structlen + leaf_len;
+        leaf_len = numeric_leaf(&value, type->struct_v3.data);
+        str = (const char*)&type->struct_v3.data[leaf_len];
         printf("\t%x => %s V3 '%s' elts:%u property:%s\n"
                "                fieldlist-type:%x derived-type:%x vshape:%x size:%u\n",
                curr_type, type->generic.id == LF_CLASS_V3 ? "Class" : "Struct",
                str, type->struct_v3.n_element, get_property(type->struct_v3.property),
                type->struct_v3.fieldlist, type->struct_v3.derived,
                type->struct_v3.vshape, value);
-        if (type->union_v3.property & 0x200)
+        if (type->union_v3.property.has_decorated_name)
             printf("\t\tDecorated name:%s\n", str + strlen(str) + 1);
         break;
 
     case LF_UNION_V1:
-        leaf_len = numeric_leaf(&value, &type->union_v1.un_len);
+        leaf_len = numeric_leaf(&value, type->union_v1.data);
         printf("\t%x => Union V1 '%s' count:%u property:%s fieldlist-type:%x size:%u\n",
-               curr_type, p_string(PSTRING(&type->union_v1.un_len, leaf_len)),
+               curr_type, p_string((const struct p_string *)&type->union_v1.data[leaf_len]),
                type->union_v1.count, get_property(type->union_v1.property),
                type->union_v1.fieldlist, value);
         break;
 
     case LF_UNION_V2:
-        leaf_len = numeric_leaf(&value, &type->union_v2.un_len);
+        leaf_len = numeric_leaf(&value, type->union_v2.data);
         printf("\t%x => Union V2 '%s' count:%u property:%s fieldlist-type:%x size:%u\n",
-               curr_type, p_string(PSTRING(&type->union_v2.un_len, leaf_len)),
+               curr_type, p_string((const struct p_string *)&type->union_v2.data[leaf_len]),
                type->union_v2.count, get_property(type->union_v2.property),
                type->union_v2.fieldlist, value);
         break;
 
     case LF_UNION_V3:
-        leaf_len = numeric_leaf(&value, &type->union_v3.un_len);
-        str = (const char*)&type->union_v3.un_len + leaf_len;
+        leaf_len = numeric_leaf(&value, type->union_v3.data);
+        str = (const char*)&type->union_v3.data[leaf_len];
         printf("\t%x => Union V3 '%s' count:%u property:%s fieldlist-type:%x size:%u\n",
                curr_type, str, type->union_v3.count,
                get_property(type->union_v3.property),
                type->union_v3.fieldlist, value);
-        if (type->union_v3.property & 0x200)
+        if (type->union_v3.property.has_decorated_name)
             printf("\t\tDecorated name:%s\n", str + strlen(str) + 1);
         break;
 
@@ -958,7 +958,7 @@ static void codeview_dump_one_type(unsigned curr_type, const union codeview_type
                type->enumeration_v3.fieldlist,
                type->enumeration_v3.count,
                get_property(type->enumeration_v3.property));
-        if (type->union_v3.property & 0x200)
+        if (type->union_v3.property.has_decorated_name)
             printf("\t\tDecorated name:%s\n", type->enumeration_v3.name + strlen(type->enumeration_v3.name) + 1);
         break;
 
@@ -1285,7 +1285,7 @@ static void dump_binannot(const unsigned char* ba, const char* last, unsigned in
         case BA_OP_ChangeCodeOffsetAndLineOffset:
             {
                 unsigned p1 = binannot_uncompress(&ba);
-                printf("%*s  | ChangeCodeOffsetAndLineOffset %u %u (0x%x)\n", indent, "", p1 & 0xf, binannot_getsigned(p1 >> 4), p1);
+                printf("%*s  | ChangeCodeOffsetAndLineOffset %u %d (0x%x)\n", indent, "", p1 & 0xf, binannot_getsigned(p1 >> 4), p1);
             }
             break;
         case BA_OP_ChangeCodeLengthAndCodeOffset:
@@ -1319,15 +1319,13 @@ static void init_symbol_dumper(struct symbol_dumper* sd)
 {
     sd->depth = 0;
     sd->alloc = 16;
-    sd->stack = malloc(sd->alloc * sizeof(sd->stack[0]));
+    sd->stack = xmalloc(sd->alloc * sizeof(sd->stack[0]));
 }
 
 static void push_symbol_dumper(struct symbol_dumper* sd, const union codeview_symbol* sym, unsigned end)
 {
     if (!sd->stack) return;
-    if (sd->depth >= sd->alloc &&
-        !(sd->stack = realloc(sd->stack, (sd->alloc *= 2) * sizeof(sd->stack[0]))))
-        return;
+    if (sd->depth >= sd->alloc) sd->stack = xrealloc(sd->stack, (sd->alloc *= 2) * sizeof(sd->stack[0]));
     sd->stack[sd->depth].end = end;
     sd->stack[sd->depth].sym = sym;
     sd->depth++;
@@ -1701,9 +1699,9 @@ BOOL codeview_dump_symbols(const void* root, unsigned long start, unsigned long 
                 int             vlen;
                 struct full_value fv;
 
-                vlen = full_numeric_leaf(&fv, &sym->constant_v2.cvalue);
+                vlen = full_numeric_leaf(&fv, sym->constant_v2.data);
                 printf("Constant V2 '%s' = %s type:%x\n",
-                       p_string(PSTRING(&sym->constant_v2.cvalue, vlen)),
+                       p_string((const struct p_string *)&sym->constant_v2.data[vlen]),
                        full_value_string(&fv), sym->constant_v2.type);
             }
             break;
@@ -1713,9 +1711,9 @@ BOOL codeview_dump_symbols(const void* root, unsigned long start, unsigned long 
                 int             vlen;
                 struct full_value fv;
 
-                vlen = full_numeric_leaf(&fv, &sym->constant_v3.cvalue);
+                vlen = full_numeric_leaf(&fv, sym->constant_v3.data);
                 printf("Constant V3 '%s' =  %s type:%x\n",
-                       (const char*)&sym->constant_v3.cvalue + vlen,
+                       (const char*)&sym->constant_v3.data[vlen],
                        full_value_string(&fv), sym->constant_v3.type);
             }
             break;
@@ -1752,7 +1750,7 @@ BOOL codeview_dump_symbols(const void* root, unsigned long start, unsigned long 
                 pname = PSTRING(sym, length);
                 length += (pname->namelen + 1 + 3) & ~3;
                 printf("%08x %08x %08x '%s'\n",
-                       *(((const DWORD*)sym) + 1), *(((const DWORD*)sym) + 2), *(((const DWORD*)sym) + 3),
+                       ((const UINT *)sym)[1], ((const UINT *)sym)[2], ((const UINT *)sym)[3],
                        p_string(pname));
             }
             break;
@@ -1891,6 +1889,7 @@ BOOL codeview_dump_symbols(const void* root, unsigned long start, unsigned long 
         case S_INLINEES:
             {
                 unsigned i, ninvoc;
+                const cv_typ_t *functions;
                 const unsigned* invoc;
                 const char* tag;
 
@@ -1898,12 +1897,15 @@ BOOL codeview_dump_symbols(const void* root, unsigned long start, unsigned long 
                 else if (sym->generic.id == S_CALLEES) tag = "Callees";
                 else tag = "Inlinees";
                 printf("%s V3 count:%u\n", tag, sym->function_list_v3.count);
-                invoc = (const unsigned*)&sym->function_list_v3.funcs[sym->function_list_v3.count];
+                functions = (const cv_typ_t *)&sym->function_list_v3.data;
+                invoc = (const unsigned*)&functions[sym->function_list_v3.count];
                 ninvoc = (const unsigned*)get_last(sym) - invoc;
+                if (ninvoc < sym->function_list_v3.count) ninvoc = sym->function_list_v3.count;
 
-                for (i = 0; i < sym->function_list_v3.count; ++i)
+                for (i = 0; i < ninvoc; ++i)
                     printf("%*s| func:%x invoc:%u\n",
-                           indent, "", sym->function_list_v3.funcs[i], i < ninvoc ? invoc[i] : 0);
+                           indent, "", functions[i], invoc[i]);
+                if (i < sym->function_list_v3.count) printf("Number of entries exceed symbol serialized size\n");
             }
             break;
 
@@ -2019,7 +2021,7 @@ void codeview_dump_linetab(const char* linetab, BOOL pascal_str, const char* pfx
     }
 }
 
-void codeview_dump_linetab2(const char* linetab, DWORD size, const char* strimage, DWORD strsize, const char* pfx)
+void codeview_dump_linetab2(const char* linetab, DWORD size, const PDB_STRING_TABLE* strimage, const char* pfx)
 {
     unsigned    i;
     const struct CV_DebugSSubsectionHeader_t*     hdr;
@@ -2096,7 +2098,7 @@ void codeview_dump_linetab2(const char* linetab, DWORD size, const char* strimag
                 const char* meth[] = {"None", "MD5", "SHA1", "SHA256"};
                 printf("%s  %d] name=%s size=%u method=%s checksum=[",
                        pfx, (unsigned)((const char*)chksms - (const char*)(hdr + 1)),
-                       strimage ? strimage + chksms->strOffset : "--none--",
+                       pdb_get_string_table_entry(strimage, chksms->strOffset),
                        chksms->size, chksms->method < ARRAY_SIZE(meth) ? meth[chksms->method] : "<<unknown>>");
                 for (i = 0; i < chksms->size; ++i) printf("%02x", chksms->checksum[i]);
                 printf("]\n");
@@ -2127,7 +2129,7 @@ void codeview_dump_linetab2(const char* linetab, DWORD size, const char* strimag
                 }
                 break;
             default:
-                printf("%sUnknown signature %x in INLINEELINES subsection\n", pfx, *(DWORD*)CV_RECORD_AFTER(hdr));
+                printf("%sUnknown signature %x in INLINEELINES subsection\n", pfx, *(UINT *)CV_RECORD_AFTER(hdr));
                 break;
             }
             break;

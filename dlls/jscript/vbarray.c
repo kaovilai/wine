@@ -33,17 +33,13 @@ static inline VBArrayInstance *vbarray_from_jsdisp(jsdisp_t *jsdisp)
     return CONTAINING_RECORD(jsdisp, VBArrayInstance, dispex);
 }
 
-static inline VBArrayInstance *vbarray_from_vdisp(vdisp_t *vdisp)
+static inline VBArrayInstance *vbarray_this(jsval_t vthis)
 {
-    return vbarray_from_jsdisp(vdisp->u.jsdisp);
+    jsdisp_t *jsdisp = is_object_instance(vthis) ? to_jsdisp(get_object(vthis)) : NULL;
+    return (jsdisp && is_class(jsdisp, JSCLASS_VBARRAY)) ? vbarray_from_jsdisp(jsdisp) : NULL;
 }
 
-static inline VBArrayInstance *vbarray_this(vdisp_t *jsthis)
-{
-    return is_vclass(jsthis, JSCLASS_VBARRAY) ? vbarray_from_vdisp(jsthis) : NULL;
-}
-
-static HRESULT VBArray_dimensions(script_ctx_t *ctx, vdisp_t *vthis, WORD flags, unsigned argc, jsval_t *argv,
+static HRESULT VBArray_dimensions(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
         jsval_t *r)
 {
     VBArrayInstance *vbarray;
@@ -59,7 +55,7 @@ static HRESULT VBArray_dimensions(script_ctx_t *ctx, vdisp_t *vthis, WORD flags,
     return S_OK;
 }
 
-static HRESULT VBArray_getItem(script_ctx_t *ctx, vdisp_t *vthis, WORD flags, unsigned argc, jsval_t *argv,
+static HRESULT VBArray_getItem(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
         jsval_t *r)
 {
     VBArrayInstance *vbarray;
@@ -77,33 +73,33 @@ static HRESULT VBArray_getItem(script_ctx_t *ctx, vdisp_t *vthis, WORD flags, un
     if(argc < SafeArrayGetDim(vbarray->safearray))
         return JS_E_SUBSCRIPT_OUT_OF_RANGE;
 
-    indexes = heap_alloc(sizeof(indexes[0])*argc);
+    indexes = malloc(sizeof(indexes[0])*argc);
     if(!indexes)
         return E_OUTOFMEMORY;
 
     for(i=0; i<argc; i++) {
         hres = to_long(ctx, argv[i], indexes + i);
         if(FAILED(hres)) {
-            heap_free(indexes);
+            free(indexes);
             return hres;
         }
     }
 
     hres = SafeArrayGetElement(vbarray->safearray, indexes, (void*)&out);
-    heap_free(indexes);
+    free(indexes);
     if(hres == DISP_E_BADINDEX)
         return JS_E_SUBSCRIPT_OUT_OF_RANGE;
     else if(FAILED(hres))
         return hres;
 
     if(r) {
-        hres = variant_to_jsval(&out, r);
+        hres = variant_to_jsval(ctx, &out, r);
         VariantClear(&out);
     }
     return hres;
 }
 
-static HRESULT VBArray_lbound(script_ctx_t *ctx, vdisp_t *vthis, WORD flags, unsigned argc, jsval_t *argv,
+static HRESULT VBArray_lbound(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
         jsval_t *r)
 {
     VBArrayInstance *vbarray;
@@ -134,7 +130,7 @@ static HRESULT VBArray_lbound(script_ctx_t *ctx, vdisp_t *vthis, WORD flags, uns
     return S_OK;
 }
 
-static HRESULT VBArray_toArray(script_ctx_t *ctx, vdisp_t *vthis, WORD flags, unsigned argc, jsval_t *argv,
+static HRESULT VBArray_toArray(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
         jsval_t *r)
 {
     VBArrayInstance *vbarray;
@@ -167,7 +163,7 @@ static HRESULT VBArray_toArray(script_ctx_t *ctx, vdisp_t *vthis, WORD flags, un
     }
 
     for(i=0; i<size; i++) {
-        hres = variant_to_jsval(v, &val);
+        hres = variant_to_jsval(ctx, v, &val);
         if(SUCCEEDED(hres)) {
             hres = jsdisp_propput_idx(array, i, val);
             jsval_release(val);
@@ -189,7 +185,7 @@ static HRESULT VBArray_toArray(script_ctx_t *ctx, vdisp_t *vthis, WORD flags, un
     return S_OK;
 }
 
-static HRESULT VBArray_ubound(script_ctx_t *ctx, vdisp_t *vthis, WORD flags, unsigned argc, jsval_t *argv,
+static HRESULT VBArray_ubound(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
         jsval_t *r)
 {
     VBArrayInstance *vbarray;
@@ -220,7 +216,7 @@ static HRESULT VBArray_ubound(script_ctx_t *ctx, vdisp_t *vthis, WORD flags, uns
     return S_OK;
 }
 
-static HRESULT VBArray_value(script_ctx_t *ctx, vdisp_t *jsthis, WORD flags, unsigned argc, jsval_t *argv,
+static HRESULT VBArray_value(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
         jsval_t *r)
 {
     FIXME("\n");
@@ -239,7 +235,6 @@ static void VBArray_destructor(jsdisp_t *dispex)
     VBArrayInstance *vbarray = vbarray_from_jsdisp(dispex);
 
     SafeArrayDestroy(vbarray->safearray);
-    heap_free(vbarray);
 }
 
 static const builtin_prop_t VBArray_props[] = {
@@ -251,12 +246,11 @@ static const builtin_prop_t VBArray_props[] = {
 };
 
 static const builtin_info_t VBArray_info = {
-    JSCLASS_VBARRAY,
-    VBArray_value,
-    ARRAY_SIZE(VBArray_props),
-    VBArray_props,
-    VBArray_destructor,
-    NULL
+    .class      = JSCLASS_VBARRAY,
+    .call       = VBArray_value,
+    .props_cnt  = ARRAY_SIZE(VBArray_props),
+    .props      = VBArray_props,
+    .destructor = VBArray_destructor,
 };
 
 static HRESULT alloc_vbarray(script_ctx_t *ctx, jsdisp_t *object_prototype, VBArrayInstance **ret)
@@ -264,7 +258,7 @@ static HRESULT alloc_vbarray(script_ctx_t *ctx, jsdisp_t *object_prototype, VBAr
     VBArrayInstance *vbarray;
     HRESULT hres;
 
-    vbarray = heap_alloc_zero(sizeof(VBArrayInstance));
+    vbarray = calloc(1, sizeof(VBArrayInstance));
     if(!vbarray)
         return E_OUTOFMEMORY;
 
@@ -274,7 +268,7 @@ static HRESULT alloc_vbarray(script_ctx_t *ctx, jsdisp_t *object_prototype, VBAr
         hres = init_dispex_from_constr(&vbarray->dispex, ctx, &VBArray_info, ctx->vbarray_constr);
 
     if(FAILED(hres)) {
-        heap_free(vbarray);
+        free(vbarray);
         return hres;
     }
 
@@ -282,7 +276,7 @@ static HRESULT alloc_vbarray(script_ctx_t *ctx, jsdisp_t *object_prototype, VBAr
     return S_OK;
 }
 
-static HRESULT VBArrayConstr_value(script_ctx_t *ctx, vdisp_t *vthis, WORD flags, unsigned argc, jsval_t *argv,
+static HRESULT VBArrayConstr_value(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
         jsval_t *r)
 {
     VBArrayInstance *vbarray;
@@ -295,11 +289,13 @@ static HRESULT VBArrayConstr_value(script_ctx_t *ctx, vdisp_t *vthis, WORD flags
         if(argc<1 || !is_variant(argv[0]) || V_VT(get_variant(argv[0])) != (VT_ARRAY|VT_VARIANT))
             return JS_E_VBARRAY_EXPECTED;
 
-        return jsval_copy(argv[0], r);
+        return r ? jsval_copy(argv[0], r) : S_OK;
 
     case DISPATCH_CONSTRUCT:
         if(argc<1 || !is_variant(argv[0]) || V_VT(get_variant(argv[0])) != (VT_ARRAY|VT_VARIANT))
             return JS_E_VBARRAY_EXPECTED;
+        if(!r)
+            return S_OK;
 
         hres = alloc_vbarray(ctx, NULL, &vbarray);
         if(FAILED(hres))

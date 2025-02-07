@@ -46,6 +46,18 @@ static inline SIZE_T get_env_length( const WCHAR *env )
     return end + 1 - env;
 }
 
+static UNICODE_STRING *get_machine_name( USHORT machine, UNICODE_STRING *str )
+{
+    switch (machine)
+    {
+    case IMAGE_FILE_MACHINE_I386:  RtlInitUnicodeString( str, L"x86" ); break;
+    case IMAGE_FILE_MACHINE_AMD64: RtlInitUnicodeString( str, L"AMD64" ); break;
+    case IMAGE_FILE_MACHINE_ARMNT: RtlInitUnicodeString( str, L"ARM" ); break;
+    case IMAGE_FILE_MACHINE_ARM64: RtlInitUnicodeString( str, L"ARM64" ); break;
+    default:                       RtlInitUnicodeString( str, L"Unknown" ); break;
+    }
+    return str;
+}
 
 /***********************************************************************
  *           set_wow64_environment
@@ -54,31 +66,22 @@ static inline SIZE_T get_env_length( const WCHAR *env )
  */
 static void set_wow64_environment( WCHAR **env )
 {
-    static WCHAR archW[]    = L"PROCESSOR_ARCHITECTURE";
-    static WCHAR arch6432W[] = L"PROCESSOR_ARCHITEW6432";
-
     WCHAR buf[256];
-    UNICODE_STRING arch_strW = { sizeof(archW) - sizeof(WCHAR), sizeof(archW), archW };
-    UNICODE_STRING arch6432_strW = { sizeof(arch6432W) - sizeof(WCHAR), sizeof(arch6432W), arch6432W };
+    UNICODE_STRING arch_strW = RTL_CONSTANT_STRING( L"PROCESSOR_ARCHITECTURE" );
+    UNICODE_STRING arch6432_strW = RTL_CONSTANT_STRING( L"PROCESSOR_ARCHITEW6432" );
     UNICODE_STRING valW = { 0, sizeof(buf), buf };
     UNICODE_STRING nameW;
+    USHORT machine = RtlImageNtHeader( NtCurrentTeb()->Peb->ImageBaseAddress )->FileHeader.Machine;
 
     /* set the PROCESSOR_ARCHITECTURE variable */
 
-    if (!RtlQueryEnvironmentVariable_U( *env, &arch6432_strW, &valW ))
+    RtlSetEnvironmentVariable( env, &arch_strW, get_machine_name( current_machine, &nameW ));
+    if (!is_win64 && NtCurrentTeb()->WowTebOffset)
     {
-        if (is_win64)
-        {
-            RtlSetEnvironmentVariable( env, &arch_strW, &valW );
-            RtlSetEnvironmentVariable( env, &arch6432_strW, NULL );
-        }
+        RtlWow64GetProcessMachines( GetCurrentProcess(), NULL, &machine );
+        RtlSetEnvironmentVariable( env, &arch6432_strW, get_machine_name( machine, &nameW ));
     }
-    else if (NtCurrentTeb64() && !RtlQueryEnvironmentVariable_U( *env, &arch_strW, &valW ))
-    {
-        RtlSetEnvironmentVariable( env, &arch6432_strW, &valW );
-        RtlInitUnicodeString( &nameW, L"x86" );
-        RtlSetEnvironmentVariable( env, &arch_strW, &nameW );
-    }
+    else RtlSetEnvironmentVariable( env, &arch6432_strW, NULL );
 
     /* set the ProgramFiles variables */
 
@@ -102,6 +105,22 @@ static void set_wow64_environment( WCHAR **env )
                        get_env_length(*env) * sizeof(WCHAR) );
 }
 
+
+/******************************************************************************
+ *  RtlAcquirePebLock		[NTDLL.@]
+ */
+void WINAPI RtlAcquirePebLock(void)
+{
+    RtlEnterCriticalSection( NtCurrentTeb()->Peb->FastPebLock );
+}
+
+/******************************************************************************
+ *  RtlReleasePebLock		[NTDLL.@]
+ */
+void WINAPI RtlReleasePebLock(void)
+{
+    RtlLeaveCriticalSection( NtCurrentTeb()->Peb->FastPebLock );
+}
 
 /******************************************************************************
  *  RtlCreateEnvironment		[NTDLL.@]
@@ -365,7 +384,7 @@ done:
 NTSTATUS WINAPI RtlExpandEnvironmentStrings( const WCHAR *renv, WCHAR *src, SIZE_T src_len,
                                              WCHAR *dst, SIZE_T count, SIZE_T *plen )
 {
-    SIZE_T len, total_size = 1;  /* 1 for terminating '\0' */
+    SIZE_T len, copy, total_size = 1;  /* 1 for terminating '\0' */
     LPCWSTR env, var;
 
     if (!renv)
@@ -383,6 +402,7 @@ NTSTATUS WINAPI RtlExpandEnvironmentStrings( const WCHAR *renv, WCHAR *src, SIZE
             var = src;
             src += len;
             src_len -= len;
+            copy = len;
         }
         else  /* we are at the start of a variable */
         {
@@ -394,6 +414,11 @@ NTSTATUS WINAPI RtlExpandEnvironmentStrings( const WCHAR *renv, WCHAR *src, SIZE
                     src += len + 1;  /* Skip the variable name */
                     src_len -= len + 1;
                     len = wcslen(var);
+                    copy = len;
+                    if (count <= copy) /* Either copy the entire value, or nothing at all */
+                        copy = 0;
+                    if (dst && count)  /* When the variable is the last thing that fits into dst, the string is null terminated */
+                       dst[copy] = 0;  /* Either right after, or if it doesn't fit, where it would start */
                 }
                 else
                 {
@@ -401,6 +426,7 @@ NTSTATUS WINAPI RtlExpandEnvironmentStrings( const WCHAR *renv, WCHAR *src, SIZE
                     len++;
                     src += len;
                     src_len -= len;
+                    copy = len;
                 }
             }
             else  /* unfinished variable name, ignore it */
@@ -408,15 +434,17 @@ NTSTATUS WINAPI RtlExpandEnvironmentStrings( const WCHAR *renv, WCHAR *src, SIZE
                 var = src;
                 src += len;
                 src_len = 0;
+                copy = len;
             }
         }
         total_size += len;
         if (dst)
         {
             if (count < len) len = count;
-            memcpy(dst, var, len * sizeof(WCHAR));
+            if (count <= copy) copy = count ? count - 1 : 0; /* If the buffer is too small, we copy one character less */
+            memcpy(dst, var, copy * sizeof(WCHAR));
             count -= len;
-            dst += len;
+            dst += copy;
         }
     }
 
@@ -497,11 +525,11 @@ PRTL_USER_PROCESS_PARAMETERS WINAPI RtlDeNormalizeProcessParams( RTL_USER_PROCES
 }
 
 
-#define ROUND_SIZE(size) (((size) + sizeof(void *) - 1) & ~(sizeof(void *) - 1))
+#define ROUND_SIZE(size,align) (((size) + (align) - 1) & ~((align) - 1))
 
 /* append a unicode string to the process params data; helper for RtlCreateProcessParameters */
 static void append_unicode_string( void **data, const UNICODE_STRING *src,
-                                   UNICODE_STRING *dst )
+                                   UNICODE_STRING *dst, size_t align )
 {
     dst->Length = src->Length;
     dst->MaximumLength = src->MaximumLength;
@@ -509,9 +537,59 @@ static void append_unicode_string( void **data, const UNICODE_STRING *src,
     {
         dst->Buffer = *data;
         memcpy( dst->Buffer, src->Buffer, dst->Length );
-        *data = (char *)dst->Buffer + ROUND_SIZE( dst->MaximumLength );
+        *data = (char *)dst->Buffer + ROUND_SIZE( dst->MaximumLength, align );
     }
     else dst->Buffer = NULL;
+}
+
+static RTL_USER_PROCESS_PARAMETERS *alloc_process_params( size_t align,
+                                                          const UNICODE_STRING *image,
+                                                          const UNICODE_STRING *dllpath,
+                                                          const UNICODE_STRING *curdir,
+                                                          const UNICODE_STRING *cmdline,
+                                                          const WCHAR *env,
+                                                          const UNICODE_STRING *title,
+                                                          const UNICODE_STRING *desktop,
+                                                          const UNICODE_STRING *shell,
+                                                          const UNICODE_STRING *runtime )
+{
+    RTL_USER_PROCESS_PARAMETERS *params;
+    SIZE_T size, env_size = 0;
+    void *ptr;
+
+    if (env) env_size = get_env_length( env ) * sizeof(WCHAR);
+
+    size = (sizeof(RTL_USER_PROCESS_PARAMETERS)
+            + ROUND_SIZE( image->MaximumLength, align )
+            + ROUND_SIZE( dllpath->MaximumLength, align )
+            + ROUND_SIZE( curdir->MaximumLength, align )
+            + ROUND_SIZE( cmdline->MaximumLength, align )
+            + ROUND_SIZE( title->MaximumLength, align )
+            + ROUND_SIZE( desktop->MaximumLength, align )
+            + ROUND_SIZE( shell->MaximumLength, align )
+            + ROUND_SIZE( runtime->MaximumLength, align ));
+
+    if (!(ptr = RtlAllocateHeap( GetProcessHeap(), HEAP_ZERO_MEMORY, size + ROUND_SIZE( env_size, align ))))
+        return NULL;
+
+    params = ptr;
+    params->AllocationSize  = size;
+    params->Size            = size;
+    params->Flags           = PROCESS_PARAMS_FLAG_NORMALIZED;
+    params->EnvironmentSize = ROUND_SIZE( env_size, align );
+    /* all other fields are zero */
+
+    ptr = params + 1;
+    append_unicode_string( &ptr, curdir, &params->CurrentDirectory.DosPath, align );
+    append_unicode_string( &ptr, dllpath, &params->DllPath, align );
+    append_unicode_string( &ptr, image, &params->ImagePathName, align );
+    append_unicode_string( &ptr, cmdline, &params->CommandLine, align );
+    append_unicode_string( &ptr, title, &params->WindowTitle, align );
+    append_unicode_string( &ptr, desktop, &params->Desktop, align );
+    append_unicode_string( &ptr, shell, &params->ShellInfo, align );
+    append_unicode_string( &ptr, runtime, &params->RuntimeInfo, align );
+    if (env) params->Environment = memcpy( ptr, env, env_size );
+    return params;
 }
 
 
@@ -532,8 +610,6 @@ NTSTATUS WINAPI RtlCreateProcessParametersEx( RTL_USER_PROCESS_PARAMETERS **resu
 {
     UNICODE_STRING curdir;
     const RTL_USER_PROCESS_PARAMETERS *cur_params;
-    SIZE_T size, env_size = 0;
-    void *ptr;
     NTSTATUS status = STATUS_SUCCESS;
 
     RtlAcquirePebLock();
@@ -556,40 +632,11 @@ NTSTATUS WINAPI RtlCreateProcessParametersEx( RTL_USER_PROCESS_PARAMETERS **resu
     if (!ShellInfo) ShellInfo = &empty_str;
     if (!RuntimeInfo) RuntimeInfo = &null_str;
 
-    if (Environment) env_size = get_env_length( Environment ) * sizeof(WCHAR);
-
-    size = (sizeof(RTL_USER_PROCESS_PARAMETERS)
-            + ROUND_SIZE( ImagePathName->MaximumLength )
-            + ROUND_SIZE( DllPath->MaximumLength )
-            + ROUND_SIZE( curdir.MaximumLength )
-            + ROUND_SIZE( CommandLine->MaximumLength )
-            + ROUND_SIZE( WindowTitle->MaximumLength )
-            + ROUND_SIZE( Desktop->MaximumLength )
-            + ROUND_SIZE( ShellInfo->MaximumLength )
-            + ROUND_SIZE( RuntimeInfo->MaximumLength ));
-
-    if ((ptr = RtlAllocateHeap( GetProcessHeap(), HEAP_ZERO_MEMORY, size + ROUND_SIZE( env_size ) )))
+    if ((*result = alloc_process_params( sizeof(void *), ImagePathName, DllPath, &curdir, CommandLine,
+                                         Environment, WindowTitle, Desktop, ShellInfo, RuntimeInfo )))
     {
-        RTL_USER_PROCESS_PARAMETERS *params = ptr;
-        params->AllocationSize  = size;
-        params->Size            = size;
-        params->Flags           = PROCESS_PARAMS_FLAG_NORMALIZED;
-        params->EnvironmentSize = ROUND_SIZE( env_size );
-        if (cur_params) params->ConsoleFlags = cur_params->ConsoleFlags;
-        /* all other fields are zero */
-
-        ptr = params + 1;
-        append_unicode_string( &ptr, &curdir, &params->CurrentDirectory.DosPath );
-        append_unicode_string( &ptr, DllPath, &params->DllPath );
-        append_unicode_string( &ptr, ImagePathName, &params->ImagePathName );
-        append_unicode_string( &ptr, CommandLine, &params->CommandLine );
-        append_unicode_string( &ptr, WindowTitle, &params->WindowTitle );
-        append_unicode_string( &ptr, Desktop, &params->Desktop );
-        append_unicode_string( &ptr, ShellInfo, &params->ShellInfo );
-        append_unicode_string( &ptr, RuntimeInfo, &params->RuntimeInfo );
-        if (Environment) params->Environment = memcpy( ptr, Environment, env_size );
-        *result = params;
-        if (!(flags & PROCESS_PARAMS_FLAG_NORMALIZED)) RtlDeNormalizeProcessParams( params );
+        if (cur_params) (*result)->ConsoleFlags = cur_params->ConsoleFlags;
+        if (!(flags & PROCESS_PARAMS_FLAG_NORMALIZED)) RtlDeNormalizeProcessParams( *result );
     }
     else status = STATUS_NO_MEMORY;
 
@@ -646,12 +693,10 @@ void init_user_process_params(void)
         else env[0] = 0;
     }
 
-    params->Environment = NULL;  /* avoid copying it */
-    if (RtlCreateProcessParametersEx( &new_params, &params->ImagePathName, &params->DllPath,
-                                      &params->CurrentDirectory.DosPath,
-                                      &params->CommandLine, NULL, &params->WindowTitle, &params->Desktop,
-                                      &params->ShellInfo, &params->RuntimeInfo,
-                                      PROCESS_PARAMS_FLAG_NORMALIZED ))
+    if (!(new_params = alloc_process_params( 1, &params->ImagePathName, &params->DllPath,
+                                             &params->CurrentDirectory.DosPath, &params->CommandLine,
+                                             NULL, &params->WindowTitle, &params->Desktop,
+                                             &params->ShellInfo, &params->RuntimeInfo )))
         return;
 
     new_params->Environment     = env;
@@ -670,6 +715,7 @@ void init_user_process_params(void)
     new_params->dwFillAttribute = params->dwFillAttribute;
     new_params->dwFlags         = params->dwFlags;
     new_params->wShowWindow     = params->wShowWindow;
+    new_params->ProcessGroupId  = params->ProcessGroupId;
 
     NtCurrentTeb()->Peb->ProcessParameters = new_params;
     NtFreeVirtualMemory( GetCurrentProcess(), (void **)&params, &size, MEM_RELEASE );

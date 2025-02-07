@@ -141,7 +141,7 @@ NTSTATUS WINAPI wow64_NtAcceptConnectPort( UINT *args )
     LPC_SECTION_WRITE *write = get_ptr( &args );
     LPC_SECTION_READ *read = get_ptr( &args );
 
-    FIXME( "%p %u %p %u %p %p: stub\n", handle_ptr, id, msg, accept, write, read );
+    FIXME( "%p %lu %p %u %p %p: stub\n", handle_ptr, id, msg, accept, write, read );
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -535,6 +535,17 @@ NTSTATUS WINAPI wow64_NtListenPort( UINT *args )
 
 
 /**********************************************************************
+ *           wow64_NtMakePermanentObject
+ */
+NTSTATUS WINAPI wow64_NtMakePermanentObject( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+
+    return NtMakePermanentObject( handle );
+}
+
+
+/**********************************************************************
  *           wow64_NtMakeTemporaryObject
  */
 NTSTATUS WINAPI wow64_NtMakeTemporaryObject( UINT *args )
@@ -769,26 +780,74 @@ NTSTATUS WINAPI wow64_NtQueryDirectoryObject( UINT *args )
     BOOLEAN restart = get_ulong( &args );
     ULONG *context = get_ptr( &args );
     ULONG *retlen = get_ptr( &args );
+    ULONG retsize;
 
     NTSTATUS status;
     DIRECTORY_BASIC_INFORMATION *info;
-    ULONG size = size32 + sizeof(*info) - sizeof(*info32);
+    ULONG size = size32 + 2 * sizeof(*info) - 2 * sizeof(*info32);
 
-    if (!single_entry) FIXME( "not implemented\n" );
     info = Wow64AllocateTemp( size );
-    status = NtQueryDirectoryObject( handle, info, size, single_entry, restart, context, NULL );
-    if (!status)
+    status = NtQueryDirectoryObject( handle, info, size, single_entry, restart, context, &retsize );
+    if (NT_SUCCESS(status))
     {
-        info32->ObjectName.Buffer            = PtrToUlong( info32 + 1 );
-        info32->ObjectName.Length            = info->ObjectName.Length;
-        info32->ObjectName.MaximumLength     = info->ObjectName.MaximumLength;
-        info32->ObjectTypeName.Buffer        = info32->ObjectName.Buffer + info->ObjectName.MaximumLength;
-        info32->ObjectTypeName.Length        = info->ObjectTypeName.Length;
-        info32->ObjectTypeName.MaximumLength = info->ObjectTypeName.MaximumLength;
-        size = info->ObjectName.MaximumLength + info->ObjectTypeName.MaximumLength;
-        memcpy( info32 + 1, info + 1, size );
-        if (retlen) *retlen = sizeof(*info32) + size;
+        unsigned int i, count, used_size, used_count, strpool_head, validsize = min( size, retsize );
+
+        used_count = 0;
+        used_size = sizeof(*info32);  /* "null terminator" entry */
+        for (count = 0;
+             sizeof(*info) * (count + 1) <= validsize && info[count].ObjectName.MaximumLength;
+             count++)
+        {
+            unsigned int entry_size = sizeof(*info32) +
+                                      info[count].ObjectName.MaximumLength +
+                                      info[count].ObjectTypeName.MaximumLength;
+
+            if (used_size + entry_size <= size32)
+            {
+                used_count++;
+                used_size += entry_size;
+            }
+        }
+
+        if (used_count != count)
+        {
+            ERR( "64bit dir list (%u+%lu bytes, %u entries) truncated for 32bit buffer (%u+%lu bytes, %u entries)\n",
+                 validsize, size - validsize, count, used_size, size32 - min( size32, used_size ), used_count );
+
+            if (!status) status = STATUS_MORE_ENTRIES;
+            *context -= count - used_count;
+        }
+
+        /*
+         * Avoid making strpool_head a pointer, since it can point beyond end
+         * of the buffer.  Out-of-bounds pointers trigger undefined behavior
+         * just by existing, even when they are never dereferenced.
+         */
+        strpool_head = sizeof(*info32) * (used_count + 1);  /* after the "null terminator" entry */
+        for (i = 0; i < used_count; i++)
+        {
+            info32[i].ObjectName.Buffer = PtrToUlong( (char *)info32 + strpool_head );
+            info32[i].ObjectName.Length = info[i].ObjectName.Length;
+            info32[i].ObjectName.MaximumLength = info[i].ObjectName.MaximumLength;
+            memcpy( (char *)info32 + strpool_head, info[i].ObjectName.Buffer, info[i].ObjectName.MaximumLength );
+            strpool_head += info[i].ObjectName.MaximumLength;
+
+            info32[i].ObjectTypeName.Buffer = PtrToUlong( (char *)info32 + strpool_head );
+            info32[i].ObjectTypeName.Length = info[i].ObjectTypeName.Length;
+            info32[i].ObjectTypeName.MaximumLength = info[i].ObjectTypeName.MaximumLength;
+            memcpy( (char *)info32 + strpool_head, info[i].ObjectTypeName.Buffer, info[i].ObjectTypeName.MaximumLength );
+            strpool_head += info[i].ObjectTypeName.MaximumLength;
+        }
+
+        if (size32 >= sizeof(*info32))
+            memset( &info32[used_count], 0, sizeof(info32[used_count]) );
+
+        if (retlen) *retlen = strpool_head;
     }
+    else if (retlen && status == STATUS_BUFFER_TOO_SMALL)
+        *retlen = retsize - 2 * sizeof(*info) + 2 * sizeof(*info32);
+    else if (retlen && status == STATUS_NO_MORE_ENTRIES)
+        *retlen = 0;
     return status;
 }
 
@@ -938,7 +997,7 @@ NTSTATUS WINAPI wow64_NtQueryObject( UINT *args )
     switch (class)
     {
     case ObjectBasicInformation:   /* OBJECT_BASIC_INFORMATION */
-    case ObjectDataInformation:   /* OBJECT_DATA_INFORMATION */
+    case ObjectHandleFlagInformation:   /* OBJECT_HANDLE_FLAG_INFORMATION */
         return NtQueryObject( handle, class, ptr, len, retlen );
 
     case ObjectNameInformation:   /* OBJECT_NAME_INFORMATION */
@@ -1365,7 +1424,7 @@ NTSTATUS WINAPI wow64_NtSetInformationObject( UINT *args )
 
     switch (class)
     {
-    case ObjectDataInformation:   /* OBJECT_DATA_INFORMATION */
+    case ObjectHandleFlagInformation:   /* OBJECT_HANDLE_FLAG_INFORMATION */
         return NtSetInformationObject( handle, class, ptr, len );
 
     default:
@@ -1387,6 +1446,22 @@ NTSTATUS WINAPI wow64_NtSetIoCompletion( UINT *args )
     SIZE_T count = get_ulong( &args );
 
     return NtSetIoCompletion( handle, key, value, status, count );
+}
+
+
+/**********************************************************************
+ *           wow64_NtSetIoCompletionEx
+ */
+NTSTATUS WINAPI wow64_NtSetIoCompletionEx( UINT *args )
+{
+    HANDLE completion_handle = get_handle( &args );
+    HANDLE completion_reserve_handle = get_handle( &args );
+    ULONG_PTR key = get_ulong( &args );
+    ULONG_PTR value = get_ulong( &args );
+    NTSTATUS status = get_ulong( &args );
+    SIZE_T count = get_ulong( &args );
+
+    return NtSetIoCompletionEx( completion_handle, completion_reserve_handle, key, value, status, count );
 }
 
 
@@ -1484,6 +1559,65 @@ NTSTATUS WINAPI wow64_NtWaitForAlertByThreadId( UINT *args )
 }
 
 
+/* helper to wow64_NtWaitForDebugEvent; retrieve machine from PE image */
+static NTSTATUS get_image_machine( HANDLE handle, USHORT *machine )
+{
+    IMAGE_DOS_HEADER dos_hdr;
+    IMAGE_NT_HEADERS nt_hdr;
+    IO_STATUS_BLOCK iosb;
+    LARGE_INTEGER offset;
+    FILE_POSITION_INFORMATION pos_info;
+    NTSTATUS status;
+
+    offset.QuadPart = 0;
+    status = NtReadFile( handle, NULL, NULL, NULL,
+                         &iosb, &dos_hdr, sizeof(dos_hdr), &offset, NULL );
+    if (!status)
+    {
+        offset.QuadPart = dos_hdr.e_lfanew;
+        status = NtReadFile( handle, NULL, NULL, NULL, &iosb,
+                             &nt_hdr, FIELD_OFFSET(IMAGE_NT_HEADERS, OptionalHeader), &offset, NULL );
+        if (!status)
+            *machine = nt_hdr.FileHeader.Machine;
+        /* Reset file pos at beginning of file */
+        pos_info.CurrentByteOffset.QuadPart = 0;
+        NtSetInformationFile( handle, &iosb, &pos_info, sizeof(pos_info), FilePositionInformation );
+    }
+    return status;
+}
+
+/* helper to wow64_NtWaitForDebugEvent; only pass debug events for current machine */
+static BOOL filter_out_state_change( HANDLE handle, DBGUI_WAIT_STATE_CHANGE *state )
+{
+    BOOL filter_out;
+
+    switch (state->NewState)
+    {
+    case DbgLoadDllStateChange:
+        filter_out = ((ULONG64)state->StateInfo.LoadDll.BaseOfDll >> 32) != 0;
+        if (!filter_out)
+        {
+            USHORT machine;
+            filter_out = !get_image_machine( state->StateInfo.LoadDll.FileHandle, &machine) && machine != current_machine;
+        }
+        break;
+    case DbgUnloadDllStateChange:
+        filter_out = ((ULONG_PTR)state->StateInfo.UnloadDll.BaseAddress >> 32) != 0;
+        break;
+    default:
+        filter_out = FALSE;
+        break;
+    }
+    if (filter_out)
+    {
+        if (state->NewState == DbgLoadDllStateChange)
+            NtClose( state->StateInfo.LoadDll.FileHandle );
+        NtDebugContinue( handle, &state->AppClientId, DBG_CONTINUE );
+    }
+    return filter_out;
+}
+
+
 /**********************************************************************
  *           wow64_NtWaitForDebugEvent
  */
@@ -1496,7 +1630,12 @@ NTSTATUS WINAPI wow64_NtWaitForDebugEvent( UINT *args )
 
     ULONG i;
     DBGUI_WAIT_STATE_CHANGE state;
-    NTSTATUS status = NtWaitForDebugEvent( handle, alertable, timeout, &state );
+    NTSTATUS status;
+
+    do
+    {
+        status = NtWaitForDebugEvent( handle, alertable, timeout, &state );
+    } while (!status && filter_out_state_change( handle, &state ));
 
     if (!status)
     {
@@ -1610,4 +1749,72 @@ NTSTATUS WINAPI wow64_NtWaitForSingleObject( UINT *args )
 NTSTATUS WINAPI wow64_NtYieldExecution( UINT *args )
 {
     return NtYieldExecution();
+}
+
+
+/**********************************************************************
+ *           wow64_NtCreateTransaction
+ */
+NTSTATUS WINAPI wow64_NtCreateTransaction( UINT *args )
+{
+    ULONG *handle_ptr = get_ptr( &args );
+    ACCESS_MASK access = get_ulong( &args );
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+    GUID *guid = get_ptr( &args );
+    HANDLE tm = get_handle( &args );
+    ULONG options = get_ulong( &args );
+    ULONG isol_level = get_ulong( &args );
+    ULONG isol_flags = get_ulong( &args );
+    LARGE_INTEGER *timeout = get_ptr( &args );
+    UNICODE_STRING32 *desc32 = get_ptr( &args );
+
+    struct object_attr64 attr;
+    UNICODE_STRING desc;
+    HANDLE handle = 0;
+    NTSTATUS status;
+
+    *handle_ptr = 0;
+    status = NtCreateTransaction( &handle, access, objattr_32to64( &attr, attr32 ), guid, tm, options,
+            isol_level, isol_flags, timeout, unicode_str_32to64( &desc, desc32 ));
+    put_handle( handle_ptr, handle );
+
+    return status;
+}
+
+
+/**********************************************************************
+ *           wow64_NtCommitTransaction
+ */
+NTSTATUS WINAPI wow64_NtCommitTransaction( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    BOOLEAN wait = get_ulong( &args );
+
+    return NtCommitTransaction( handle, wait );
+}
+
+
+/**********************************************************************
+ *           wow64_NtRollbackTransaction
+ */
+NTSTATUS WINAPI wow64_NtRollbackTransaction( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    BOOLEAN wait = get_ulong( &args );
+
+    return NtRollbackTransaction( handle, wait );
+}
+
+
+/**********************************************************************
+ *           wow64_NtConvertBetweenAuxiliaryCounterAndPerformanceCounter
+ */
+NTSTATUS WINAPI wow64_NtConvertBetweenAuxiliaryCounterAndPerformanceCounter( UINT *args )
+{
+    ULONG flags = get_ulong( &args );
+    ULONGLONG *from = get_ptr( &args );
+    ULONGLONG *to = get_ptr( &args );
+    ULONGLONG *error = get_ptr( &args );
+
+    return NtConvertBetweenAuxiliaryCounterAndPerformanceCounter( flags, from, to, error );
 }

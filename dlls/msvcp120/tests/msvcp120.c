@@ -17,12 +17,14 @@
  */
 
 #include <locale.h>
+#include <share.h>
 #include <stdio.h>
 #include <math.h>
 #include <limits.h>
 
 #include "wine/test.h"
 #include "winbase.h"
+#include "winnls.h"
 
 DWORD expect_idx;
 static int vector_alloc_count;
@@ -187,6 +189,13 @@ enum file_type {
     type_unknown
 };
 
+static BOOL compare_uint(unsigned int x, unsigned int y, unsigned int max_diff)
+{
+    unsigned int diff = x > y ? x - y : y - x;
+
+    return diff <= max_diff;
+}
+
 static BOOL compare_float(float f, float g, unsigned int ulps)
 {
     int x = *(int *)&f;
@@ -197,15 +206,14 @@ static BOOL compare_float(float f, float g, unsigned int ulps)
     if (y < 0)
         y = INT_MIN - y;
 
-    if (abs(x - y) > ulps)
-        return FALSE;
-
-    return TRUE;
+    return compare_uint(x, y, ulps);
 }
 
 static char* (__cdecl *p_setlocale)(int, const char*);
 static int (__cdecl *p__setmbcp)(int);
 static int (__cdecl *p__ismbblead)(unsigned int);
+static int (__cdecl *p_fclose)(FILE*);
+static int (__cdecl *p__unlink)(const char*);
 
 static MSVCRT_long (__cdecl *p__Xtime_diff_to_millis2)(const xtime*, const xtime*);
 static int (__cdecl *p_xtime_get)(xtime*, int);
@@ -419,6 +427,21 @@ static void (__thiscall *p_vector_base_v4__Internal_resize)(
 
 static const BYTE *p_byte_reverse_table;
 
+typedef enum {
+    OPENMODE_in         = 0x01,
+    OPENMODE_out        = 0x02,
+    OPENMODE_ate        = 0x04,
+    OPENMODE_app        = 0x08,
+    OPENMODE_trunc      = 0x10,
+    OPENMODE__Nocreate  = 0x40,
+    OPENMODE__Noreplace = 0x80,
+    OPENMODE_binary     = 0x20,
+    OPENMODE_mask       = 0xff
+} IOSB_openmode;
+
+static FILE* (__cdecl *p__Fiopen_wchar)(const wchar_t*, int, int);
+static FILE* (__cdecl *p__Fiopen)(const char*, int, int);
+
 static HMODULE msvcp;
 #define SETNOFAIL(x,y) x = (void*)GetProcAddress(msvcp,y)
 #define SET(x,y) do { SETNOFAIL(x,y); ok(x != NULL, "Export '%s' not found\n", y); } while(0)
@@ -580,6 +603,10 @@ static BOOL init(void)
                 "?_Internal_resize@_Concurrent_vector_base_v4@details@Concurrency@@IEAAX_K00P6AXPEAX0@ZP6AX1PEBX0@Z3@Z");
         SET(p__Syserror_map,
                 "?_Syserror_map@std@@YAPEBDH@Z");
+        SET(p__Fiopen_wchar,
+                "?_Fiopen@std@@YAPEAU_iobuf@@PEB_WHH@Z");
+        SET(p__Fiopen,
+                "?_Fiopen@std@@YAPEAU_iobuf@@PEBDHH@Z");
     } else {
         SET(p_tr2_sys__File_size,
                 "?_File_size@sys@tr2@std@@YA_KPBD@Z");
@@ -655,6 +682,10 @@ static BOOL init(void)
                 "?_Segment_index_of@_Concurrent_vector_base_v4@details@Concurrency@@KAII@Z");
         SET(p__Syserror_map,
                 "?_Syserror_map@std@@YAPBDH@Z");
+        SET(p__Fiopen_wchar,
+                "?_Fiopen@std@@YAPAU_iobuf@@PB_WHH@Z");
+        SET(p__Fiopen,
+                "?_Fiopen@std@@YAPAU_iobuf@@PBDHH@Z");
 #ifdef __i386__
         SET(p_i386_Thrd_current,
                 "_Thrd_current");
@@ -765,7 +796,7 @@ static BOOL init(void)
         SET(p_vector_base_v4__Internal_reserve,
                 "?_Internal_reserve@_Concurrent_vector_base_v4@details@Concurrency@@IAAXIII@Z");
         SET(p_vector_base_v4__Internal_resize,
-                "?_Internal_resize@_Concurrent_vector_base_v4@details@Concurrency@@IAEXIIIP6AXPAXI@ZP6AX0PBXI@Z2@Z");
+                "?_Internal_resize@_Concurrent_vector_base_v4@details@Concurrency@@IAAXIIIP6AXPAXI@ZP6AX0PBXI@Z2@Z");
 #endif
     }
     SET(p__Thrd_equal,
@@ -817,6 +848,8 @@ static BOOL init(void)
     p_setlocale = (void*)GetProcAddress(hdll, "setlocale");
     p__setmbcp = (void*)GetProcAddress(hdll, "_setmbcp");
     p__ismbblead = (void*)GetProcAddress(hdll, "_ismbblead");
+    p_fclose = (void*)GetProcAddress(hdll, "fclose");
+    p__unlink = (void*)GetProcAddress(hdll, "_unlink");
 
     hdll = GetModuleHandleA("kernel32.dll");
     pCreateSymbolicLinkA = (void*)GetProcAddress(hdll, "CreateSymbolicLinkA");
@@ -2070,14 +2103,14 @@ static void test_thrd(void)
     /* test for equal */
     for(i=0; i<ARRAY_SIZE(testeq); i++) {
         ret = p__Thrd_equal(testeq[i].a, testeq[i].b);
-        ok(ret == testeq[i].r, "(%p %u) = (%p %u) expected %d, got %d\n",
+        ok(ret == testeq[i].r, "(%p %lu) = (%p %lu) expected %d, got %d\n",
             testeq[i].a.hnd, testeq[i].a.id, testeq[i].b.hnd, testeq[i].b.id, testeq[i].r, ret);
     }
 
     /* test for less than */
     for(i=0; i<ARRAY_SIZE(testlt); i++) {
         ret = p__Thrd_lt(testlt[i].a, testlt[i].b);
-        ok(ret == testlt[i].r, "(%p %u) < (%p %u) expected %d, got %d\n",
+        ok(ret == testlt[i].r, "(%p %lu) < (%p %lu) expected %d, got %d\n",
             testlt[i].a.hnd, testlt[i].a.id, testlt[i].b.hnd, testlt[i].b.id, testlt[i].r, ret);
     }
 
@@ -2095,8 +2128,8 @@ static void test_thrd(void)
     /* test for current */
     ta = p__Thrd_current();
     tb = p__Thrd_current();
-    ok(ta.id == tb.id, "got a %d b %d\n", ta.id, tb.id);
-    ok(ta.id == GetCurrentThreadId(), "expected %d, got %d\n", GetCurrentThreadId(), ta.id);
+    ok(ta.id == tb.id, "got a %ld b %ld\n", ta.id, tb.id);
+    ok(ta.id == GetCurrentThreadId(), "expected %ld, got %ld\n", GetCurrentThreadId(), ta.id);
     /* the handles can be different if new threads are created at same time */
     ok(ta.hnd != NULL, "handle a is NULL\n");
     ok(tb.hnd != NULL, "handle b is NULL\n");
@@ -2114,7 +2147,7 @@ static void test_thrd(void)
     ok(!ret, "failed to create thread, got %d\n", ret);
     ret = p__Thrd_join(ta, &r);
     ok(!ret, "failed to join thread, got %d\n", ret);
-    ok(ta.id == tb.id, "expected %d, got %d\n", ta.id, tb.id);
+    ok(ta.id == tb.id, "expected %ld, got %ld\n", ta.id, tb.id);
     ok(ta.hnd != tb.hnd, "same handles, got %p\n", ta.hnd);
     ok(r == 0x42, "expected 0x42, got %d\n", r);
     ret = p__Thrd_detach(ta);
@@ -2131,7 +2164,7 @@ static void test_thrd(void)
 struct cndmtx
 {
     HANDLE initialized;
-    int started;
+    LONG started;
     int thread_no;
 
     _Cnd_t cnd;
@@ -2249,7 +2282,7 @@ static void test_cnd(void)
     p__Cnd_register_at_thread_exit(&cnd, &mtx, &r);
     p__Cnd_unregister_at_thread_exit(&mtx);
     p__Cnd_do_broadcast_at_thread_exit();
-    ok(mtx->count == 1, "mtx.count = %d\n", mtx->count);
+    ok(mtx->count == 1, "mtx.count = %ld\n", mtx->count);
 
     p__Cnd_register_at_thread_exit(&cnd, &mtx, &r);
     ok(r == 0xcafe, "r = %x\n", r);
@@ -2341,14 +2374,14 @@ static unsigned int __cdecl vtbl_func__Go(_Pad *this)
     DWORD ret;
 
     ret = WaitForSingleObject(_Pad__Launch_returned, 100);
-    ok(ret == WAIT_TIMEOUT, "WiatForSingleObject returned %x\n", ret);
-    ok(!pad.mtx->count, "pad.mtx.count = %d\n", pad.mtx->count);
+    ok(ret == WAIT_TIMEOUT, "WiatForSingleObject returned %lx\n", ret);
+    ok(!pad.mtx->count, "pad.mtx.count = %ld\n", pad.mtx->count);
     ok(!pad.launched, "pad.launched = %x\n", pad.launched);
     call_func1(p__Pad__Release, &pad);
     ok(pad.launched, "pad.launched = %x\n", pad.launched);
     ret = WaitForSingleObject(_Pad__Launch_returned, 100);
-    ok(ret == WAIT_OBJECT_0, "WiatForSingleObject returned %x\n", ret);
-    ok(pad.mtx->count == 1, "pad.mtx.count = %d\n", pad.mtx->count);
+    ok(ret == WAIT_OBJECT_0, "WiatForSingleObject returned %lx\n", ret);
+    ok(pad.mtx->count == 1, "pad.mtx.count = %ld\n", pad.mtx->count);
     return 0;
 }
 
@@ -2394,7 +2427,7 @@ static void test__Pad(void)
     memset(&pad, 0xfe, sizeof(pad));
     call_func1(p__Pad_ctor, &pad);
     ok(!pad.launched, "pad.launched = %x\n", pad.launched);
-    ok(pad.mtx->count == 1, "pad.mtx.count = %d\n", pad.mtx->count);
+    ok(pad.mtx->count == 1, "pad.mtx.count = %ld\n", pad.mtx->count);
 
     pad.vtable = &pfunc;
     call_func2(p__Pad__Launch, &pad, &thrd);
@@ -2425,18 +2458,28 @@ static void test__Mtx(void)
 
         r = p__Mtx_init(&mtx, flags[i]);
         ok(!r, "failed to init mtx (flags %x)\n", flags[i]);
+        ok(mtx->thread_id == -1, "mtx.thread_id = %lx (flags %x)\n", mtx->thread_id, flags[i]);
+        ok(mtx->count == 0, "mtx.count = %lu (flags %x)\n", mtx->count, flags[i]);
 
         r = p__Mtx_trylock(&mtx);
         ok(!r, "_Mtx_trylock returned %x (flags %x)\n", r, flags[i]);
+        ok(mtx->thread_id == GetCurrentThreadId(), "mtx.thread_id = %lx (flags %x)\n", mtx->thread_id, flags[i]);
+        ok(mtx->count == 1, "mtx.count = %lu (flags %x)\n", mtx->count, flags[i]);
         r = p__Mtx_trylock(&mtx);
         ok(r == expect, "_Mtx_trylock returned %x (flags %x)\n", r, flags[i]);
+        ok(mtx->thread_id == GetCurrentThreadId(), "mtx.thread_id = %lx (flags %x)\n", mtx->thread_id, flags[i]);
+        ok(mtx->count == r ? 1 : 2, "mtx.count = %lu, expected %u (flags %x)\n", mtx->count, r ? 1 : 2, flags[i]);
         if(!r) p__Mtx_unlock(&mtx);
 
         r = p__Mtx_lock(&mtx);
         ok(r == expect, "_Mtx_lock returned %x (flags %x)\n", r, flags[i]);
+        ok(mtx->thread_id == GetCurrentThreadId(), "mtx.thread_id = %lx (flags %x)\n", mtx->thread_id, flags[i]);
+        ok(mtx->count == r ? 1 : 2, "mtx.count = %lu, expected %u (flags %x)\n", mtx->count, r ? 1 : 2, flags[i]);
         if(!r) p__Mtx_unlock(&mtx);
 
         p__Mtx_unlock(&mtx);
+        ok(mtx->thread_id == -1, "mtx.thread_id = %lx (flags %x)\n", mtx->thread_id, flags[i]);
+        ok(mtx->count == 0, "mtx.count = %lu (flags %x)\n", mtx->count, flags[i]);
         p__Mtx_destroy(&mtx);
     }
 }
@@ -2784,7 +2827,7 @@ static void test_queue_base_v4(void)
 
     thread[1] = CreateThread(NULL, 0, queue_push_thread, &queue, 0, NULL);
     ret = WaitForSingleObject(thread[1], 100);
-    ok(ret == WAIT_TIMEOUT, "WaitForSingleObject returned %x\n", ret);
+    ok(ret == WAIT_TIMEOUT, "WaitForSingleObject returned %lx\n", ret);
 
     SetEvent(block_end);
     WaitForSingleObject(thread[0], INFINITE);
@@ -2807,7 +2850,7 @@ static void test_queue_base_v4(void)
 
     thread[1] = CreateThread(NULL, 0, queue_pop_thread, &queue, 0, NULL);
     ret = WaitForSingleObject(thread[1], 100);
-    ok(ret == WAIT_TIMEOUT, "WaitForSingleObject returned %x\n", ret);
+    ok(ret == WAIT_TIMEOUT, "WaitForSingleObject returned %lx\n", ret);
 
     SetEvent(block_end);
     WaitForSingleObject(thread[0], INFINITE);
@@ -3329,6 +3372,57 @@ static void test_data_exports(void)
     }
 }
 
+static void test__Fiopen(void)
+{
+    int i, ret;
+    FILE *f;
+    wchar_t wpath[MAX_PATH];
+    HANDLE h;
+    static const struct {
+        const char *loc;
+        const char *path;
+    } tests[] = {
+        { "German",   "t\xe4\xcf\xf6\xdf.txt" },
+        { "Turkish",  "t\xd0\xf0\xdd\xde\xfd\xfe.txt" },
+        { "Arabic",   "t\xca\x8c.txt" },
+        { "Japanese", "t\xb8\xd5.txt" },
+        { "Chinese",  "t\x81\x40\xfd\x71.txt" },
+    };
+
+    for(i=0; i<ARRAY_SIZE(tests); i++) {
+        if(!p_setlocale(LC_ALL, tests[i].loc)) {
+            win_skip("skipping locale %s\n", tests[i].loc);
+            continue;
+        }
+
+        memset(wpath, 0, sizeof(wpath));
+        ret = MultiByteToWideChar(CP_ACP, 0, tests[i].path, -1, wpath, MAX_PATH);
+        ok(ret, "MultiByteToWideChar failed on %s with locale %s: %lx\n",
+            tests[i].path, tests[i].loc, GetLastError());
+
+        h = CreateFileW(wpath, GENERIC_READ | GENERIC_WRITE, 0, NULL,
+                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h == INVALID_HANDLE_VALUE)
+        {
+            skip("can't create test file (%s)\n", wine_dbgstr_w(wpath));
+            continue;
+        }
+        CloseHandle(h);
+
+        f = p__Fiopen(tests[i].path, OPENMODE_in, SH_DENYNO);
+        ok(!!f, "failed to create %s with locale %s\n", wine_dbgstr_a(tests[i].path), tests[i].loc);
+        p_fclose(f);
+
+        f = p__Fiopen_wchar(wpath, OPENMODE_in, SH_DENYNO);
+        ok(!!f, "failed to open %s with locale %s\n", wine_dbgstr_w(wpath), tests[i].loc);
+        p_fclose(f);
+
+        ok(!p__unlink(tests[i].path), "failed to unlink %s with locale %s\n",
+            tests[i].path, tests[i].loc);
+    }
+    p_setlocale(LC_ALL, "C");
+}
+
 START_TEST(msvcp120)
 {
     if(!init()) return;
@@ -3375,6 +3469,8 @@ START_TEST(msvcp120)
     test_vbtable_size_exports();
 
     test_data_exports();
+
+    test__Fiopen();
 
     free_expect_struct();
     TlsFree(expect_idx);

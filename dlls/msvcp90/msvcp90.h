@@ -17,8 +17,10 @@
  */
 
 #include "stdbool.h"
+#include <stdio.h>
 #include "stdlib.h"
 #include "windef.h"
+#include "winbase.h"
 #include "cxx.h"
 
 #define CXX_EXCEPTION       0xe06d7363
@@ -27,46 +29,72 @@
 #if _MSVCP_VER >= 100
 typedef __int64 DECLSPEC_ALIGN(8) streamoff;
 typedef __int64 DECLSPEC_ALIGN(8) streamsize;
-#define STREAMOFF_BITS 64
-#define STREAMSIZE_BITS 64
 #else
 typedef SSIZE_T streamoff;
 typedef SSIZE_T streamsize;
-#define STREAMOFF_BITS 32
-#define STREAMSIZE_BITS 32
 #endif
 
 void __cdecl _invalid_parameter_noinfo(void);
 BOOL __cdecl __uncaught_exception(void);
 int __cdecl _callnewh(size_t);
 
-void* __cdecl operator_new(size_t);
 void __cdecl operator_delete(void*);
+void* __cdecl operator_new(size_t) __WINE_ALLOC_SIZE(1) __WINE_DEALLOC(operator_delete) __WINE_MALLOC;
 extern void* (__cdecl *MSVCRT_set_new_handler)(void*);
 
 #if _MSVCP_VER >= 110
 /* keep in sync with msvcrt/lock.c */
 typedef struct cs_queue
 {
+    void *ctx;
     struct cs_queue *next;
-    BOOL free;
+    LONG free;
     int unknown;
 } cs_queue;
 
 typedef struct
 {
-    ULONG_PTR unk_thread_id;
     cs_queue unk_active;
     void *unknown[2];
     cs_queue *head;
     void *tail;
 } critical_section;
 
-extern critical_section* (__thiscall *critical_section_ctor)(critical_section*);
-extern void (__thiscall *critical_section_dtor)(critical_section*);
-extern void (__thiscall *critical_section_lock)(critical_section*);
-extern void (__thiscall *critical_section_unlock)(critical_section*);
-extern bool (__thiscall *critical_section_trylock)(critical_section*);
+typedef union
+{
+    critical_section conc;
+    SRWLOCK win;
+} cs;
+
+typedef struct cv_queue {
+    struct cv_queue *next;
+    LONG expired;
+} cv_queue;
+
+typedef struct {
+    /* cv_queue structure is not binary compatible */
+    cv_queue *queue;
+    critical_section lock;
+} _Condition_variable;
+
+typedef union
+{
+    _Condition_variable conc;
+    CONDITION_VARIABLE win;
+} cv;
+
+extern void cs_init(cs*);
+extern void cs_destroy(cs*);
+extern void cs_lock(cs*);
+extern void cs_unlock(cs*);
+extern bool cs_trylock(cs*);
+
+extern void cv_init(cv*);
+extern void cv_destroy(cv*);
+extern void cv_wait(cv*, cs*);
+extern bool cv_wait_for(cv*, cs*, unsigned int);
+extern void cv_notify_one(cv*);
+extern void cv_notify_all(cv*);
 #endif
 
 #if _MSVCP_VER >= 100
@@ -132,8 +160,8 @@ void __thiscall MSVCP_basic_string_wchar_clear(basic_string_wchar*);
 basic_string_wchar* __thiscall MSVCP_basic_string_wchar_append_ch(basic_string_wchar*, wchar_t);
 size_t __thiscall MSVCP_basic_string_wchar_length(const basic_string_wchar*);
 
-char* __thiscall MSVCP_allocator_char_allocate(void*, size_t);
 void __thiscall MSVCP_allocator_char_deallocate(void*, char*, size_t);
+char* __thiscall MSVCP_allocator_char_allocate(void*, size_t) __WINE_ALLOC_SIZE(2) __WINE_DEALLOC(MSVCP_allocator_char_deallocate, 2) __WINE_MALLOC;
 size_t __thiscall MSVCP_allocator_char_max_size(const void*);
 wchar_t* __thiscall MSVCP_allocator_wchar_allocate(void*, size_t);
 void __thiscall MSVCP_allocator_wchar_deallocate(void*, wchar_t*, size_t);
@@ -208,6 +236,25 @@ typedef struct {
 typedef struct {
     codecvt_base base;
 } codecvt_char;
+
+#if _MSVCP_VER >= 140
+typedef enum convert_mode
+{
+    consume_header = 4,
+    generate_header = 2,
+    little_endian = 1
+} codecvt_convert_mode;
+
+/* class codecvt<char16> */
+typedef struct {
+    codecvt_base base;
+} codecvt_char16;
+
+/* class codecvt<char32> */
+typedef struct {
+    codecvt_base base;
+} codecvt_char32;
+#endif
 
 bool __thiscall codecvt_base_always_noconv(const codecvt_base*);
 int __thiscall codecvt_char_unshift(const codecvt_char*, _Mbstatet*, char*, char*, char**);
@@ -540,9 +587,9 @@ istreambuf_iterator_char *__thiscall num_get_char_get_ldouble(const num_get*, is
 istreambuf_iterator_char *__thiscall num_get_char_get_void(const num_get*, istreambuf_iterator_char*,
         istreambuf_iterator_char, istreambuf_iterator_char, ios_base*, int*, void**);
 istreambuf_iterator_char *__thiscall num_get_char_get_int64(const num_get*, istreambuf_iterator_char*,
-        istreambuf_iterator_char, istreambuf_iterator_char, ios_base*, int*, LONGLONG*);
+        istreambuf_iterator_char, istreambuf_iterator_char, ios_base*, int*, __int64*);
 istreambuf_iterator_char *__thiscall num_get_char_get_uint64(const num_get*, istreambuf_iterator_char*,
-        istreambuf_iterator_char, istreambuf_iterator_char, ios_base*, int*, ULONGLONG*);
+        istreambuf_iterator_char, istreambuf_iterator_char, ios_base*, int*, unsigned __int64*);
 istreambuf_iterator_char *__thiscall num_get_char_get_bool(const num_get*, istreambuf_iterator_char*,
         istreambuf_iterator_char, istreambuf_iterator_char, ios_base*, int*, bool*);
 
@@ -565,9 +612,9 @@ istreambuf_iterator_wchar *__thiscall num_get_wchar_get_ldouble(const num_get*, 
 istreambuf_iterator_wchar *__thiscall num_get_wchar_get_void(const num_get*, istreambuf_iterator_wchar*,
         istreambuf_iterator_wchar, istreambuf_iterator_wchar, ios_base*, int*, void**);
 istreambuf_iterator_wchar *__thiscall num_get_wchar_get_int64(const num_get*, istreambuf_iterator_wchar*,
-        istreambuf_iterator_wchar, istreambuf_iterator_wchar, ios_base*, int*, LONGLONG*);
+        istreambuf_iterator_wchar, istreambuf_iterator_wchar, ios_base*, int*, __int64*);
 istreambuf_iterator_wchar *__thiscall num_get_wchar_get_uint64(const num_get*, istreambuf_iterator_wchar*,
-        istreambuf_iterator_wchar, istreambuf_iterator_wchar, ios_base*, int*, ULONGLONG*);
+        istreambuf_iterator_wchar, istreambuf_iterator_wchar, ios_base*, int*, unsigned __int64*);
 istreambuf_iterator_wchar *__thiscall num_get_wchar_get_bool(const num_get*, istreambuf_iterator_wchar*,
         istreambuf_iterator_wchar, istreambuf_iterator_wchar, ios_base*, int*, bool*);
 
@@ -641,6 +688,24 @@ typedef struct {
     double imag;
 } complex_double;
 
+#if _MSVCP_VER >= 100
+typedef struct {
+    const vtable_ptr *vtable;
+} error_category;
+
+const error_category* __cdecl std_iostream_category(void);
+const error_category* __cdecl std_generic_category(void);
+const error_category* __cdecl std_system_category(void);
+
+typedef struct
+{
+    int code;
+    const error_category *category;
+} error_code;
+
+const char *_Winerror_map_str(int err);
+#endif
+
 #if _MSVCP_VER < 80
 static inline int memcpy_wrapper( void *dst, size_t size, const void *src, size_t count )
 {
@@ -672,3 +737,7 @@ void __cdecl DECLSPEC_NORETURN _Xruntime_error(const char*);
 void DECLSPEC_NORETURN throw_exception(const char*);
 void DECLSPEC_NORETURN throw_failure(const char*);
 void DECLSPEC_NORETURN throw_range_error(const char*);
+
+#if _MSVCP_VER >= 140
+int CDECL _get_stream_buffer_pointers(FILE*,char***,char***,int**);
+#endif

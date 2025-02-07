@@ -18,12 +18,12 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
 #include "wine/winuser16.h"
 #include "wownt32.h"
 #include "user_private.h"
 #include "wine/list.h"
-#include "wine/server.h"
-#include "wine/gdi_driver.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(win);
@@ -112,7 +112,7 @@ UINT16 WINAPI SetTimer16( HWND16 hwnd, UINT16 id, UINT16 timeout, TIMERPROC16 pr
 UINT16 WINAPI SetSystemTimer16( HWND16 hwnd, UINT16 id, UINT16 timeout, TIMERPROC16 proc )
 {
     TIMERPROC proc32 = (TIMERPROC)WINPROC_AllocProc16( (WNDPROC16)proc );
-    return SetSystemTimer( WIN_Handle32(hwnd), id, timeout, proc32 );
+    return SetTimer( WIN_Handle32(hwnd), (UINT_PTR)id | SYSTEM_TIMER_FLAG, timeout, proc32 );
 }
 
 
@@ -193,22 +193,16 @@ BOOL16 WINAPI SetProp16( HWND16 hwnd, LPCSTR str, HANDLE16 handle )
  */
 INT16 WINAPI EnumProps16( HWND16 hwnd, PROPENUMPROC16 func )
 {
-    int ret = -1, i, count, total = 32;
-    property_data_t *list;
+    int ret = -1, i;
+    struct ntuser_property_list *list;
+    ULONG count, total = 32;
+    NTSTATUS status;
 
     while (total)
     {
         if (!(list = HeapAlloc( GetProcessHeap(), 0, total * sizeof(*list) ))) break;
-        count = 0;
-        SERVER_START_REQ( get_window_properties )
-        {
-            req->window = wine_server_user_handle( HWND_32(hwnd) );
-            wine_server_set_reply( req, list, total * sizeof(*list) );
-            if (!wine_server_call( req )) count = reply->total;
-        }
-        SERVER_END_REQ;
-
-        if (count && count <= total)
+        status = NtUserBuildPropList( WIN_Handle32(hwnd), total, list, &count );
+        if (!status && count)
         {
             char string[ATOM_BUFFER_SIZE];
             SEGPTR segptr = MapLS( string );
@@ -240,6 +234,7 @@ INT16 WINAPI EnumProps16( HWND16 hwnd, PROPENUMPROC16 func )
             break;
         }
         HeapFree( GetProcessHeap(), 0, list );
+        if (status != STATUS_BUFFER_TOO_SMALL) break;
         total = count;  /* restart with larger buffer */
     }
     return ret;
@@ -676,7 +671,7 @@ HDC16 WINAPI GetWindowDC16( HWND16 hwnd )
 INT16 WINAPI ReleaseDC16( HWND16 hwnd, HDC16 hdc )
 {
     INT16 ret = (INT16)ReleaseDC( WIN_Handle32(hwnd), HDC_32(hdc) );
-    SetHookFlags( HDC_32(hdc), DCHF_ENABLEDC );
+    NtUserEnableDC( HDC_32(hdc) );
     return ret;
 }
 
@@ -839,7 +834,15 @@ LONG WINAPI SetClassLong16( HWND16 hwnd16, INT16 offset, LONG newval )
  */
 WORD WINAPI GetWindowWord16( HWND16 hwnd, INT16 offset )
 {
-    return GetWindowWord( WIN_Handle32(hwnd), offset );
+    switch(offset)
+    {
+    case GWLP_ID:
+    case GWLP_HINSTANCE:
+    case GWLP_HWNDPARENT:
+        return GetWindowLongA( WIN_Handle32(hwnd), offset );
+    default:
+        return GetWindowWord( WIN_Handle32(hwnd), offset );
+    }
 }
 
 
@@ -848,7 +851,15 @@ WORD WINAPI GetWindowWord16( HWND16 hwnd, INT16 offset )
  */
 WORD WINAPI SetWindowWord16( HWND16 hwnd, INT16 offset, WORD newval )
 {
-    return SetWindowWord( WIN_Handle32(hwnd), offset, newval );
+    switch(offset)
+    {
+    case GWLP_ID:
+    case GWLP_HINSTANCE:
+    case GWLP_HWNDPARENT:
+        return SetWindowLongA( WIN_Handle32(hwnd), offset, newval );
+    default:
+        return SetWindowWord( WIN_Handle32(hwnd), offset, newval );
+    }
 }
 
 
@@ -1088,7 +1099,7 @@ void WINAPI SwitchToThisWindow16( HWND16 hwnd, BOOL16 restore )
  */
 BOOL16 WINAPI KillSystemTimer16( HWND16 hwnd, UINT16 id )
 {
-    return KillSystemTimer( WIN_Handle32(hwnd), id );
+    return KillTimer( WIN_Handle32(hwnd), (UINT_PTR)id | SYSTEM_TIMER_FLAG );
 }
 
 
@@ -1656,7 +1667,7 @@ BOOL16 WINAPI GetClassInfoEx16( HINSTANCE16 hInst16, SEGPTR name, WNDCLASSEX16 *
         wc->hCursor       = get_icon_16( wc32.hCursor );
         wc->hbrBackground = HBRUSH_16(wc32.hbrBackground);
         wc->lpszClassName = 0;
-        wc->lpszMenuName  = MapLS(wc32.lpszMenuName);  /* FIXME: leak */
+        wc->lpszMenuName  = MapLS((void *)wc32.lpszMenuName);  /* FIXME: leak */
     }
     return ret;
 }

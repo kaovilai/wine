@@ -42,6 +42,9 @@
 /* Don't submit the results if more than FAILURES_LIMIT tests have failed */
 #define FAILURES_LIMIT 50
 
+/* Maximum output size for individual test */
+#define MAX_OUTPUT_SIZE (32 * 1024)
+
 struct wine_test
 {
     char *name;
@@ -64,10 +67,14 @@ static const char testexe[] = "_test.exe";
 static char build_id[64];
 static BOOL is_wow64;
 static int failures;
+static int quiet_mode;
+static HANDLE logfile;
+static HANDLE junit;
 
 /* filters for running only specific tests */
-static char *filters[64];
-static unsigned int nb_filters = 0;
+static char **filters;
+static unsigned int nb_filters;
+static unsigned int alloc_filters;
 static BOOL exclude_tests = FALSE;
 
 /* Needed to check for .NET dlls */
@@ -109,6 +116,89 @@ static BOOL test_filtered_out( LPCSTR module, LPCSTR testname )
     return !exclude_tests;
 }
 
+static void add_filter( const char *name )
+{
+    if (name[0] == '@')
+    {
+        char *p, *str, buffer[256];
+        FILE *f = fopen( name + 1, "rt" );
+        if (!f) return;
+
+        while (fgets( buffer, sizeof(buffer), f ))
+        {
+            p = buffer;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '#') continue;
+            str = p;
+            while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') p++;
+            *p = 0;
+            add_filter( str );
+        }
+        fclose( f );
+        return;
+    }
+
+    if (nb_filters >= alloc_filters)
+    {
+        alloc_filters = max( alloc_filters * 2, 64 );
+        filters = xrealloc( filters, alloc_filters * sizeof(*filters) );
+    }
+    filters[nb_filters++] = xstrdup(name);
+}
+
+static HANDLE create_output_file( const char *name )
+{
+    SECURITY_ATTRIBUTES sa;
+    HANDLE file;
+
+    /* make handle inheritable */
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+
+    file = CreateFileA( name, GENERIC_READ|GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        &sa, CREATE_ALWAYS, 0, NULL );
+
+    if (file == INVALID_HANDLE_VALUE && GetLastError() == ERROR_INVALID_PARAMETER)
+    {
+        /* FILE_SHARE_DELETE not supported on win9x */
+        file = CreateFileA( name, GENERIC_READ|GENERIC_WRITE,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE,
+                            &sa, CREATE_ALWAYS, 0, NULL );
+    }
+    return file;
+}
+
+static HANDLE create_temp_file( char name[MAX_PATH] )
+{
+    char tmpdir[MAX_PATH];
+
+    if (!GetTempPathA( MAX_PATH, tmpdir ) ||
+        !GetTempFileNameA( tmpdir, "out", 0, name ))
+        report (R_FATAL, "Can't name temp file.");
+
+    return create_output_file( name );
+}
+
+static void close_temp_file( const char *name, HANDLE file )
+{
+    CloseHandle( file );
+    DeleteFileA( name );
+}
+
+static char *flush_temp_file( const char *name, HANDLE file, DWORD *retsize )
+{
+    DWORD size = SetFilePointer( file, 0, NULL, FILE_CURRENT );
+    char *buffer = xalloc( size + 1 );
+
+    SetFilePointer( file, 0, NULL, FILE_BEGIN );
+    if (!ReadFile( file, buffer, size, retsize, NULL )) *retsize = 0;
+    close_temp_file( name, file );
+    buffer[*retsize] = 0;
+    return buffer;
+}
+
 static char * get_file_version(char * file_name)
 {
     static char version[32];
@@ -117,29 +207,26 @@ static char * get_file_version(char * file_name)
 
     size = GetFileVersionInfoSizeA(file_name, &handle);
     if (size) {
-        char * data = heap_alloc(size);
-        if (data) {
-            if (GetFileVersionInfoA(file_name, handle, size, data)) {
-                static const char backslash[] = "\\";
-                VS_FIXEDFILEINFO *pFixedVersionInfo;
-                UINT len;
-                if (VerQueryValueA(data, backslash, (LPVOID *)&pFixedVersionInfo, &len)) {
-                    sprintf(version, "%d.%d.%d.%d",
-                            pFixedVersionInfo->dwFileVersionMS >> 16,
-                            pFixedVersionInfo->dwFileVersionMS & 0xffff,
-                            pFixedVersionInfo->dwFileVersionLS >> 16,
-                            pFixedVersionInfo->dwFileVersionLS & 0xffff);
-                } else
-                    sprintf(version, "version not found");
+        char * data = xalloc(size);
+        if (GetFileVersionInfoA(file_name, handle, size, data)) {
+            static const char backslash[] = "\\";
+            VS_FIXEDFILEINFO *pFixedVersionInfo;
+            UINT len;
+            if (VerQueryValueA(data, backslash, (LPVOID *)&pFixedVersionInfo, &len)) {
+                sprintf(version, "%ld.%ld.%ld.%ld",
+                        pFixedVersionInfo->dwFileVersionMS >> 16,
+                        pFixedVersionInfo->dwFileVersionMS & 0xffff,
+                        pFixedVersionInfo->dwFileVersionLS >> 16,
+                        pFixedVersionInfo->dwFileVersionLS & 0xffff);
             } else
-                sprintf(version, "version error %u", GetLastError());
-            heap_free(data);
+                sprintf(version, "version not found");
         } else
-            sprintf(version, "version error %u", ERROR_OUTOFMEMORY);
+            sprintf(version, "version error %lu", GetLastError());
+        free(data);
     } else if (GetLastError() == ERROR_FILE_NOT_FOUND)
         sprintf(version, "dll is missing");
     else
-        sprintf(version, "version not present %u", GetLastError());
+        sprintf(version, "version not present %lu", GetLastError());
 
     return version;
 }
@@ -237,16 +324,10 @@ static int running_as_admin (void)
     /* Get the group info from the token */
     groups_size = 0;
     GetTokenInformation(token, TokenGroups, NULL, 0, &groups_size);
-    groups = heap_alloc(groups_size);
-    if (groups == NULL)
-    {
-        CloseHandle(token);
-        FreeSid(administrators);
-        return -1;
-    }
+    groups = xalloc(groups_size);
     if (! GetTokenInformation(token, TokenGroups, groups, groups_size, &groups_size))
     {
-        heap_free(groups);
+        free(groups);
         CloseHandle(token);
         FreeSid(administrators);
         return -1;
@@ -258,14 +339,14 @@ static int running_as_admin (void)
     {
         if (EqualSid(groups->Groups[group_index].Sid, administrators))
         {
-            heap_free(groups);
+            free(groups);
             FreeSid(administrators);
             return 1;
         }
     }
 
     /* If we end up here we didn't find the Administrators group */
-    heap_free(groups);
+    free(groups);
     FreeSid(administrators);
     return 0;
 }
@@ -326,9 +407,7 @@ static BOOL is_stub_dll(const char *filename)
     size = GetFileVersionInfoSizeA(filename, &ver);
     if (!size) return FALSE;
 
-    data = HeapAlloc(GetProcessHeap(), 0, size);
-    if (!data) return FALSE;
-
+    data = xalloc(size);
     if (GetFileVersionInfoA(filename, ver, size, data))
     {
         char buf[256];
@@ -337,9 +416,37 @@ static BOOL is_stub_dll(const char *filename)
         if (VerQueryValueA(data, buf, (void**)&p, &size))
             isstub = !lstrcmpiA("wcodstub.dll", p);
     }
-    HeapFree(GetProcessHeap(), 0, data);
+    free(data);
 
     return isstub;
+}
+
+static int disable_crash_dialog(void)
+{
+    HKEY key;
+    DWORD type, data, size;
+    int ret = 0;
+
+    if (RegCreateKeyA( HKEY_CURRENT_USER, "Software\\Wine\\WineDbg", &key )) return 0;
+    size = sizeof(data);
+    if (RegQueryValueExA( key, "ShowCrashDialog", NULL, &type, (BYTE *)&data, &size )) ret = 1;
+    else if (type != REG_DWORD || data) ret = 2;
+    data = 0;
+    RegSetValueExA( key, "ShowCrashDialog", 0, REG_DWORD, (BYTE *)&data, sizeof(data) );
+    RegCloseKey( key );
+    return ret;
+}
+
+static void restore_crash_dialog( int prev )
+{
+    HKEY key;
+    DWORD data = 1;
+
+    if (!prev) return;
+    if (RegOpenKeyA( HKEY_CURRENT_USER, "Software\\Wine\\WineDbg", &key )) return;
+    if (prev == 1) RegDeleteKeyValueA( key, NULL, "ShowCrashDialog" );
+    else RegSetValueExA( key, "ShowCrashDialog", 0, REG_DWORD, (BYTE *)&data, sizeof(data) );
+    RegCloseKey( key );
 }
 
 static void print_version (void)
@@ -405,13 +512,14 @@ static void print_version (void)
             xprintf(", %s", is_elevated ? "elevated" : "not elevated");
         xprintf ("\n");
     }
-    xprintf ("    Submitter=%s\n", email );
+    if (email)
+        xprintf ("    Submitter=%s\n", email );
     if (description)
         xprintf ("    Description=%s\n", description );
     if (url)
         xprintf ("    URL=%s\n", url );
-    xprintf ("    dwMajorVersion=%u\n    dwMinorVersion=%u\n"
-             "    dwBuildNumber=%u\n    PlatformId=%u\n    szCSDVersion=%s\n",
+    xprintf ("    dwMajorVersion=%lu\n    dwMinorVersion=%lu\n"
+             "    dwBuildNumber=%lu\n    PlatformId=%lu\n    szCSDVersion=%s\n",
              ver.dwMajorVersion, ver.dwMinorVersion, ver.dwBuildNumber,
              ver.dwPlatformId, ver.szCSDVersion);
 
@@ -441,7 +549,7 @@ static void print_version (void)
         DWORD prodtype = 0;
 
         pGetProductInfo(ver.dwMajorVersion, ver.dwMinorVersion, ver.wServicePackMajor, ver.wServicePackMinor, &prodtype);
-        xprintf("    dwProductInfo=%u\n", prodtype);
+        xprintf("    dwProductInfo=%lu\n", prodtype);
     }
 }
 
@@ -452,9 +560,9 @@ static void print_language(void)
     LANGID (WINAPI *pGetUserDefaultUILanguage)(void);
     LANGID (WINAPI *pGetThreadUILanguage)(void);
 
-    xprintf ("    SystemDefaultLCID=%04x\n", GetSystemDefaultLCID());
-    xprintf ("    UserDefaultLCID=%04x\n", GetUserDefaultLCID());
-    xprintf ("    ThreadLocale=%04x\n", GetThreadLocale());
+    xprintf ("    SystemDefaultLCID=%04lx\n", GetSystemDefaultLCID());
+    xprintf ("    UserDefaultLCID=%04lx\n", GetUserDefaultLCID());
+    xprintf ("    ThreadLocale=%04lx\n", GetThreadLocale());
 
     hkernel32 = GetModuleHandleA("kernel32.dll");
     pGetSystemPreferredUILanguages = (void*)GetProcAddress(hkernel32, "GetSystemPreferredUILanguages");
@@ -477,6 +585,9 @@ static void print_language(void)
         xprintf ("    UserDefaultUILanguage=%04x\n", pGetUserDefaultUILanguage());
     if (pGetThreadUILanguage)
         xprintf ("    ThreadUILanguage=%04x\n", pGetThreadUILanguage());
+    xprintf ("    KeyboardLayout=%p\n", GetKeyboardLayout(0));
+    xprintf ("    Country=%ld\n", GetUserGeoID(GEOCLASS_NATION));
+    xprintf ("    ACP=%d\n", GetACP());
 }
 
 static inline BOOL is_dot_dir(const char* x)
@@ -559,12 +670,12 @@ extract_test (struct wine_test *test, const char *dir, LPSTR res_name)
     code = extract_rcdata (res_name, "TESTRES", &size);
     if (!code) report (R_FATAL, "Can't find test resource %s: %d",
                        res_name, GetLastError ());
-    test->name = heap_strdup( res_name );
-    test->exename = strmake (NULL, "%s\\%s", dir, test->name);
+    test->name = xstrdup( res_name );
+    test->exename = strmake("%s\\%s", dir, test->name);
     exepos = strstr (test->name, testexe);
     if (!exepos) report (R_FATAL, "Not an .exe file: %s", test->name);
     *exepos = 0;
-    test->name = heap_realloc (test->name, exepos - test->name + 1);
+    test->name = xrealloc(test->name, exepos - test->name + 1);
     report (R_STEP, "Extracting: %s", test->name);
 
     hfile = CreateFileA(test->exename, GENERIC_READ | GENERIC_WRITE, 0, NULL,
@@ -576,6 +687,21 @@ extract_test (struct wine_test *test, const char *dir, LPSTR res_name)
         report (R_FATAL, "Failed to write file %s.", test->exename);
 
     CloseHandle(hfile);
+}
+
+static HANDLE get_admin_token(void)
+{
+    TOKEN_ELEVATION_TYPE type;
+    TOKEN_LINKED_TOKEN linked;
+    DWORD size;
+
+    if (!GetTokenInformation(GetCurrentThreadEffectiveToken(), TokenElevationType, &type, sizeof(type), &size)
+            || type == TokenElevationTypeFull)
+        return NULL;
+
+    if (!GetTokenInformation(GetCurrentThreadEffectiveToken(), TokenLinkedToken, &linked, sizeof(linked), &size))
+        return NULL;
+    return linked.LinkedToken;
 }
 
 static DWORD wait_process( HANDLE process, DWORD timeout )
@@ -595,15 +721,9 @@ static DWORD wait_process( HANDLE process, DWORD timeout )
 
 static void append_path( const char *path)
 {
-    char *newpath;
-
-    newpath = heap_alloc(strlen(curpath) + 1 + strlen(path) + 1);
-    strcpy(newpath, curpath);
-    strcat(newpath, ";");
-    strcat(newpath, path);
+    char *newpath = strmake( "%s;%s", curpath, path );
     SetEnvironmentVariableA("PATH", newpath);
-
-    heap_free(newpath);
+    free(newpath);
 }
 
 /* Run a command for MS milliseconds.  If OUT != NULL, also redirect
@@ -619,16 +739,13 @@ run_ex (char *cmd, HANDLE out_file, const char *tempdir, DWORD ms, BOOL nocritic
     PROCESS_INFORMATION pi;
     DWORD wait, status, flags;
     UINT old_errmode;
-
-    /* Flush to disk so we know which test caused Windows to crash if it does */
-    if (out_file)
-        FlushFileBuffers(out_file);
+    HANDLE token = NULL;
 
     GetStartupInfoA (&si);
     si.dwFlags    = STARTF_USESTDHANDLES;
     si.hStdInput  = GetStdHandle( STD_INPUT_HANDLE );
-    si.hStdOutput = out_file ? out_file : GetStdHandle( STD_OUTPUT_HANDLE );
-    si.hStdError  = out_file ? out_file : GetStdHandle( STD_ERROR_HANDLE );
+    si.hStdOutput = out_file;
+    si.hStdError  = out_file;
     if (nocritical)
     {
         old_errmode = SetErrorMode(0);
@@ -638,8 +755,16 @@ run_ex (char *cmd, HANDLE out_file, const char *tempdir, DWORD ms, BOOL nocritic
     else
         flags = CREATE_DEFAULT_ERROR_MODE;
 
-    if (!CreateProcessA (NULL, cmd, NULL, NULL, TRUE, flags,
-                         NULL, tempdir, &si, &pi))
+    /* Some tests cause a UAC prompt on Windows if the user is not elevated,
+     * so to allow them to run unattended the relevant test units need to skip
+     * the tests if so.
+     *
+     * However, we still want Wine to run as many tests as possible, so always
+     * elevate ourselves. On Wine elevation isn't interactive. */
+    if (running_under_wine())
+        token = get_admin_token();
+
+    if (!CreateProcessAsUserA(token, NULL, cmd, NULL, NULL, TRUE, flags, NULL, tempdir, &si, &pi))
     {
         if (nocritical) SetErrorMode(old_errmode);
         if (pid) *pid = 0;
@@ -692,42 +817,17 @@ get_subtests (const char *tempdir, struct wine_test *test, LPSTR res_name)
     char *cmd;
     HANDLE subfile;
     DWORD err, total;
-    char buffer[8192], *index;
+    char *buffer, *index;
     static const char header[] = "Valid test names:";
     int status, allocated;
-    char tmpdir[MAX_PATH], subname[MAX_PATH];
-    SECURITY_ATTRIBUTES sa;
+    char subname[MAX_PATH];
 
     test->subtest_count = 0;
 
-    if (!GetTempPathA( MAX_PATH, tmpdir ) ||
-        !GetTempFileNameA( tmpdir, "sub", 0, subname ))
-        report (R_FATAL, "Can't name subtests file.");
+    subfile = create_temp_file( subname );
+    if (subfile == INVALID_HANDLE_VALUE) return GetLastError();
 
-    /* make handle inheritable */
-    sa.nLength = sizeof(sa);
-    sa.lpSecurityDescriptor = NULL;
-    sa.bInheritHandle = TRUE;
-
-    subfile = CreateFileA( subname, GENERIC_READ|GENERIC_WRITE,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           &sa, CREATE_ALWAYS, 0, NULL );
-
-    if ((subfile == INVALID_HANDLE_VALUE) &&
-        (GetLastError() == ERROR_INVALID_PARAMETER)) {
-        /* FILE_SHARE_DELETE not supported on win9x */
-        subfile = CreateFileA( subname, GENERIC_READ|GENERIC_WRITE,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           &sa, CREATE_ALWAYS, 0, NULL );
-    }
-    if (subfile == INVALID_HANDLE_VALUE) {
-        err = GetLastError();
-        report (R_ERROR, "Can't open subtests output of %s: %u",
-                test->name, GetLastError());
-        goto quit;
-    }
-
-    cmd = strmake (NULL, "%s --list", test->exename);
+    cmd = strmake("%s --list", test->exename);
     if (test->maindllpath) {
         /* We need to add the path (to the main dll) to PATH */
         append_path(test->maindllpath);
@@ -738,58 +838,204 @@ get_subtests (const char *tempdir, struct wine_test *test, LPSTR res_name)
         /* Restore PATH again */
         SetEnvironmentVariableA("PATH", curpath);
     }
-    heap_free (cmd);
+    free(cmd);
 
     if (status)
     {
-        if (status == -2)
-            report (R_ERROR, "Cannot run %s error %u", test->exename, err);
-        else
-            err = status;
-        CloseHandle( subfile );
-        goto quit;
+        close_temp_file( subname, subfile );
+        return status == -2 ? err : status;
     }
 
-    SetFilePointer( subfile, 0, NULL, FILE_BEGIN );
-    ReadFile( subfile, buffer, sizeof(buffer), &total, NULL );
-    CloseHandle( subfile );
-    if (sizeof buffer == total) {
-        report (R_ERROR, "Subtest list of %s too big.",
-                test->name, sizeof buffer);
-        err = ERROR_OUTOFMEMORY;
-        goto quit;
-    }
-    buffer[total] = 0;
-
+    buffer = flush_temp_file( subname, subfile, &total );
     index = strstr (buffer, header);
     if (!index) {
         report (R_ERROR, "Can't parse subtests output of %s",
                 test->name);
-        err = ERROR_INTERNAL_ERROR;
-        goto quit;
+        return ERROR_INTERNAL_ERROR;
     }
     index += sizeof header;
 
     allocated = 10;
-    test->subtests = heap_alloc (allocated * sizeof(char*));
+    test->subtests = xalloc(allocated * sizeof(char*));
     index = strtok (index, whitespace);
     while (index) {
         if (test->subtest_count == allocated) {
             allocated *= 2;
-            test->subtests = heap_realloc (test->subtests,
-                                           allocated * sizeof(char*));
+            test->subtests = xrealloc(test->subtests, allocated * sizeof(char*));
         }
-        test->subtests[test->subtest_count++] = heap_strdup(index);
+        test->subtests[test->subtest_count++] = xstrdup(index);
         index = strtok (NULL, whitespace);
     }
-    test->subtests = heap_realloc (test->subtests,
-                                   test->subtest_count * sizeof(char*));
-    err = 0;
+    test->subtests = xrealloc(test->subtests, test->subtest_count * sizeof(char*));
+    free( buffer );
+    return 0;
+}
 
- quit:
-    if (!DeleteFileA (subname))
-        report (R_WARNING, "Can't delete file '%s': %u", subname, GetLastError());
-    return err;
+static char *xmlescape( const char *src, const char *end, int comment )
+{
+    char *dst = calloc( 1, (end - src) * 6 + 1 ), *tmp;
+
+    while (end > src && (end[-1] == '\r' || end[-1] == '\n')) end--;
+    for (tmp = dst; tmp && src < end; src++)
+    {
+        if (comment && *src == '-') tmp += sprintf( tmp, "&#45;" );
+        else if (comment) *tmp++ = *src;
+        else if (*src == '&') tmp += sprintf( tmp, "&amp;" );
+        else if (*src == '"') tmp += sprintf( tmp, "&quot;" );
+        else if (*src == '<') tmp += sprintf( tmp, "&lt;" );
+        else if (*src == '>') tmp += sprintf( tmp, "&gt;" );
+        else if (*src < ' ' && *src != '\t' && *src != '\r' && *src != '\n')
+        {
+            char *esc = strmake( "\\x%02x", *src );
+            tmp += sprintf( tmp, "%s", esc );
+            free( esc );
+        }
+        else *tmp++ = *src;
+    }
+
+    return dst;
+}
+
+static void report_test_start( struct wine_test *test, const char *subtest, const char *file )
+{
+    report( R_STEP, "Running: %s:%s", test->name, subtest );
+    xprintf( "%s:%s start %s\n", test->name, subtest, file );
+}
+
+/* filter out color escapes and null characters from test output data */
+static void *filter_data( const char *data, DWORD size )
+{
+    DWORD i, j;
+    char *ret = malloc( size + 1 );
+
+    for (i = j = 0; i < size; i++)
+    {
+        if (data[i] == '\x1b' && data[i + 1] == '[')
+        {
+            while (data[i] && data[i] != 'm') i++;
+        }
+        else if (data[i]) ret[j++] = data[i];
+    }
+    ret[j] = 0;
+    return ret;
+}
+
+static void report_test_done( struct wine_test *test, const char *subtest, const char *file, DWORD pid, DWORD ticks,
+                              HANDLE out_file, UINT status, const char *data, DWORD size )
+{
+    if (quiet_mode <= 1 || status || size > MAX_OUTPUT_SIZE) WriteFile( out_file, data, size, &size, NULL );
+    xprintf( "%s:%s:%04lx done (%d) in %lds %luB\n", test->name, subtest, pid, status, ticks / 1000, size );
+    if (size > MAX_OUTPUT_SIZE) xprintf( "%s:%s:%04lx The test prints too much data (%lu bytes)\n", test->name, subtest, pid, size );
+
+    if (junit)
+    {
+        int total = 0, fail_total = 0, skip_total = 0, failures = 0;
+        const char *next, *line, *ptr, *dir = strrchr( file, '/' );
+        float time, last_time = 0;
+        char *filtered_data = filter_data( data, size );
+
+        for (line = next = filtered_data; *line; line = next)
+        {
+            int count, todo_count, flaky_count, fail_count, skip_count;
+
+            if ((next = strchr( next, '\n' ))) next += 1;
+            else next = line + strlen( line );
+            if (!(ptr = strchr( line, ' ' ))) continue;
+
+            if (sscanf( ptr, " %d tests executed (%d marked as todo, %d as flaky, %d failur%*[^)]), %d skipped.",
+                        &count, &todo_count, &flaky_count, &fail_count, &skip_count ) == 5)
+            {
+                total += count;
+                fail_total += fail_count;
+                skip_total += skip_count;
+            }
+        }
+
+        output( junit, "  <testsuite name=\"%s:%s\" file=\"%s\" time=\"%f\" tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n",
+                test->name, subtest, file, ticks / 1000.0, total, fail_total, skip_total );
+
+        for (line = next = filtered_data; *line; line = next)
+        {
+            struct { const char *pattern; int length; int error; } patterns[] =
+            {
+                #define X(x, y) {.pattern = x, .length = strlen(x), .error = y}
+                X("Tests skipped: ", -1),
+                X("Test failed: ", 1),
+                X("Test succeeded inside todo block: ", 1),
+                X("Test succeeded inside flaky todo block: ", 1),
+                #undef X
+            };
+            char src[256], *name, *message;
+            int i, n, len;
+
+            if ((next = strchr( next, '\n' ))) next += 1;
+            else next = line + strlen( line );
+
+            if ((len = sscanf( line, "%255[^:\n]:%d:%f", src, &n, &time )) != 2 && len != 3) continue;
+            if (len == 2) time = last_time;
+
+            if (!(ptr = strchr( line, ' ' ))) continue;
+            ptr++;
+
+            message = xmlescape( ptr, next, 0 );
+            name = strmake( "%s:%d %s", src, n, message );
+            for (i = 0; i < ARRAY_SIZE(patterns); i++)
+            {
+                if (!strncmp( ptr, patterns[i].pattern, patterns[i].length ))
+                {
+                    output( junit, "    <testcase classname=\"%s:%s\" name=\"%s:%s %s\" file=\"%.*s%s#L%d\" assertions=\"1\" time=\"%f\">",
+                             test->name, subtest, test->name, subtest, name, (int)(dir - file + 1), file, src, n, time - last_time );
+                    if (patterns[i].error == -1) output( junit, "<system-out>%s</system-out><skipped/>", message );
+                    else if (patterns[i].error == 1) output( junit, "<system-out>%s</system-out><failure/>", message );
+                    output( junit, "</testcase>\n" );
+
+                    if (patterns[i].error == 1) failures++;
+                    last_time = time;
+                    break;
+                }
+            }
+            free( name );
+            free( message );
+        }
+
+        if (total > fail_total + skip_total)
+        {
+            output( junit, "    <testcase classname=\"%s:%s\" name=\"%d succeeding tests\" file=\"%s\" assertions=\"%d\" time=\"%f\"/>\n",
+                     test->name, subtest, total - fail_total - skip_total, file, total - fail_total - skip_total, ticks / 1000.0 - last_time );
+        }
+
+        if (status == WAIT_TIMEOUT)
+        {
+            output( junit, "    <testcase classname=\"%s:%s\" name=\"%s:%s timeout\" file=\"%s\" assertions=\"%d\" time=\"%f\">",
+                     test->name, subtest, test->name, subtest, file, total, ticks / 1000.0 );
+            output( junit, "<system-out>Test timeout after %f seconds</system-out><failure/>", ticks / 1000.0 );
+            output( junit, "</testcase>\n" );
+        }
+        else if (status != failures)
+        {
+            output( junit, "    <testcase classname=\"%s:%s\" name=\"%s:%s status %d\" file=\"%s\" assertions=\"%d\" time=\"%f\">",
+                     test->name, subtest, test->name, subtest, status, file, total, ticks / 1000.0 );
+            output( junit, "<system-out>Test exited with status %d</system-out><failure/>", status );
+            output( junit, "</testcase>\n" );
+        }
+        if (size > MAX_OUTPUT_SIZE)
+        {
+            output( junit, "    <testcase classname=\"%s:%s\" name=\"%s:%s output overflow\" file=\"%s\" assertions=\"%d\" time=\"%f\">",
+                     test->name, subtest, test->name, subtest, file, total, ticks / 1000.0 );
+            output( junit, "<system-out>Test prints too much data (%lukB > %ukB)</system-out><failure/>",
+                    size / 1024, MAX_OUTPUT_SIZE / 1024 );
+            output( junit, "</testcase>\n" );
+        }
+
+        output( junit, "  </testsuite>\n" );
+        free( filtered_data );
+    }
+}
+
+static void report_test_skip( struct wine_test *test, const char *subtest, const char *file )
+{
+    report( R_STEP, "Skipping: %s:%s", test->name, subtest );
+    xprintf( "%s:%s skipped %s\n", test->name, subtest, file );
 }
 
 static void
@@ -800,22 +1046,30 @@ run_test (struct wine_test* test, const char* subtest, HANDLE out_file, const ch
 
     if (test_filtered_out( test->name, subtest ))
     {
-        report (R_STEP, "Skipping: %s:%s", test->name, subtest);
-        xprintf ("%s:%s skipped %s\n", test->name, subtest, file);
+        report_test_skip( test, subtest, file );
         nr_of_skips++;
     }
     else
     {
+        char *data, tmpname[MAX_PATH];
+        HANDLE tmpfile = create_temp_file( tmpname );
         int status;
-        DWORD pid, start = GetTickCount();
-        char *cmd = strmake (NULL, "%s %s", test->exename, subtest);
-        report (R_STEP, "Running: %s:%s", test->name, subtest);
-        xprintf ("%s:%s start %s\n", test->name, subtest, file);
-        status = run_ex (cmd, out_file, tempdir, 120000, FALSE, &pid);
-        if (status == -2) status = -GetLastError();
-        heap_free (cmd);
-        xprintf ("%s:%s:%04x done (%d) in %ds\n", test->name, subtest, pid, status, (GetTickCount()-start)/1000);
-        if (status) failures++;
+        DWORD pid, size, start = GetTickCount();
+        char *cmd = strmake("%s %s", test->exename, subtest);
+
+        report_test_start( test, subtest, file );
+        /* Flush to disk so we know which test caused Windows to crash if it does */
+        FlushFileBuffers(out_file);
+
+        status = run_ex( cmd, tmpfile, tempdir, 120000, FALSE, &pid );
+        if (status == -2 && GetLastError()) status = -GetLastError();
+        free(cmd);
+
+        data = flush_temp_file( tmpname, tmpfile, &size );
+        report_test_done( test, subtest, file, pid, GetTickCount() - start, out_file, status, data, size );
+        free( data );
+
+        if (status || size > MAX_OUTPUT_SIZE) failures++;
     }
     if (failures) report (R_STATUS, "Running tests - %u failures", failures);
 }
@@ -880,7 +1134,7 @@ static HMODULE load_com_dll(const char *name, char **path, char *filename)
                 strcpy( filename, dllname );
                 p = strrchr(dllname, '\\');
                 if (p) *p = 0;
-                *path = heap_strdup( dllname );
+                *path = xstrdup( dllname );
             }
         }
         RegCloseKey(hkey);
@@ -896,7 +1150,7 @@ static void get_dll_path(HMODULE dll, char **path, char *filename)
     GetModuleFileNameA(dll, dllpath, MAX_PATH);
     strcpy(filename, dllpath);
     *strrchr(dllpath, '\\') = '\0';
-    *path = heap_strdup( dllpath );
+    *path = xstrdup( dllpath );
 }
 
 static BOOL CALLBACK
@@ -1004,7 +1258,7 @@ extract_test_proc (HMODULE hModule, LPCSTR lpszType, LPSTR lpszName, LONG_PTR lP
             xprintf ("    %s=dll is missing the requested side-by-side version\n", dllname);
             break;
         default:
-            xprintf ("    %s=load error %u\n", dllname, err);
+            xprintf ("    %s=load error %lu\n", dllname, err);
             break;
         }
     }
@@ -1023,7 +1277,6 @@ run_tests (char *logname, char *outdir)
     int i;
     char *strres, *eol, *nextline;
     DWORD strsize;
-    SECURITY_ATTRIBUTES sa;
     char tmppath[MAX_PATH], tempdir[MAX_PATH+4];
     BOOL newdir;
     DWORD needed;
@@ -1031,7 +1284,7 @@ run_tests (char *logname, char *outdir)
 
     /* Get the current PATH only once */
     needed = GetEnvironmentVariableA("PATH", NULL, 0);
-    curpath = heap_alloc(needed);
+    curpath = xalloc(needed);
     GetEnvironmentVariableA("PATH", curpath, needed);
 
     SetErrorMode (SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -1039,31 +1292,19 @@ run_tests (char *logname, char *outdir)
     if (!GetTempPathA( MAX_PATH, tmppath ))
         report (R_FATAL, "Can't name temporary dir (check %%TEMP%%).");
 
-    if (!logname) {
+    if (logname)
+    {
+        if (!strcmp(logname, "-")) logfile = GetStdHandle( STD_OUTPUT_HANDLE );
+        else logfile = create_output_file( logname );
+    }
+    else
+    {
         static char tmpname[MAX_PATH];
-        if (!GetTempFileNameA( tmppath, "res", 0, tmpname ))
-            report (R_FATAL, "Can't name logfile.");
+        logfile = create_temp_file( tmpname );
         logname = tmpname;
     }
-    report (R_OUT, logname);
+    report (R_OUT, "%s", logname);
 
-    /* make handle inheritable */
-    sa.nLength = sizeof(sa);
-    sa.lpSecurityDescriptor = NULL;
-    sa.bInheritHandle = TRUE;
-
-    logfile = strcmp(logname, "-") == 0 ? GetStdHandle( STD_OUTPUT_HANDLE ) :
-              CreateFileA( logname, GENERIC_READ|GENERIC_WRITE,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           &sa, CREATE_ALWAYS, 0, NULL );
-
-    if ((logfile == INVALID_HANDLE_VALUE) &&
-        (GetLastError() == ERROR_INVALID_PARAMETER)) {
-        /* FILE_SHARE_DELETE not supported on win9x */
-        logfile = CreateFileA( logname, GENERIC_READ|GENERIC_WRITE,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           &sa, CREATE_ALWAYS, 0, NULL );
-    }
     if (logfile == INVALID_HANDLE_VALUE)
         report (R_FATAL, "Could not open logfile: %u", GetLastError());
 
@@ -1088,8 +1329,13 @@ run_tests (char *logname, char *outdir)
     if (!newdir && (!outdir || GetLastError() != ERROR_ALREADY_EXISTS))
         report (R_FATAL, "Could not create directory %s (%d)", tempdir, GetLastError());
 
-    report (R_DIR, tempdir);
+    report (R_DIR, "%s", tempdir);
 
+    if (junit)
+    {
+        output( junit, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" );
+        output( junit, "<testsuites>\n" );
+    }
     xprintf ("Version 4\n");
     xprintf ("Tests from build %s\n", build_id[0] ? build_id : "-" );
     xprintf ("Archive: -\n");  /* no longer used */
@@ -1106,7 +1352,7 @@ run_tests (char *logname, char *outdir)
             nextline = strsize?eol+1:NULL;
             if (eol > strres && *(eol-1) == '\r') eol--;
         }
-        xprintf ("    %.*s\n", eol-strres, strres);
+        xprintf ("    %.*s\n", (int)(eol-strres), strres);
         strres = nextline;
     }
     xprintf ("Operating system version:\n");
@@ -1118,7 +1364,7 @@ run_tests (char *logname, char *outdir)
     if (!EnumResourceNamesA (NULL, "TESTRES", EnumTestFileProc, (LPARAM)&nr_of_files))
         report (R_FATAL, "Can't enumerate test files: %d",
                 GetLastError ());
-    wine_tests = heap_alloc (nr_of_files * sizeof wine_tests[0]);
+    wine_tests = xalloc(nr_of_files * sizeof wine_tests[0]);
 
     /* Do this only once during extraction (and version checking) */
     hmscoree = LoadLibraryA("mscoree.dll");
@@ -1175,14 +1421,19 @@ run_tests (char *logname, char *outdir)
         }
     }
     report (R_DELTA, 0, "Running: Done");
+    if (junit)
+    {
+        output( junit, "</testsuites>\n" );
+        CloseHandle( junit );
+    }
 
     report (R_STATUS, "Cleaning up - %u failures", failures);
     if (strcmp(logname, "-") != 0) CloseHandle( logfile );
     logfile = 0;
     if (newdir)
         remove_dir (tempdir);
-    heap_free(wine_tests);
-    heap_free(curpath);
+    free(wine_tests);
+    free(curpath);
 
     return logname;
 }
@@ -1228,7 +1479,7 @@ static void extract_only (const char *target_dir)
     if (!EnumResourceNamesA(NULL, "TESTRES", EnumTestFileProc, (LPARAM)&nr_of_files))
         report (R_FATAL, "Can't enumerate test files: %d", GetLastError ());
 
-    wine_tests = heap_alloc (nr_of_files * sizeof wine_tests[0] );
+    wine_tests = xalloc(nr_of_files * sizeof wine_tests[0] );
 
     report (R_STATUS, "Extracting tests");
     report (R_PROGRESS, 0, nr_of_files);
@@ -1255,6 +1506,7 @@ usage (void)
 " -n        exclude the specified tests\n"
 " -p        shutdown when the tests are done\n"
 " -q        quiet mode, no output at all\n"
+" -J FILE   output junit XML report into FILE\n"
 " -o FILE   put report into FILE, do not submit\n"
 " -s FILE   submit FILE, do not run tests\n"
 " -S URL    URL to submit the results to\n"
@@ -1266,12 +1518,13 @@ usage (void)
 int __cdecl main( int argc, char *argv[] )
 {
     BOOL (WINAPI *pIsWow64Process)(HANDLE hProcess, PBOOL Wow64Process);
-    char *logname = NULL, *outdir = NULL;
+    char *logname = NULL, *outdir = NULL, *path = NULL;
     const char *extract = NULL;
-    const char *cp, *submit = NULL, *submiturl = NULL;
+    const char *cp, *submit = NULL, *submiturl = NULL, *job_name;
     int reset_env = 1;
     int poweroff = 0;
     int interactive = 1;
+    int prev_crash_dialog = 0;
     int i;
 
     InitCommonControls();
@@ -1280,6 +1533,12 @@ int __cdecl main( int argc, char *argv[] )
 
     pIsWow64Process = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"),"IsWow64Process");
     if (!pIsWow64Process || !pIsWow64Process( GetCurrentProcess(), &is_wow64 )) is_wow64 = FALSE;
+
+    if ((job_name = getenv( "CI_JOB_NAME" )))
+    {
+        tag = strmake( "gitlab-%s", job_name );
+        url = getenv( "CI_JOB_URL" );
+    }
 
     for (i = 1; i < argc && argv[i]; i++)
     {
@@ -1292,12 +1551,7 @@ int __cdecl main( int argc, char *argv[] )
             exit (0);
         }
         else if ((argv[i][0] != '-' && argv[i][0] != '/') || argv[i][2]) {
-            if (nb_filters == ARRAY_SIZE(filters))
-            {
-                report (R_ERROR, "Too many test filters specified");
-                exit (2);
-            }
-            filters[nb_filters++] = argv[i];
+            add_filter( argv[i] );
         }
         else switch (argv[i][1]) {
         case 'c':
@@ -1318,6 +1572,14 @@ int __cdecl main( int argc, char *argv[] )
                 exit( 2 );
             }
             break;
+        case 'J':
+            if (!(path = argv[++i]))
+            {
+                usage();
+                exit( 2 );
+            }
+            junit = create_output_file( path );
+            break;
         case 'm':
             if (!(email = argv[++i]))
             {
@@ -1334,6 +1596,7 @@ int __cdecl main( int argc, char *argv[] )
         case 'q':
             report (R_QUIET);
             interactive = 0;
+            quiet_mode++;
             break;
         case 's':
             if (!(submit = argv[++i]))
@@ -1365,12 +1628,6 @@ int __cdecl main( int argc, char *argv[] )
             if (strlen (tag) > MAXTAGLEN)
                 report (R_FATAL, "tag is too long (maximum %d characters)",
                         MAXTAGLEN);
-            cp = findbadtagchar (tag);
-            if (cp) {
-                report (R_ERROR, "invalid char in tag: %c", *cp);
-                usage ();
-                exit (2);
-            }
             break;
         case 'u':
             if (!(url = argv[++i]))
@@ -1421,6 +1678,8 @@ int __cdecl main( int argc, char *argv[] )
 
             if (!check_display_driver())
                 report (R_FATAL, "Unable to create a window, the display driver is not working.");
+
+            if (!interactive) prev_crash_dialog = disable_crash_dialog();
         }
 
         SetConsoleCtrlHandler(ctrl_handler, TRUE);
@@ -1432,11 +1691,22 @@ int __cdecl main( int argc, char *argv[] )
             SetEnvironmentVariableA( "WINETEST_INTERACTIVE", "0" );
             SetEnvironmentVariableA( "WINETEST_REPORT_SUCCESS", "0" );
         }
+        if (junit)
+        {
+            SetEnvironmentVariableA( "WINETEST_TIME", "1" );
+        }
 
         if (nb_filters && !exclude_tests)
         {
             run_tests( logname, outdir );
-            exit(0);
+            exit( failures ? 3 : 0 );
+        }
+
+        if (tag && (cp = findbadtagchar(tag)))
+        {
+            report (R_ERROR, "invalid char in tag: %c", *cp);
+            usage ();
+            exit (2);
         }
 
         while (!tag) {
@@ -1449,8 +1719,11 @@ int __cdecl main( int argc, char *argv[] )
 
         while (!email) {
             if (!interactive)
+            {
+                if (url) break;
                 report (R_FATAL, "Please specify an email address (-m option) to enable developers\n"
                         "    to contact you about your report if necessary.");
+            }
             if (guiAskEmail () == IDABORT) exit (1);
         }
 
@@ -1472,10 +1745,19 @@ int __cdecl main( int argc, char *argv[] )
             if (build_id[0] && nr_of_skips <= SKIP_LIMIT && failures <= FAILURES_LIMIT &&
                 !nr_native_dlls && !is_win9x &&
                 report (R_ASK, MB_YESNO, "Do you want to submit the test results?") == IDYES)
+            {
                 if (!send_file (submiturl, logname) && !DeleteFileA(logname))
                     report (R_WARNING, "Can't remove logfile: %u", GetLastError());
-        } else run_tests (logname, outdir);
-        report (R_STATUS, "Finished - %u failures", failures);
+                else
+                    failures = 0;  /* return success */
+            }
+        }
+        else
+        {
+            run_tests (logname, outdir);
+            report (R_STATUS, "Finished - %u failures", failures);
+        }
+        if (prev_crash_dialog) restore_crash_dialog( prev_crash_dialog );
     }
     if (poweroff)
     {
@@ -1493,5 +1775,5 @@ int __cdecl main( int argc, char *argv[] )
         }
         ExitWindowsEx(EWX_SHUTDOWN | EWX_POWEROFF | EWX_FORCEIFHUNG, SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER);
     }
-    exit (0);
+    exit( failures ? 3 : 0 );
 }

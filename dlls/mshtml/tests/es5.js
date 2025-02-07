@@ -16,18 +16,58 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+var E_INVALIDARG = 0x80070057;
 var JS_E_PROP_DESC_MISMATCH = 0x800a01bd;
+var JS_E_INVALID_ACTION = 0x800a01bd;
+var JS_E_NUMBER_EXPECTED = 0x800a1389;
+var JS_E_FUNCTION_EXPECTED = 0x800a138a;
+var JS_E_DATE_EXPECTED = 0x800a138e;
+var JS_E_OBJECT_EXPECTED = 0x800a138f;
+var JS_E_UNDEFINED_VARIABLE = 0x800a1391;
+var JS_E_BOOLEAN_EXPECTED = 0x800a1392;
+var JS_E_VBARRAY_EXPECTED = 0x800a1395;
+var JS_E_ENUMERATOR_EXPECTED = 0x800a1397;
+var JS_E_REGEXP_EXPECTED = 0x800a1398;
+var JS_E_UNEXPECTED_QUANTIFIER = 0x800a139a;
+var JS_E_INVALID_LENGTH = 0x800a13a5;
 var JS_E_INVALID_WRITABLE_PROP_DESC = 0x800a13ac;
 var JS_E_NONCONFIGURABLE_REDEFINED = 0x800a13d6;
 var JS_E_NONWRITABLE_MODIFIED = 0x800a13d7;
+var JS_E_NOT_DATAVIEW = 0x800a13df;
+var JS_E_DATAVIEW_NO_ARGUMENT = 0x800a13e0;
+var JS_E_DATAVIEW_INVALID_ACCESS = 0x800a13e1;
+var JS_E_DATAVIEW_INVALID_OFFSET = 0x800a13e2;
+var JS_E_WRONG_THIS = 0x800a13fc;
+var JS_E_ARRAYBUFFER_EXPECTED = 0x800a15e4;
 
 var tests = [];
+
+function check_enum(o, name) {
+    var ret = 0;
+    for(var iter in o) {
+        if(iter == name) ret++;
+    }
+    ok(ret < 2, name + " enumerated " + ret + " times");
+    return ret != 0;
+}
+
+sync_test("script vars", function() {
+    function foo() { }
+    foo.prototype.foo = 13;
+    var obj = new foo();
+    obj.Foo = 42;
+    obj.aBc = 1;
+    obj.abC = 2;
+    obj.Bar = 3;
+    document.body.foobar = 42;
+    external.testVars(document.body, obj);
+});
 
 sync_test("date_now", function() {
     var now = Date.now();
     var time = (new Date()).getTime();
 
-    ok(time >= now && time-now < 50, "unexpected Date.now() result " + now + " expected " + time);
+    ok(time >= now && time - now < 500, "unexpected Date.now() result " + now + " expected " + time);
 
     Date.now(1, 2, 3);
 });
@@ -60,6 +100,123 @@ sync_test("toISOString", function() {
     expect_exception(function() { new Date(31494784780800001).toISOString(); });
 });
 
+sync_test("Array toLocaleString", function() {
+    var r = Array.prototype.toLocaleString.length, old = Number.prototype.toLocaleString;
+    var s = external.listSeparator + ' ';
+    ok(r === 0, "length = " + r);
+
+    r = [5];
+    r.toLocaleString = function(a, b, c) { return a + " " + b + " " + c; };
+    Number.prototype.toLocaleString = function() { return "aBc"; };
+
+    r = [new Number(3), r, new Number(12)].toLocaleString("foo", "bar", "baz");
+    ok(r === "aBc"+s+"undefined undefined undefined"+s+"aBc", "toLocaleString returned " + r);
+
+    r = [3].toLocaleString();  /* primitive number value not affected */
+    if(external.isEnglish)
+        ok(r === "3.00", "[3].toLocaleString returned " + r);
+    else
+        ok(r !== "aBc", "[3].toLocaleString returned " + r);
+    Number.prototype.toLocaleString = old;
+
+    r = Object.create(null);
+    r.toString = function() { return "foo"; }
+    try {
+        Array.prototype.toLocaleString.call([r]);
+        ok(false, "expected exception calling it on array with object without toLocaleString");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_FUNCTION_EXPECTED, "called on array with object without toLocaleString threw " + n);
+    }
+
+    r = { length: 2 };
+    r[0] = { toLocaleString: function() { return "foo"; } }
+    r[1] = { toLocaleString: function() { return "bar"; } }
+    r = Array.prototype.toLocaleString.call(r);
+    ok(r === "foo"+s+"bar", "toLocaleString on array-like object returned " + r);
+
+    r = Array.prototype.toLocaleString.call({});
+    ok(r === "", "toLocaleString on {} returned " + r);
+
+    r = Array.prototype.toLocaleString.call("ab");
+    ok(r === "a"+s+"b", "toLocaleString on 'ab' returned " + r);
+
+    try {
+        Array.prototype.toLocaleString.call(undefined);
+        ok(false, "expected exception calling it on undefined");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "called on undefined threw " + n);
+    }
+    try {
+        Array.prototype.toLocaleString.call(null);
+        ok(false, "expected exception calling it on null");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "called on null threw " + n);
+    }
+    try {
+        Array.prototype.toLocaleString.call(external.nullDisp);
+        ok(false, "expected exception calling it on nullDisp");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "called on nullDisp threw " + n);
+    }
+});
+
+sync_test("Number toLocaleString", function() {
+    var r = Number.prototype.toLocaleString.length;
+    ok(r === 0, "length = " + r);
+    var tests = [
+        [ 0.0,          "0" ],
+        [ 1234.5,       "1,234.5" ],
+        [ -1337.7331,   "-1,337.733" ],
+        [ -0.0123,      "-0.012" ],
+        [-0.0198,       "-0.02" ],
+        [ 0.004,        "0.004" ],
+        [ 99.004,       "99.004" ],
+        [ 99.0004,      "99" ],
+        [ 65536.5,      "65,536.5" ],
+        [ NaN,          "NaN" ]
+    ];
+
+    if(external.isEnglish) {
+        /* Some recent Win8.1 updates have old jscript behavior */
+        if(Number.prototype.toLocaleString.call(0.0) === "0.00")
+            win_skip("skipping tests due to old behavior");
+        else
+            for(var i = 0; i < tests.length; i++) {
+                r = Number.prototype.toLocaleString.call(tests[i][0]);
+                ok(r === tests[i][1], "[" + i + "] got " + r);
+            }
+    }
+
+    try {
+        Number.prototype.toLocaleString.call("50");
+        ok(false, "expected exception calling it on string");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_WRONG_THIS || broken(n === JS_E_NUMBER_EXPECTED) /* newer Win8.1 */,
+           "called on string threw " + n);
+    }
+    try {
+        Number.prototype.toLocaleString.call(undefined);
+        ok(false, "expected exception calling it on undefined");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_WRONG_THIS || broken(n === JS_E_NUMBER_EXPECTED) /* newer Win8.1 */,
+           "called on undefined threw " + n);
+    }
+    try {
+        Number.prototype.toLocaleString.call(external.nullDisp);
+        ok(false, "expected exception calling it on nullDisp");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_WRONG_THIS || broken(n === JS_E_NUMBER_EXPECTED) /* newer Win8.1 */,
+           "called on nullDisp threw " + n);
+    }
+});
+
 sync_test("indexOf", function() {
     function expect(array, args, exr) {
         var r = Array.prototype.indexOf.apply(array, args);
@@ -84,6 +241,102 @@ sync_test("indexOf", function() {
     expect({"4": 4, length: 3}, [4], -1);
     expect({"test": true}, [true], -1);
     expect([1,2,3], [2, 1.9], 1);
+});
+
+sync_test("lastIndexOf", function() {
+    function expect(array, args, exr) {
+        var r = Array.prototype.lastIndexOf.apply(array, args);
+        ok(r == exr, "lastIndexOf returned " + r + " expected " + exr);
+    }
+
+    ok(Array.prototype.lastIndexOf.length == 1, "lastIndexOf.length = " + Array.prototype.lastIndexOf.length);
+
+    expect([1,2,3], [2], 1);
+    expect([1,undefined,3], [undefined], 1);
+    expect([1,undefined,3], [], 1);
+    expect([1,,3], [undefined], -1);
+    expect([1,undefined,undefined], [undefined], 2);
+    expect([1,2,3,2,5,6], [2, 2], 1);
+    expect([1,2,3,2,5,6], [2], 3);
+    expect([1,2,3,2,5,6], [2, -3], 3);
+    expect([1,2,3,2,5,6], [2, -4], 1);
+    expect([1,2,3,2,5,6], [1, -100], -1);
+    expect([1,2,3,2,5,6], [2, 100], 3);
+    expect("abcba", ["b"], 3);
+    expect(true, [true], -1);
+    expect({"4": 4, length: 5}, [4], 4);
+    expect({"4": 4, length: 5}, [undefined], -1);
+    expect({"4": 4, length: 3}, [4], -1);
+    expect({"test": true}, [true], -1);
+    expect([1,2,3], [2, 1.9], 1);
+    expect([1,2,3], [2, 0.9], -1);
+});
+
+sync_test("filter", function() {
+    ok(Array.prototype.filter.length === 1, "filter.length = " + Array.prototype.filter.length);
+
+    var arr = ["a","foobar",true,"b",42,0,Math,null,undefined,[1,2,3,"4"]];
+    delete arr[1];
+
+    function test(expect, fn, expect_this) {
+        var mismatch = false, r = function(v, i, a) {
+            ok(a === arr, "unexpected array " + arr);
+            ok(v === arr[i], "value = " + v + ", expected " + arr[i]);
+            ok(this === (expect_this ? expect_this : window), "this = " + this + ", expected " + expect_this);
+            return fn(v);
+        };
+        r = expect_this ? Array.prototype.filter.call(arr, r, expect_this) : Array.prototype.filter.call(arr, r);
+        ok(r.length === expect.length, "filtered array length = " + r.length + ", expected " + expect.length);
+        for(var i = 0; i < r.length; i++)
+            if(r[i] !== expect[i])
+                mismatch = true;
+        ok(!mismatch, "filtered array = " + r + ", expected " + expect);
+    }
+
+    test([], function(v) { return false; });
+    test(["a",true,"b",42,0,Math,null,undefined,arr[9]], function(v) { if(arr[1] === "foobar") delete arr[1]; return true; });
+    test(["a","b"], function(v) { if(v === "b") delete arr[0]; return typeof v === "string"; });
+    test(["b"], function(v) { if(arr[arr.length - 1] !== "c") arr.push("c"); return typeof v === "string"; });
+    test([true,"b",42,Math,arr[9],"c"], function(v) { return v; }, Object);
+
+    [0].filter(function() { ok(this.valueOf() === "wine", "this.valueOf() = " + this.valueOf()); return true; }, "wine");
+});
+
+sync_test("every & some", function() {
+    ok(Array.prototype.every.length === 1, "every.length = " + Array.prototype.every.length);
+    ok(Array.prototype.some.length === 1, "some.length = " + Array.prototype.some.length);
+    var arr = ["foobar"];
+
+    function test(expect_every, expect_some, fn, expect_this) {
+        var cb = function(v, i, a) {
+            ok(a === arr, "unexpected array " + arr);
+            ok(v === arr[i], "value = " + v + ", expected " + arr[i]);
+            ok(this === (expect_this ? expect_this : window), "this = " + this + ", expected " + expect_this);
+            return fn(v);
+        };
+        r = expect_this ? Array.prototype.every.call(arr, cb, expect_this) : Array.prototype.every.call(arr, cb);
+        ok(r === expect_every, "'every' = " + r);
+        r = expect_this ? Array.prototype.some.call(arr, cb, expect_this) : Array.prototype.some.call(arr, cb);
+        ok(r === expect_some, "'some' = " + r);
+    }
+
+    delete arr[0];
+    test(true, false, function(v) { return false; });
+    test(true, false, function(v) { return true; });
+
+    arr = [1,"2",3];
+    test(true, true, function(v) { return true; });
+    test(true, true, function(v) { if(arr[1] === "2") delete arr[1]; return typeof v === "number"; });
+    test(true, true, function(v) { if(arr[arr.length - 1] !== "a") arr.push("a"); return typeof v === "number"; }, Object);
+    test(false, true, function(v) { return typeof v === "number"; }, Object);
+
+    arr = [0,null,undefined,false];
+    test(false, false, function(v) { return v; });
+    arr.push(1);
+    test(false, true, function(v) { return v; });
+
+    [0].every(function() { ok(this.valueOf() === 42, "this.valueOf() = " + this.valueOf()); return true; }, 42);
+    [0].some(function() { ok(this.valueOf() === 137, "this.valueOf() = " + this.valueOf()); return false; }, 137);
 });
 
 sync_test("forEach", function() {
@@ -117,6 +370,8 @@ sync_test("forEach", function() {
         ok(array === a, "array != a");
         ok(this === o, "this != o");
     }, o);
+
+    a.forEach(function() { ok(this.valueOf() === "foobar", "this.valueOf() = " + this.valueOf()); }, "foobar");
 });
 
 sync_test("isArray", function() {
@@ -133,6 +388,13 @@ sync_test("isArray", function() {
     function C() {}
     C.prototype = Array.prototype;
     expect_array(new C(), false);
+});
+
+sync_test("array_splice", function() {
+    var arr = [1,2,3,4,5]
+    var tmp = arr.splice(2);
+    ok(arr.toString() === "1,2", "arr = " + arr);
+    ok(tmp.toString() === "3,4,5", "tmp = " + tmp);
 });
 
 sync_test("array_map", function() {
@@ -182,6 +444,16 @@ sync_test("array_map", function() {
     [1,2].map(function() {
         ok(this === window, "this != window");
     }, undefined);
+    [1,2].map(function() {
+        ok(this.valueOf() === 137, "this.valueOf() = " + this.valueOf());
+    }, 137);
+
+    r = [1,,2,].map(function(x) { return "" + x; });
+    ok(r.length === 3, "[1,,2,].map length = " + r.length);
+    ok(r[0] === "1", "[1,,2,].map[0] = " + r[0]);
+    ok(r[2] === "2", "[1,,2,].map[2] = " + r[2]);
+    ok(!("1" in r), "[1,,2,].map[1] exists");
+    ok(!("3" in r), "[1,,2,].map[3] exists");
 });
 
 sync_test("array_sort", function() {
@@ -202,7 +474,18 @@ sync_test("array_sort", function() {
 });
 
 sync_test("identifier_keywords", function() {
+    function get(let, set) { { get instanceof (Object); } return let + set; }
+    { get /* asdf */: 10 }
+    let /* block label */ : {
+        break let;
+        ok(false, "did not break out of 'let' labelled block statement");
+    }
+    set: var let = get(1, 2);
+    var set = 1234;
     var o = {
+        get: get,
+        set: set,
+        let /* comment */  :  let,
         if: 1,
         default: 2,
         function: 3,
@@ -215,8 +498,8 @@ sync_test("identifier_keywords", function() {
         else: true,
         finally: true,
         for: true,
-        in: true,
-        instanceof: true,
+        set in(x) { },
+        get instanceof() { return 3; },
         new: true,
         return: true,
         switch: true,
@@ -237,6 +520,21 @@ sync_test("identifier_keywords", function() {
     ok(o.if === 1, "o.if = " + o.if);
     ok(ro().default === 2, "ro().default = " + ro().default);
     ok(o.false === true, "o.false = " + o.false);
+    ok(o.get === get, "o.get = " + o.get);
+    ok(o.set === set, "o.set = " + o.set);
+    ok(o.let === let, "o.let = " + o.let);
+    ok(o.instanceof === 3, "o.instanceof = " + o.instanceof);
+    ok(let === 3, "let = " + let);
+    ok(set === 1234, "set = " + set);
+
+    var tmp = false;
+    try {
+        eval('function var() { }');
+    }
+    catch(set) {
+        tmp = true;
+    }
+    ok(tmp === true, "Expected exception for 'function var() { }'");
 });
 
 function test_own_data_prop_desc(obj, prop, expected_writable, expected_enumerable,
@@ -284,15 +582,36 @@ sync_test("getOwnPropertyDescriptor", function() {
     (function() {
         test_own_data_prop_desc(arguments, "length", true, false, true);
         test_own_data_prop_desc(arguments, "callee", true, false, true);
+        ok(!("caller" in arguments), "caller in arguments");
     })();
 
     test_own_data_prop_desc(String, "prototype", false, false, false);
     test_own_data_prop_desc(function(){}, "prototype", true, false, false);
+    test_own_data_prop_desc(function(){}, "caller", false, false, false);
+    test_own_data_prop_desc(function(){}, "arguments", false, false, false);
     test_own_data_prop_desc(Function, "prototype", false, false, false);
+    test_own_data_prop_desc(Function.prototype, "caller", false, false, false);
+    test_own_data_prop_desc(Function.prototype, "arguments", false, false, false);
     test_own_data_prop_desc(String.prototype, "constructor", true, false, true);
+
+    try {
+        Object.getOwnPropertyDescriptor(null, "prototype");
+        ok(false, "expected exception with null");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "with null context threw " + n);
+    }
+    try {
+        Object.getOwnPropertyDescriptor(external.nullDisp, "prototype");
+        ok(false, "expected exception calling getOwnPropertyDescriptor(nullDisp)");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "getOwnPropertyDescriptor(nullDisp) threw " + n);
+    }
 });
 
 sync_test("defineProperty", function() {
+    var nullDisp = external.nullDisp;
     function test_accessor_prop_desc(obj, prop, orig_desc) {
         var expected_enumerable = "enumerable" in orig_desc && !!orig_desc.enumerable;
         var expected_configurable = "configurable" in orig_desc && !!orig_desc.configurable;
@@ -518,9 +837,20 @@ sync_test("defineProperty", function() {
     obj.no_setter = false;
     ok(obj.no_setter === true, "no_setter = " + obj.no_setter);
 
+    ok((delete obj.no_setter) === true, "delete no_setter returned false");
+    ok(!("no_setter" in obj), "no_setter still in obj after delete");
+
+    Object.defineProperty(child.prototype, "no_setter", desc);
+    test_accessor_prop_desc(child.prototype, "no_setter", desc);
+    ok(!obj.hasOwnProperty("no_setter"), "no_setter is a property of obj");
+    obj.no_setter = false;
+    ok(obj.no_setter === true, "no_setter = " + obj.no_setter);
+    ok(!obj.hasOwnProperty("no_setter"), "no_setter is a property of obj");
+
     /* call prop with getter */
     desc = {
         get: function() {
+            ok(this === obj, "this != obj");
             return function(x) {
                 ok(x === 100, "x = " + x);
                 return 10;
@@ -530,6 +860,25 @@ sync_test("defineProperty", function() {
     Object.defineProperty(obj, "funcprop", desc);
     test_accessor_prop_desc(obj, "funcprop", desc);
     ok(obj.funcprop(100) === 10, "obj.funcprop() = " + obj.funcprop(100));
+
+    Object.defineProperty(child.prototype, "funcprop_prot", desc);
+    test_accessor_prop_desc(child.prototype, "funcprop_prot", desc);
+    ok(obj.funcprop_prot(100) === 10, "obj.funcprop_prot() = " + obj.funcprop_prot(100));
+
+    expect_exception(function() {
+        Object.defineProperty(null, "funcprop", desc);
+    }, JS_E_OBJECT_EXPECTED);
+    expect_exception(function() {
+        Object.defineProperty(nullDisp, "funcprop", desc);
+    }, JS_E_OBJECT_EXPECTED);
+    expect_exception(function() {
+        Object.defineProperty(obj, "funcprop", nullDisp);
+    }, JS_E_OBJECT_EXPECTED);
+    expect_exception(function() {
+        var o = {};
+        Object.defineProperty(o, "f", { get: function() { return 0; } });
+        o.f();
+    }, JS_E_FUNCTION_EXPECTED);
 });
 
 sync_test("defineProperties", function() {
@@ -636,12 +985,38 @@ sync_test("property_definitions", function() {
 });
 
 sync_test("string_idx", function() {
-    var s = "foobar";
+    var i, s = "foobar";
     ok(s[0] === "f", "s[0] = " + s[0]);
     ok(s[5] === "r", "s[5] = " + s[5]);
     ok(s[6] === undefined, "s[6] = " + s[6]);
     ok((delete s[0]) === false, "delete s[0] returned true");
     ok((delete s[6]) === true, "delete s[6] returned false");
+    s[6] = "X";
+    ok(s[6] === undefined, "s[6] = " + s[6]);
+
+    s = new String(s);
+    test_own_data_prop_desc(s, "0", false, true, false);
+    test_own_data_prop_desc(s, "1", false, true, false);
+    ok(!s.hasOwnProperty("6"), "'6' is a property");
+
+    s[7] = "X";
+    ok(s[7] === "X", "s[7] = " + s[7]);
+    // s.hasOwnProperty("7") returns false on Win8 likely due to a bug in its js engine
+
+    Object.defineProperty(s, "8", {writable: false, enumerable: true, configurable: true, value: "Y"});
+    ok(s[8] === "Y", "s[8] = " + s[8]);
+    ok(s.hasOwnProperty("8"), "'8' not a property");
+
+    String.prototype[9] = "Z";
+    ok(s[9] === "Z", "s[9] = " + s[9]);
+    delete String.prototype[9];
+
+    i = 0;
+    for(var idx in s) {
+        ok(s[idx] === "foobar XY"[idx], "enum s[" + idx + "] = " + s[idx]);
+        i++;
+    }
+    ok(i === 8, "enum did " + i + " iterations");
 });
 
 sync_test("string_trim", function() {
@@ -785,6 +1160,15 @@ sync_test("getPrototypeOf", function() {
     obj = Object.create(null);
     ok(!("toString" in obj), "toString is in obj");
     ok(Object.getPrototypeOf(obj) === null, "Object.getPrototypeOf(obj) = " + Object.getPrototypeOf(obj));
+
+    ok(Object.getPrototypeOf(external) === null, "Object.getPrototypeOf(non-JS obj) = " + Object.getPrototypeOf(external));
+    try {
+        Object.getOwnPropertyDescriptor(external.nullDisp);
+        ok(false, "expected exception calling getOwnPropertyDescriptor(nullDisp)");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "getOwnPropertyDescriptor(nullDisp) threw " + n);
+    }
 });
 
 sync_test("toString", function() {
@@ -794,16 +1178,12 @@ sync_test("toString", function() {
     todo_wine.
     ok(tmp === "[object Arguments]", "toString.call(arguments) = " + tmp);
     tmp = Object.prototype.toString.call(this);
-    todo_wine.
     ok(tmp === "[object Window]", "toString.call(null) = " + tmp);
     tmp = Object.prototype.toString.call(null);
-    todo_wine.
     ok(tmp === "[object Null]", "toString.call(null) = " + tmp);
     tmp = Object.prototype.toString.call(undefined);
-    todo_wine.
     ok(tmp === "[object Undefined]", "toString.call(undefined) = " + tmp);
     tmp = Object.prototype.toString.call();
-    todo_wine.
     ok(tmp === "[object Undefined]", "toString.call() = " + tmp);
 
     obj = Object.create(null);
@@ -812,6 +1192,9 @@ sync_test("toString", function() {
     obj = Object.create(Number.prototype);
     tmp = Object.prototype.toString.call(obj);
     ok(tmp === "[object Object]", "toString.call(Object.create(Number.prototype)) = " + tmp);
+
+    tmp = (new Number(303)).toString(undefined);
+    ok(tmp === "303", "Number 303 toString(undefined) = " + tmp);
 });
 
 sync_test("bind", function() {
@@ -826,6 +1209,21 @@ sync_test("bind", function() {
     ok(f.length === 0, "f.length = " + f.length);
     r = f.call(o2);
     ok(r === 1, "r = " + r);
+
+    try {
+        f.arguments;
+        ok(false, "expected exception getting f.arguments");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_INVALID_ACTION, "f.arguments threw " + n);
+    }
+    try {
+        f.caller;
+        ok(false, "expected exception getting f.caller");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_INVALID_ACTION, "f.caller threw " + n);
+    }
 
     f = (function() {
         ok(this === o, "this != o");
@@ -890,6 +1288,23 @@ sync_test("bind", function() {
     ok(t != a, "t == a");
 
     ok(Function.prototype.bind.length === 1, "Function.prototype.bind.length = " + Function.prototype.bind.length);
+
+    ((function() { ok(this === window, "bind() this = " + this); }).bind())();
+    ((function() { ok(this === window, "bind(undefined) = " + this); }).bind(undefined))();
+    ((function() { ok(this === window, "bind(nullDisp) = " + this); }).bind(external.nullDisp))();
+    ((function() {
+        ok(typeof(this) === "object", "bind(42) typeof(this) = " + typeof(this));
+        ok(this.valueOf() === 42, "bind(42) this = " + this);
+    }).bind(42))();
+
+    r = (Object.prototype.toString.bind())();
+    ok(r === "[object Undefined]", "toString.bind() returned " + r);
+    r = (Object.prototype.toString.bind(undefined))();
+    ok(r === "[object Undefined]", "toString.bind(undefined) returned " + r);
+    r = (Object.prototype.toString.bind(null))();
+    ok(r === "[object Null]", "toString.bind(null) returned " + r);
+    r = (Object.prototype.toString.bind(external.nullDisp))();
+    ok(r === "[object Null]", "toString.bind(nullDisp) returned " + r);
 });
 
 sync_test("keys", function() {
@@ -913,6 +1328,14 @@ sync_test("keys", function() {
     ok(keys === "", "keys([]) = " + keys);
 
     ok(Object.keys.length === 1, "Object.keys.length = " + Object.keys.length);
+
+    try {
+        Object.keys(external.nullDisp);
+        ok(false, "expected exception calling keys(nullDisp)");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "keys(nullDisp) threw " + n);
+    }
 });
 
 sync_test("getOwnPropertyNames", function() {
@@ -937,6 +1360,14 @@ sync_test("getOwnPropertyNames", function() {
     ok(names === "length", "names = " + names);
 
     ok(Object.getOwnPropertyNames.length === 1, "Object.getOwnPropertyNames.length = " + Object.getOwnPropertyNames.length);
+
+    try {
+        Object.getOwnPropertyNames(external.nullDisp);
+        ok(false, "expected exception calling getOwnPropertyNames(nullDisp)");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "getOwnPropertyNames(nullDisp) threw " + n);
+    }
 });
 
 sync_test("reduce", function() {
@@ -950,6 +1381,9 @@ sync_test("reduce", function() {
 
     r = [1,2,3].reduce(function(a, value) { return a + value; }, "str");
     ok(r === "str123", "reduce() returned " + r);
+
+    r = [1,2,].reduce(function(a, value) { return a + value; }, "str");
+    ok(r === "str12", "reduce() returned " + r);
 
     array = [1,2,3];
     r = array.reduce(function(a, value, index, src) {
@@ -1048,6 +1482,14 @@ sync_test("preventExtensions", function() {
 
     ok(Object.preventExtensions.length === 1, "Object.preventExtensions.length = " + Object.preventExtensions.length);
     ok(Object.isExtensible.length === 1, "Object.isExtensible.length = " + Object.isExtensible.length);
+
+    try {
+        Object.preventExtensions(external.nullDisp);
+        ok(false, "expected exception calling preventExtensions(nullDisp)");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "preventExtensions(nullDisp) threw " + n);
+    }
 });
 
 sync_test("freeze", function() {
@@ -1100,6 +1542,14 @@ sync_test("freeze", function() {
     }
     ok(o[0] === 1, "o[0] = " + o[0]);
     ok(o.length === 1, "o.length = " + o.length);
+
+    try {
+        Object.freeze(external.nullDisp);
+        ok(false, "expected exception freeze(nullDisp)");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "freeze(nullDisp) threw " + n);
+    }
 });
 
 sync_test("seal", function() {
@@ -1152,9 +1602,18 @@ sync_test("seal", function() {
     }
     ok(o[0] === 1, "o[0] = " + o[0]);
     ok(o.length === 1, "o.length = " + o.length);
+
+    try {
+        Object.seal(external.nullDisp);
+        ok(false, "expected exception calling seal(nullDisp)");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "seal(nullDisp) threw " + n);
+    }
 });
 
 sync_test("isFrozen", function() {
+    var nullDisp = external.nullDisp;
     ok(Object.isFrozen.length === 1, "Object.isFrozen.length = " + Object.isFrozen.length);
     ok(Object.isSealed.length === 1, "Object.isSealed.length = " + Object.isSealed.length);
 
@@ -1220,6 +1679,596 @@ sync_test("isFrozen", function() {
     ok(Object.isFrozen(o) === true, "o is not frozen");
     ok(Object.isSealed(o) === true, "o is not sealed");
     ok(Object.isExtensible(o) === false, "o is extensible");
+
+    try {
+        Object.isFrozen(nullDisp);
+        ok(false, "expected exception calling isFrozen(nullDisp)");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "isFrozen(nullDisp) threw " + n);
+    }
+    try {
+        Object.isSealed(nullDisp);
+        ok(false, "expected exception calling isSealed(nullDisp)");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "isSealed(nullDisp) threw " + n);
+    }
+    try {
+        Object.isExtensible(nullDisp);
+        ok(false, "expected exception calling isExtensible(nullDisp)");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_OBJECT_EXPECTED, "isExtensible(nullDisp) threw " + n);
+    }
+});
+
+sync_test("JSON.parse escapes", function() {
+    var i, valid = [ "b", "t", "n", "f", "r", "u1111", '"', "/" ];
+
+    for(i = 0; i < valid.length; i++) {
+        var a = JSON.parse('"\\' + valid[i] + '"'), b = eval('"\\' + valid[i] + '"');
+        ok(a === b, "JSON.parse with \\" + valid[i] + " returned " + a);
+    }
+
+    var invalid = [ "0", "00", "05", "x20", "i", "'" ];
+
+    for(i = 0; i < invalid.length; i++) {
+        try {
+            JSON.parse('"\\' + invalid[i] + '"');
+            ok(false, "expected exception calling JSON.parse with \\" + invalid[i]);
+        } catch(e) {
+            ok(e.number === 0xa03f6 - 0x80000000, "calling JSON.parse with \\" + invalid[i] + " threw " + e.number);
+        }
+    }
+});
+
+sync_test("RegExp", function() {
+    var r;
+
+    r = /()/.exec("")[1];
+    ok(r === "", "/()/ captured: " + r);
+    r = /()?/.exec("")[1];
+    ok(r === undefined, "/()?/ captured: " + r);
+    r = /()??/.exec("")[1];
+    ok(r === undefined, "/()??/ captured: " + r);
+    r = /()*/.exec("")[1];
+    ok(r === undefined, "/()*/ captured: " + r);
+    r = /()??()/.exec("");
+    ok(r[1] === undefined, "/()??()/ [1] captured: " + r);
+    ok(r[2] === "", "/()??()/ [2] captured: " + r);
+
+    try {
+        r = new RegExp("(?<a>b)", "g");
+        ok(false, "expected exception with /(?<a>b)/ regex");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_UNEXPECTED_QUANTIFIER, "/(?<a>b)/ regex threw " + n);
+    }
+});
+
+sync_test("ArrayBuffers & Views", function() {
+    var i, r, buf, buf2, view, view2, arr;
+
+    var types = [
+        [ "Int8",    1 ],
+        [ "Uint8",   1 ],
+        [ "Int16",   2 ],
+        [ "Uint16",  2 ],
+        [ "Int32",   4 ],
+        [ "Uint32",  4 ],
+        [ "Float32", 4 ],
+        [ "Float64", 8 ]
+    ];
+
+    function test_own_props(obj_name, props) {
+        var obj = eval(obj_name);
+        for(var i = 0; i < props.length; i++)
+            ok(Object.prototype.hasOwnProperty.call(obj, props[i]), props[i] + " not a property of " + obj_name);
+    }
+
+    function test_not_own_props(obj_name, props) {
+        var obj = eval(obj_name);
+        for(var i = 0; i < props.length; i++)
+            ok(!Object.prototype.hasOwnProperty.call(obj, props[i]), props[i] + " is a property of " + obj_name);
+    }
+
+    function test_readonly(obj, prop, val) {
+        var name = Object.getPrototypeOf(obj).constructor.toString();
+        name = name.substring(9, name.indexOf("(", 9)) + ".prototype." + prop;
+        obj[prop] = val + 42;
+        ok(obj[prop] === val, name + " not read-only");
+    }
+
+    test_own_props("ArrayBuffer", [ "isView" ]);
+    test_own_props("ArrayBuffer.prototype", [ "byteLength", "slice" ]);
+    test_own_data_prop_desc(ArrayBuffer.prototype, "byteLength", false, false, false);
+
+    r = Object.prototype.toString.call(new ArrayBuffer());
+    ok(r === "[object ArrayBuffer]", "Object toString(new ArrayBuffer()) = " + r);
+    r = ArrayBuffer.length;
+    ok(r === 1, "ArrayBuffer.length = " + r);
+    r = ArrayBuffer.isView.length;
+    ok(r === 1, "ArrayBuffer.isView.length = " + r);
+    r = ArrayBuffer.prototype.slice.length;
+    ok(r === 2, "ArrayBuffer.prototype.slice.length = " + r);
+
+    try {
+        ArrayBuffer.prototype.slice.call(null);
+        ok(false, "ArrayBuffer: calling slice with null context did not throw exception");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_ARRAYBUFFER_EXPECTED, "ArrayBuffer: calling slice with null context threw " + n);
+    }
+    try {
+        ArrayBuffer.prototype.slice.call({});
+        ok(false, "ArrayBuffer: calling slice with an object context did not throw exception");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_ARRAYBUFFER_EXPECTED, "ArrayBuffer: calling slice with an object context threw " + n);
+    }
+    try {
+        new ArrayBuffer(-1);
+        ok(false, "new ArrayBuffer(-1) did not throw exception");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_INVALID_LENGTH, "new ArrayBuffer(-1) threw " + n);
+    }
+
+    buf = new ArrayBuffer();
+    ok(buf.byteLength === 0, "ArrayBuffer().byteLength = " + buf.byteLength);
+    buf = new ArrayBuffer(13.1);
+    ok(buf.byteLength === 13, "ArrayBuffer(13).byteLength = " + buf.byteLength);
+    buf = ArrayBuffer("10");
+    ok(buf.byteLength === 10, "ArrayBuffer(10).byteLength = " + buf.byteLength);
+    test_readonly(buf, "byteLength", 10);
+    test_own_data_prop_desc(buf, "byteLength", false, false, false);
+
+    test_own_props("DataView.prototype", [
+        "buffer", "byteLength", "byteOffset",
+        "getInt8",  "setInt8",  "getUint8",  "setUint8",
+        "getInt16", "setInt16", "getUint16", "setUint16",
+        "getInt32", "setInt32", "getUint32", "setUint32",
+        "getFloat32", "setFloat32", "getFloat64", "setFloat64"
+    ]);
+
+    r = Object.prototype.toString.call(new DataView(buf));
+    ok(r === "[object Object]", "Object toString(new DataView(buf)) = " + r);
+    r = DataView.length;
+    ok(r === 1, "DataView.length = " + r);
+
+    /* DataView.prototype has actual accessors, but others don't */
+    arr = [ "buffer", "byteLength", "byteOffset" ];
+    for(i = 0; i < arr.length; i++) {
+        var prop = arr[i], desc = Object.getOwnPropertyDescriptor(DataView.prototype, prop);
+        ok(!("value" in desc), "DataView: value is in desc");
+        ok(!("writable" in desc), "DataView: writable is in desc");
+        ok(desc.enumerable === false, "DataView: desc.enumerable = " + desc.enumerable);
+        ok(desc.configurable === true, "DataView: desc.configurable = " + desc.configurable);
+        ok(Object.getPrototypeOf(desc.get) === Function.prototype, "DataView: desc.get not a function: " + desc.get);
+        ok("set" in desc, "DataView: set is not in desc");
+        ok(desc.set === undefined, "DataView: desc.set not undefined: " + desc.set);
+        try {
+            desc.get.call(null);
+            ok(false, "DataView: calling " + prop + " getter with null did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_NOT_DATAVIEW, "DataView: calling " + prop + " getter with null threw " + n);
+        }
+        try {
+            desc.get.call({});
+            ok(false, "DataView: calling " + prop + " getter with an object did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_NOT_DATAVIEW, "DataView: calling " + prop + " getter with an object threw " + n);
+        }
+        try {
+            desc.get.call(DataView);
+            ok(false, "DataView: calling " + prop + " getter with DataView constructor did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_NOT_DATAVIEW, "DataView: calling " + prop + " getter with DataView constructor threw " + n);
+        }
+        try {
+            desc.get.call(new ArrayBuffer());
+            ok(false, "DataView: calling " + prop + " getter with ArrayBuffer did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_NOT_DATAVIEW, "DataView: calling " + prop + " getter with ArrayBuffer threw " + n);
+        }
+        r = desc.get.call(DataView.prototype);
+        if(prop === "buffer")
+            ok(Object.getPrototypeOf(r) === ArrayBuffer.prototype, "DataView: calling " + prop + " getter with DataView.prototype returned " + r);
+        else
+            ok(r === 0, "DataView: calling " + prop + " getter with DataView.prototype returned " + r);
+    }
+
+    try {
+        new DataView();
+        ok(false, "new DataView() did not throw exception");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_DATAVIEW_NO_ARGUMENT, "new DataView() threw " + n);
+    }
+    try {
+        new DataView(ArrayBuffer);
+        ok(false, "new DataView(ArrayBuffer) did not throw exception");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_DATAVIEW_NO_ARGUMENT, "new DataView(ArrayBuffer) threw " + n);
+    }
+    try {
+        new DataView(buf, -1);
+        ok(false, "new DataView(buf, -1) did not throw exception");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_DATAVIEW_INVALID_OFFSET, "new DataView(buf, -1) threw " + n);
+    }
+    try {
+        new DataView(buf, 11);
+        ok(false, "new DataView(buf, 11) did not throw exception");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_DATAVIEW_INVALID_OFFSET, "new DataView(buf, 11) threw " + n);
+    }
+    try {
+        new DataView(buf, 9, 2);
+        ok(false, "new DataView(buf, 9, 2) did not throw exception");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_DATAVIEW_INVALID_OFFSET, "new DataView(buf, 9, 2) threw " + n);
+    }
+
+    view = new DataView(buf, 9, 1);
+    ok(view.buffer === buf,  "DataView(buf, 9, 1).buffer = " + view.buffer);
+    ok(view.byteLength === 1, "DataView(buf, 9, 1).byteLength = " + view.byteLength);
+    ok(view.byteOffset === 9, "DataView(buf, 9, 1).byteOffset = " + view.byteOffset);
+    test_readonly(view, "byteLength", 1);
+    test_readonly(view, "byteOffset", 9);
+    test_not_own_props("view", [ "buffer", "byteLength", "byteOffset" ]);
+
+    view = new DataView(buf, 10);
+    ok(view.buffer === buf,  "DataView(buf, 10).buffer = " + view.buffer);
+    ok(view.byteLength === 0, "DataView(buf, 10).byteLength = " + view.byteLength);
+    ok(view.byteOffset === 10, "DataView(buf, 10).byteOffset = " + view.byteOffset);
+    view = new DataView(buf, 1, 7);
+    ok(view.buffer === buf,  "DataView(buf, 1, 7).buffer = " + view.buffer);
+    ok(view.byteLength === 7, "DataView(buf, 1, 7).byteLength = " + view.byteLength);
+    ok(view.byteOffset === 1, "DataView(buf, 1, 7).byteOffset = " + view.byteOffset);
+    view2 = new DataView(buf, 6);
+    ok(view2.buffer === buf,  "DataView(buf, 6).buffer = " + view2.buffer);
+    ok(view2.byteLength === 4, "DataView(buf, 6).byteLength = " + view2.byteLength);
+    ok(view2.byteOffset === 6, "DataView(buf, 6).byteOffset = " + view2.byteOffset);
+    view = DataView(buf);
+    ok(view.buffer === buf,  "DataView(buf).buffer = " + view.buffer);
+    ok(view.byteLength === 10, "DataView(buf).byteLength = " + view.byteLength);
+    ok(view.byteOffset === 0,  "DataView(buf).byteOffset = " + view.byteOffset);
+
+    for(i = 0; i < 10; i++) {
+        r = view.getInt8(i);
+        ok(r === 0, "view byte " + i + " = " + r);
+    }
+
+    for(i = 0; i < types.length; i++) {
+        var method = "get" + types[i][0], offs = 11 - types[i][1];
+        r = DataView.prototype[method].length;
+        ok(r === 1, "DataView.prototype." + method + ".length = " + r);
+        try {
+            view[method]();
+            ok(false, "view." + method + "() did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_DATAVIEW_NO_ARGUMENT, "view." + method + "() threw " + n);
+        }
+        try {
+            view[method](-1);
+            ok(false, "view." + method + "(-1) did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_DATAVIEW_INVALID_ACCESS, "view." + method + "(-1) threw " + n);
+        }
+        try {
+            view[method](offs);
+            ok(false, "view." + method + "(" + offs + ") did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_DATAVIEW_INVALID_ACCESS, "view." + method + "(" + offs + ") threw " + n);
+        }
+        try {
+            view[method].call(null, 0);
+            ok(false, "view." + method + "(0) with null context did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_NOT_DATAVIEW, "view." + method + "(0) with null context threw " + n);
+        }
+        try {
+            view[method].call({}, 0);
+            ok(false, "view." + method + "(0) with an object context did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_NOT_DATAVIEW, "view." + method + "(0) with an object context threw " + n);
+        }
+        method = "set" + types[i][0];
+        r = DataView.prototype[method].length;
+        ok(r === 1, "DataView.prototype." + method + ".length = " + r);
+        try {
+            view[method]();
+            ok(false, "view." + method + "() did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_DATAVIEW_NO_ARGUMENT, "view." + method + "() threw " + n);
+        }
+        try {
+            view[method](0);
+            ok(false, "view." + method + "(0) did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_DATAVIEW_NO_ARGUMENT, "view." + method + "(0) threw " + n);
+        }
+        try {
+            view[method](-1, 0);
+            ok(false, "view." + method + "(-1, 0) did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_DATAVIEW_INVALID_ACCESS, "view." + method + "(-1, 0) threw " + n);
+        }
+        try {
+            view[method](offs, 0);
+            ok(false, "view." + method + "(" + offs + ", 0) did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_DATAVIEW_INVALID_ACCESS, "view." + method + "(" + offs + ", 0) threw " + n);
+        }
+        try {
+            view[method].call(null, 0, 0);
+            ok(false, "view." + method + "(0, 0) with null context did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_NOT_DATAVIEW, "view." + method + "(0, 0) with null context threw " + n);
+        }
+        try {
+            view[method].call({}, 0, 0);
+            ok(false, "view." + method + "(0, 0) with an object context did not throw exception");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === JS_E_NOT_DATAVIEW, "view." + method + "(0, 0) with an object context threw " + n);
+        }
+    }
+
+    r = view.setInt8(1, -257);
+    ok(r === undefined, "view.setInt8(1, -1) returned " + r);
+    r = view.getUint16(0);
+    ok(r === 255, "view.getUint16(0) returned " + r);
+    r = view.getUint16(0, true);
+    ok(r === 65280, "view.getUint16(0, true) returned " + r);
+    r = view.setUint32(2, "12345678", true);
+    ok(r === undefined, "view.setUint32(2, '12345678', true) returned " + r);
+    r = view.getInt32(1);
+    ok(r === -11640388, "view.getInt32(1) returned " + r);
+    r = view.setInt16(3, 65535, true);
+    ok(r === undefined, "view.setInt16(3, 65535) returned " + r);
+    r = view.getUint16(3);
+    ok(r === 65535, "view.getUint16(3) returned " + r);
+    r = view.setUint32(0, -2, true);
+    ok(r === undefined, "view.setUint32(0, -2) returned " + r);
+    r = view.getInt32(0, true);
+    ok(r === -2, "view.getInt32(0) returned " + r);
+    r = view.setFloat32(6, 1234.5, true);
+    ok(r === undefined, "view.setFloat32(6, 1234.5) returned " + r);
+    r = view2.getFloat32(0, true);
+    ok(r === 1234.5, "view2.getFloat32(0) returned " + r);
+
+    r = buf.slice(-9, 1);
+    ok(r instanceof ArrayBuffer, "buf.slice did not return an ArrayBuffer");
+    ok(r.byteLength === 0, "buf.slice(-9, 1).byteLength = " + r.byteLength);
+    r = buf.slice();
+    ok(r.byteLength === 10, "buf.slice().byteLength = " + r.byteLength);
+    r = buf.slice(9, 16);
+    ok(r.byteLength === 1, "buf.slice(9, 16).byteLength = " + r.byteLength);
+    r = buf.slice(-9, -1);
+    ok(r.byteLength === 8, "buf.slice(-9, -1).byteLength = " + r.byteLength);
+
+    /* setters differing only in signedness have identical behavior, but they're not the same methods */
+    ok(view.setInt8 !== view.setUint8, "setInt8 and setUint8 are the same method");
+    ok(view.setInt16 !== view.setUint16, "setInt16 and setUint16 are the same method");
+    ok(view.setInt32 !== view.setUint32, "setInt32 and setUint32 are the same method");
+
+    /* slice makes a copy */
+    buf2 = buf.slice(-9);
+    ok(buf2.byteLength === 9, "buf.slice(-9).byteLength = " + buf2.byteLength);
+    view2 = DataView(buf2, 1);
+    ok(view2.byteLength === 8, "buf.slice(-9) view(1).byteLength = " + view2.byteLength);
+
+    r = view2.getUint32(0);
+    ok(r === 4294967040, "buf.slice(-9) view(1).getUint32(0) returned " + r);
+    view2.setInt16(0, -5);
+    r = view2.getUint16(1);
+    ok(r === 64511, "buf.slice(-9) view(1).getUint16(1) returned " + r);
+    r = view.getInt32(1);
+    ok(r === -1, "view.getInt32(1) after slice changed returned " + r);
+
+    r = view2.setFloat64(0, 11.875);
+    ok(r === undefined, "buf.slice(-9) view(1).setFloat64(0, 11.875) returned " + r);
+    r = view2.getFloat64(0);
+    ok(r === 11.875, "buf.slice(-9) view(1).getFloat64(0) returned " + r);
+});
+
+sync_test("builtin_context", function() {
+    var nullDisp = external.nullDisp;
+    var tests = [
+        [ "Array.map",              JS_E_OBJECT_EXPECTED,       function(ctx) { Array.prototype.map.call(ctx, function(a, b) {}); } ],
+        [ "Array.sort",             JS_E_OBJECT_EXPECTED,       function(ctx) { Array.prototype.sort.call(ctx); } ],
+        [ "Boolean.toString",       JS_E_BOOLEAN_EXPECTED,      function(ctx) { Boolean.prototype.toString.call(ctx); } ],
+        [ "Date.getTime",           JS_E_DATE_EXPECTED,         function(ctx) { Date.prototype.getTime.call(ctx); } ],
+        [ "Date.toGMTString",       JS_E_DATE_EXPECTED,         function(ctx) { Date.prototype.toGMTString.call(ctx); } ],
+        [ "Enumerator.item",        JS_E_ENUMERATOR_EXPECTED,   function(ctx) { Enumerator.prototype.item.call(ctx); } ],
+        [ "Error.toString",         JS_E_OBJECT_EXPECTED,       function(ctx) { Error.prototype.toString.call(ctx); } ],
+        [ "Function.call",          JS_E_FUNCTION_EXPECTED,     function(ctx) { Function.prototype.call.call(ctx, function() {}); } ],
+        [ "Map.clear",              JS_E_OBJECT_EXPECTED,       function(ctx) { Map.prototype.clear.call(ctx); } ],
+        [ "Number.toFixed",         JS_E_NUMBER_EXPECTED,       function(ctx) { Number.prototype.toFixed.call(ctx); } ],
+        [ "Object.isPrototypeOf",   JS_E_OBJECT_EXPECTED,       function(ctx) { Object.prototype.isPrototypeOf.call(ctx, Object); } ],
+        [ "RegExp.exec",            JS_E_REGEXP_EXPECTED,       function(ctx) { RegExp.prototype.exec.call(ctx, "foobar"); } ],
+        [ "Set.add",                JS_E_OBJECT_EXPECTED,       function(ctx) { Set.prototype.add.call(ctx, 5); } ],
+        [ "String.search",          JS_E_OBJECT_EXPECTED,       function(ctx) { String.prototype.search.call(ctx, /foobar/g); } ],
+        [ "String.trim",            JS_E_OBJECT_EXPECTED,       function(ctx) { String.prototype.trim.call(ctx); } ],
+        [ "VBArray.dimensions",     JS_E_VBARRAY_EXPECTED,      function(ctx) { VBArray.prototype.dimensions.call(ctx); } ]
+    ];
+
+    /* make global object suitable for some calls */
+    window[0] = "foo";
+    window[1] = "bar";
+    window.length = 2;
+
+    for(var i = 0; i < tests.length; i++) {
+        try {
+            tests[i][2](null);
+            ok(false, "expected exception calling " + tests[i][0] + " with null context");
+        }catch(ex) {
+            var n = ex.number >>> 0; /* make it unsigned like HRESULT */
+            ok(n === tests[i][1], tests[i][0] + " with null context exception code = " + n);
+        }
+        try {
+            tests[i][2](undefined);
+            ok(false, "expected exception calling " + tests[i][0] + " with undefined context");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === tests[i][1], tests[i][0] + " with undefined context exception code = " + n);
+        }
+        try {
+            tests[i][2](nullDisp);
+            ok(false, "expected exception calling " + tests[i][0] + " with nullDisp context");
+        }catch(ex) {
+            var n = ex.number >>> 0;
+            ok(n === tests[i][1], tests[i][0] + " with nullDisp context exception code = " + n);
+        }
+    }
+
+    var obj = (function() { return this; }).call(null);
+    ok(obj === window, "obj = " + obj);
+    var obj = (function() { return this; }).call(undefined);
+    ok(obj === window, "obj = " + obj);
+    obj = (function() { return this; }).call(42);
+    ok(obj.valueOf() === 42, "obj = " + obj);
+
+    obj = Object.create([100]);
+    ok(obj.length === 1, "obj.length = " + obj.length);
+});
+
+sync_test("globals override", function() {
+    wineprop = 1337;  /* global */
+    ok(window.hasOwnProperty("wineprop"), "wineprop not a prop of window");
+    ok(window.wineprop === 1337, "window.wineprop = " + window.wineprop);
+    ok(wineprop === 1337, "wineprop = " + wineprop);
+
+    var i, desc, r = Object.defineProperty(window, "wineprop", { value: 42, configurable: true });
+    ok(r === window, "defineProperty(window.wineprop) returned " + r);
+    ok(window.hasOwnProperty("wineprop"), "wineprop not a prop of window after override");
+    ok(window.wineprop === 42, "window.wineprop after override = " + window.wineprop);
+    ok(wineprop === 42, "wineprop after override = " + wineprop);
+
+    r = (delete window.wineprop);
+    ok(r === true, "delete window.wineprop returned " + r);
+    ok(!("wineprop" in window), "wineprop in window after delete");
+
+    /* configurable */
+    var builtins = [
+        "ActiveXObject",
+        "Array",
+        "ArrayBuffer",
+        "Boolean",
+        "CollectGarbage",
+        "DataView",
+        "Date",
+        "decodeURI",
+        "decodeURIComponent",
+        "encodeURI",
+        "encodeURIComponent",
+        "Enumerator",
+        "Error",
+        "escape",
+        "EvalError",
+        "Function",
+        "isFinite",
+        "isNaN",
+        "JSON",
+        "Map",
+        "Math",
+        "Number",
+        "parseFloat",
+        "parseInt",
+        "RangeError",
+        "ReferenceError",
+        "RegExp",
+        "ScriptEngine",
+        "ScriptEngineBuildVersion",
+        "ScriptEngineMajorVersion",
+        "ScriptEngineMinorVersion",
+        "Set",
+        "String",
+        "SyntaxError",
+        "TypeError",
+        "unescape",
+        "URIError",
+        "VBArray",
+        "WeakMap"
+    ];
+    for(i = 0; i < builtins.length; i++) {
+        desc = Object.getOwnPropertyDescriptor(window, builtins[i]);
+        ok(desc !== undefined, "getOwnPropertyDescriptor('" + builtins[i] + "' returned undefined");
+        ok(desc.configurable === true, builtins[i] + " not configurable");
+        ok(desc.enumerable === false, builtins[i] + " is enumerable");
+        ok(desc.writable === true, builtins[i] + " not writable");
+
+        r = Object.defineProperty(window, builtins[i], { value: 12, configurable: true, writable: true });
+        ok(r === window, "defineProperty('" + builtins[i] + "' returned " + r);
+        r = Object.getOwnPropertyDescriptor(window, builtins[i]);
+        ok(r !== undefined, "getOwnPropertyDescriptor('" + builtins[i] + "' after override returned undefined");
+        ok(r.value === 12, builtins[i] + " value = " + r.value);
+
+        r = eval(builtins[i]);
+        ok(r === window[builtins[i]], "Global " + builtins[i] + " does not match redefined window." + builtins[i]);
+        r = (delete window[builtins[i]]);
+        ok(r === true, "delete window." + builtins[i] + " returned " + r);
+        ok(!(builtins[i] in window), builtins[i] + " in window after delete");
+        try {
+            eval(builtins[i]);
+            ok(false, "expected exception retrieving global " + builtins[i] + " after delete.");
+        }catch(ex) {
+            r = ex.number >>> 0;
+            ok(r === JS_E_UNDEFINED_VARIABLE, "retrieving global " + builtins[i] + " after delete threw " + r);
+        }
+
+        r = Object.defineProperty(window, builtins[i], desc);
+        ok(r === window, "defineProperty('" + builtins[i] + "' to restore returned " + r);
+    }
+
+    /* non-configurable */
+    builtins = [
+        "undefined",
+        "Infinity",
+        "NaN"
+    ];
+    for(i = 0; i < builtins.length; i++) {
+        desc = Object.getOwnPropertyDescriptor(window, builtins[i]);
+        ok(desc !== undefined, "getOwnPropertyDescriptor('" + builtins[i] + "' returned undefined");
+        ok(desc.configurable === false, builtins[i] + " is configurable");
+        ok(desc.enumerable === false, builtins[i] + " is enumerable");
+        ok(desc.writable === false, builtins[i] + " is writable");
+    }
+});
+
+sync_test("host this", function() {
+    var tests = [ undefined, null, external.nullDisp, function() {}, [0], "foobar", true, 42, new Number(42), external.testHostContext(true), window, document ];
+    var i, obj = Object.create(Function.prototype);
+
+    // only pure js objects are passed as 'this' (regardless of prototype)
+    [137].forEach(external.testHostContext(true), obj);
+    Function.prototype.apply.call(external.testHostContext(true), obj, [137, 0, {}]);
+
+    for(i = 0; i < tests.length; i++) {
+        [137].forEach(external.testHostContext(false), tests[i]);
+        Function.prototype.apply.call(external.testHostContext(false), tests[i], [137, 0, {}]);
+    }
 });
 
 sync_test("head_setter", function() {
@@ -1385,6 +2434,27 @@ sync_test("let scope instances", function() {
     ok(f() == 2, "f() = " + f());
 });
 
+sync_test("substituted this", function() {
+    try {
+        ((function() { var f = Number.prototype.toString; return (function() { return f(); }); })())();
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === JS_E_NUMBER_EXPECTED, "Number.toString threw " + n);
+    }
+
+    var r = ((function() { var f = Object.prototype.toString; return (function() { return f(); }); })())();
+    ok(r === "[object Undefined]", "detached scope Object.toString returned " + r);
+
+    var r = (function() { this.f = Object.prototype.toString; return this.f(); })();
+    ok(r === "[object Window]", "Object.toString returned " + r);
+
+    var r = (function() { var f = Object.prototype.toString; return f(); })();
+    ok(r === "[object Undefined]", "Object.toString returned " + r);
+
+    var r = ((function() { return (function() { return this; }); })())();
+    ok(r === window, "detached scope this = " + r);
+});
+
 sync_test("functions scope", function() {
     function f(){ return 1; }
     function f(){ return 2; }
@@ -1495,6 +2565,34 @@ sync_test("functions scope", function() {
     func_outer(o);
     func();
     ok(ret === o, "ret != o");
+
+    func_outer = function g() {
+        var g2 = g;
+        g = 10;
+        ok(g !== 10, "g was redefined to 10");
+        g = function() {};
+        ok(g === g2, "g !== g2: " + g);
+    }
+    func_outer();
+
+    function h() {
+        h = 1;
+        ok(h === 1, "h was not redefined: " + h);
+    }
+    h();
+    ok(h === 1, "h = " + h);
+
+    function h2() { return function() { h2 = 2; }; }
+    h2()();
+    ok(h2 === 2, "h2 = " + h2);
+
+    (function e() {
+        var f = e;
+        ok(typeof(f) === "function", "f = " + f);
+        (function () { e = 1; })();
+        e = 2;
+        ok(f === e, "f != e");
+    })();
 });
 
 sync_test("console", function() {
@@ -1559,4 +2657,372 @@ sync_test("console", function() {
         except = true;
     }
     ok(except, "console.timeLog: expected exception");
+});
+
+async_test("matchMedia", function() {
+    var i, r, mql, expect, event_fired, event2_fired;
+
+    try {
+        mql = window.matchMedia("");
+    }catch(ex) {
+        var n = ex.number >>> 0;
+        ok(n === E_INVALIDARG, "matchMedia('') threw " + n);
+    }
+    r = [
+        [ undefined, "unknown" ],
+        [ null,      "unknown" ],
+        [ 42,        "not all" ],
+        [{ toString: function() { return "(max-width: 0px)"; }}, "all and (max-width:0px)" ]
+    ];
+    for(i = 0; i < r.length; i++) {
+        mql = window.matchMedia(r[i][0]);
+        todo_wine_if(r[i][0] !== 42).
+        ok(mql.media === r[i][1], r[i][0] + " media = " + mql.media);
+        ok(mql.matches === false, r[i][0] + " matches");
+    }
+    mql = window.matchMedia("(max-width: 1000px)");
+    ok(mql.matches === true, "(max-width: 1000px) does not match");
+    mql = window.matchMedia("(max-width: 50px)");
+    ok(mql.matches === false, "(max-width: 50px) matches");
+
+    ok(!("addEventListener" in mql), "addEventListener in MediaQueryList");
+    ok(!("removeEventListener" in mql), "removeEventListener in MediaQueryList");
+    r = mql.addListener(null);
+    ok(r === undefined, "addListener with null returned " + r);
+    r = mql.removeListener(null);
+    ok(r === undefined, "removeListener with null returned " + r);
+    r = mql.addListener("function() { ok(false, 'string handler called'); }");
+    ok(r === undefined, "addListener with string returned " + r);
+
+    var handler = function(e) {
+        ok(this === window, "handler this = " + this);
+        ok(e === mql, "handler argument = " + e);
+        event_fired = true;
+        ok(event2_fired !== true, "second handler fired before first");
+    }
+    var handler2 = function(e) {
+        ok(this === window, "handler2 this = " + this);
+        ok(e === mql, "handler2 argument = " + e);
+        event2_fired = true;
+    }
+    var tests = [
+        [ 20, 20, function() {
+            var r = mql.removeListener("function() { ok(false, 'string handler called'); }");
+            ok(r === undefined, "removeListener with string returned " + r);
+            r = mql.addListener(handler);
+            ok(r === undefined, "addListener with function returned " + r);
+        }],
+        [ 120, 120, function() {
+            ok(event_fired === true, "event not fired after changing from 20x20 to 120x120 view");
+            mql.addListener(null);
+            mql.addListener("function() { ok(false, 'second string handler called'); }");
+            mql.addListener(handler2);
+        }],
+        [ 30, 30, function() {
+            ok(event_fired === true, "event not fired after changing from 120x120 to 30x30 view");
+            ok(event2_fired === true, "event not fired from second handler after changing from 120x120 to 30x30 view");
+            var r = mql.removeListener(handler);
+            ok(r === undefined, "removeListener with function returned " + r);
+        }],
+        [ 300, 300, function() {
+            ok(event_fired === false, "removed event handler fired after changing from 30x30 to 300x300 view");
+            ok(event2_fired === true, "event not fired from second handler after changing from 30x30 to 300x300 view");
+        }]
+    ];
+
+    function test() {
+        tests[i][2]();
+        if(++i >= tests.length) {
+            next_test();
+            return;
+        }
+        expect = !expect;
+        event_fired = event2_fired = false;
+        external.setViewSize(tests[i][0], tests[i][1]);
+        window.setTimeout(check);
+    }
+
+    // async dispatch once even after change confirmed, to ensure that any possible listeners are dispatched first (or not)
+    function check() { window.setTimeout(mql.matches === expect ? test : check); }
+
+    i = 0;
+    expect = !mql.matches;
+    external.setViewSize(tests[i][0], tests[i][1]);
+    window.setTimeout(check);
+});
+
+sync_test("initProgressEvent", function() {
+    var e = document.createEvent("ProgressEvent");
+    e.initProgressEvent("loadend", false, false, true, 13, 42);
+    ok(e.lengthComputable === true, "lengthComputable = " + e.lengthComputable);
+    ok(e.loaded === 13, "loaded = " + e.loaded);
+    ok(e.total === 42, "total = " + e.total);
+
+    e.initProgressEvent("loadstart", false, false, false, 99, 50);
+    ok(e.lengthComputable === false, "lengthComputable after re-init = " + e.lengthComputable);
+    ok(e.loaded === 99, "loaded after re-init = " + e.loaded);
+    ok(e.total === 50, "total after re-init = " + e.total);
+});
+
+sync_test("screen", function() {
+    var o = screen;
+
+    ok(typeof(o) == "object", "typeof(o) = " + typeof(o));
+    ok(o instanceof Object, "o is not an instance of Object");
+
+    o.prop = 1;
+    ok(o.prop === 1, "o.prop = " + o.prop);
+    ok(o.hasOwnProperty("prop"), 'o.hasOwnProperty("prop") = ' + o.hasOwnProperty("prop"));
+    test_own_data_prop_desc(o, "prop", true, true, true);
+
+    Object.defineProperty(o, "defprop", {writable: false, enumerable: false, configurable: true, value: 2});
+    ok(o.defprop === 2, "o.prop = " + o.prop);
+    test_own_data_prop_desc(o, "defprop", false, false, true);
+
+    ok(typeof(Object.keys(o)) === "object", "Object.keys(o) = " + Object.keys(o));
+    ok(Object.isExtensible(o) === true, "Object.isExtensible(o) = " + Object.isExtensible(o));
+    ok(Object.isFrozen(o) === false, "Object.isFrozen(o) = " + Object.isFrozen(o));
+    ok(Object.isSealed(o) === false, "Object.isSealed(o) = " + Object.isSealed(o));
+
+    Object.seal(o);
+    test_own_data_prop_desc(o, "prop", true, true, false);
+    test_own_data_prop_desc(o, "defprop", false, false, false);
+    ok(Object.isExtensible(o) === false, "Object.isExtensible(o) = " + Object.isExtensible(o));
+    ok(Object.isFrozen(o) === false, "Object.isFrozen(o) = " + Object.isFrozen(o));
+    ok(Object.isSealed(o) === true, "Object.isSealed(o) = " + Object.isSealed(o));
+
+    ok(!o.hasOwnProperty("width"), 'o.hasOwnProperty("width") = ' + o.hasOwnProperty("width"));
+    ok(Screen.prototype.hasOwnProperty("width"),
+       'Screen.prototype.hasOwnProperty("width") = ' + Screen.prototype.hasOwnProperty("width"));
+
+    var desc = Object.getOwnPropertyDescriptor(Screen.prototype, "width");
+    ok(!("value" in desc), "width prop: value is in desc");
+    ok(!("writable" in desc), "width prop: writable is in desc");
+    ok(desc.enumerable === true, "width prop: enumerable = " + desc.enumerable);
+    ok(desc.configurable === true, "width prop: configurable = " + desc.configurable);
+    ok(Object.getPrototypeOf(desc.get) === Function.prototype, "width prop: get not a function: " + desc.get);
+    ok("set" in desc, "width prop: set is not in desc");
+    ok(desc.set === undefined, "width prop: set not undefined: " + desc.set);
+    ok(desc.get.call(o) === o.width, "width prop: get.call() not same as o.width: " + desc.get.call(o) + ", expected " + o.width);
+
+    o.prop2 = 3;
+    ok(!("prop2" in o), "o.prop2 = " + o.prop2);
+
+    ok(check_enum(o, "width"), "width not enumerated");
+    ok(check_enum(o, "height"), "height not enumerated");
+    ok(check_enum(o, "prop"), "prop not enumerated");
+    ok(!check_enum(o, "defprop"), "defprop enumerated");
+    ok(!check_enum(o, "prop2"), "prop2 enumerated");
+});
+
+sync_test("builtin_func", function() {
+    var o = document.implementation, r;
+    var f = o.hasFeature;
+
+    ok(f instanceof Function, "f is not an instance of Function");
+    ok(Object.getPrototypeOf(f) === Function.prototype, "Object.getPrototypeOf(f) = " + Object.getPrototypeOf(f));
+    ok(!f.hasOwnProperty("length"), "f has own length property");
+    ok(f.length === 0, "f.length = " + f.length);
+    ok(f.call(o, "test", 1) === false, 'f.call(o, "test", 1) = ' + f.call(o, "test", 1));
+    ok("" + f === "\nfunction hasFeature() {\n    [native code]\n}\n", "f = " + f);
+
+    o = document.body;
+    var desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Object.getPrototypeOf(o)), "innerHTML");
+    ok(!("value" in desc), "innerHTML prop: value is in desc");
+    ok(!("writable" in desc), "innerHTML prop: writable is in desc");
+    ok(desc.enumerable === true, "innerHTML prop: enumerable = " + desc.enumerable);
+    ok(desc.configurable === true, "innerHTML prop: configurable = " + desc.configurable);
+    ok(Object.getPrototypeOf(desc.get) === Function.prototype, "innerHTML prop: get not a function: " + desc.get);
+    ok(Object.getPrototypeOf(desc.set) === Function.prototype, "innerHTML prop: set not a function: " + desc.set);
+    r = desc.set.call(o, '<div id="winetest"></div>');
+    ok(r === undefined, "innerHTML prop: setter returned " + r);
+    r = desc.get.call(o);
+    ok(r === '<div id="winetest"></div>', "innerHTML prop: getter returned " + r);
+    ok(r === o.innerHTML, "innerHTML prop: getter not same as o.innerHTML: " + r + ", expected " + o.innerHTML);
+});
+
+async_test("script_global", function() {
+    // Created documents share script global, so their objects are instances of Object from
+    // the current script context.
+    var doc = document.implementation.createHTMLDocument("test");
+    todo_wine.
+    ok(doc instanceof Object, "created doc is not an instance of Object");
+    ok(doc.implementation instanceof Object, "created doc.implementation is not an instance of Object");
+
+    document.body.innerHTML = "";
+    var iframe = document.createElement("iframe");
+
+    // Documents created in iframe use iframe's script global, so their objects are not instances of
+    // current script context Object.
+    iframe.onload = guard(function() {
+        var doc = iframe.contentWindow.document;
+        ok(!(doc instanceof Object), "doc is an instance of Object");
+        ok(!(doc.implementation instanceof Object), "doc.implementation is an instance of Object");
+
+        doc = doc.implementation.createHTMLDocument("test");
+        ok(!(doc instanceof Object), "created iframe doc is an instance of Object");
+        ok(!(doc.implementation instanceof Object), "created iframe doc.implementation is an instance of Object");
+
+        next_test();
+    });
+
+    iframe.src = "about:blank";
+    document.body.appendChild(iframe);
+});
+
+sync_test("form_as_prop", function() {
+    document.body.innerHTML = '<form id="testid" name="testname"></form>';
+    var form = document.body.firstChild;
+    var o = Object.create(document);
+
+    ok(document.testid === form, "document.testid = " + document.testid);
+    ok(o.testid === form, "o.testid = " + o.testid);
+    ok(document.hasOwnProperty("testid"), 'document.hasOwnProperty("testid") = ' + document.hasOwnProperty("testid"));
+    ok(!o.hasOwnProperty("testid"), 'o.hasOwnProperty("testid") = ' + o.hasOwnProperty("testid"));
+    test_own_data_prop_desc(document, "testid", true, true, true);
+
+    ok(document.testname === form, "document.testname = " + document.testname);
+    ok(o.testname === form, "o.testname = " + o.testname);
+    ok(document.hasOwnProperty("testname"), 'document.hasOwnProperty("testname") = ' + document.hasOwnProperty("testname"));
+    ok(!o.hasOwnProperty("testname"), 'o.hasOwnProperty("testname") = ' + o.hasOwnProperty("testname"));
+    test_own_data_prop_desc(document, "testname", true, true, true);
+    todo_wine.
+    ok(!check_enum(document, "testid"), "testid enumerated in document");
+    ok(check_enum(document, "testname"), "testid not enumerated in document");
+    todo_wine.
+    ok(!check_enum(o, "testid"), "testid enumerated in o");
+    ok(check_enum(o, "testname"), "testid not enumerated in o");
+
+    document.body.innerHTML = '';
+    ok(!("testid" in o), "testid is in o");
+    ok(!("testname" in o), "testname is in o");
+    ok(!("testid" in document), "testid is in document");
+    ok(!("testname" in document), "testname is in document");
+    ok(!document.hasOwnProperty("testid"), 'document.hasOwnProperty("testid") = ' + document.hasOwnProperty("testid"));
+    ok(!document.hasOwnProperty("testname"), 'document.hasOwnProperty("testname") = ' + document.hasOwnProperty("testname"));
+});
+
+sync_test("prototypes", function() {
+    var constr = DOMImplementation;
+    test_own_data_prop_desc(window, "DOMImplementation", true, false, true);
+    ok(Object.getPrototypeOf(DOMImplementation) === Object.prototype,
+       "Object.getPrototypeOf(DOMImplementation) = " + Object.getPrototypeOf(DOMImplementation));
+    ok(DOMImplementation == "[object DOMImplementation]", "DOMImplementation = " + DOMImplementation);
+
+    var proto = constr.prototype;
+    ok(proto == "[object DOMImplementationPrototype]", "DOMImplementation.prototype = " + proto);
+    ok(Object.getPrototypeOf(document.implementation) === proto,
+       "Object.getPrototypeOf(document.implementation) = " + Object.getPrototypeOf(document.implementation));
+    ok(Object.getPrototypeOf(proto) === Object.prototype, "Object.getPrototypeOf(proto) = " + Object.getPrototypeOf(proto));
+
+    test_own_data_prop_desc(constr, "prototype", false, false, false);
+    test_own_data_prop_desc(proto, "constructor", true, false, true);
+    ok(proto.hasOwnProperty("createHTMLDocument"), "prototype has no own createHTMLDocument property");
+    ok(!document.implementation.hasOwnProperty("createHTMLDocument"),
+       "prototype has own createHTMLDocument property");
+
+    ok(proto.constructor === constr, "proto.constructor = " + proto.constructor);
+    proto.constructor = 1;
+    ok(proto.constructor === 1, "proto.constructor = " + proto.constructor + " expected 1");
+    proto.constructor = constr;
+
+    DOMImplementation = 1;
+    ok(DOMImplementation === 1, "DOMImplementation = " + DOMImplementation + " expected 1");
+    DOMImplementation = constr;
+
+    ok(!HTMLBodyElement.prototype.hasOwnProperty("click"), "HTMLBodyElement prototype has own click property");
+    ok(HTMLElement.prototype.hasOwnProperty("click"), "HTMLElement prototype does not have own click property");
+
+    ok(!HTMLBodyElement.prototype.hasOwnProperty("removeChild"), "HTMLBodyElement prototype has own removeChild property");
+    ok(!HTMLElement.prototype.hasOwnProperty("removeChild"), "HTMLElement prototype has own removeChild property");
+    ok(!Element.prototype.hasOwnProperty("removeChild"), "Element prototype has own removeChild property");
+    ok(Node.prototype.hasOwnProperty("removeChild"), "Node prototype does not have own removeChild property");
+
+    test_own_data_prop_desc(window, "XMLHttpRequest", true, false, true);
+    ok(typeof(XMLHttpRequest) === "function", "typeof(XMLHttpRequest) = " + typeof(XMLHttpRequest));
+    ok(XMLHttpRequest.hasOwnProperty("create"), "XMLHttpRequest does not have create property");
+    ok(Object.getPrototypeOf(XMLHttpRequest) === Function.prototype,
+       "Object.getPrototypeOf(XMLHttpRequest) = " + Object.getPrototypeOf(XMLHttpRequest));
+    ok(XMLHttpRequest.prototype.constructor === XMLHttpRequest,
+       "XMLHttpRequest.prototype.constructor !== XMLHttpRequest");
+    var xhr = new XMLHttpRequest();
+    ok(Object.getPrototypeOf(xhr) === XMLHttpRequest.prototype,
+       "Object.getPrototypeOf(xhr) = " + Object.getPrototypeOf(xhr));
+    constr = XMLHttpRequest;
+    XMLHttpRequest = 1;
+    ok(XMLHttpRequest === 1, "XMLHttpRequest = " + XMLHttpRequest);
+    XMLHttpRequest = constr;
+
+    ok(Image != HTMLImageElement, "Image == HTMLImageElement");
+    ok(typeof(HTMLImageElement) === "object", "typeof(HTMLImageElement) = " + typeof(HTMLImageElement));
+    ok(typeof(Image) === "function", "typeof(Image) = " + typeof(Image));
+    ok(Image.prototype === HTMLImageElement.prototype, "Image.prototype != HTMLImageElement.prototype");
+
+    ok(Option != HTMLOptionElement, "Option == HTMLOptionElement");
+    ok(typeof(HTMLOptionElement) === "object", "typeof(HTMLOptionElement) = " + typeof(HTMLOptionElement));
+    ok(typeof(Option) === "function", "typeof(Option) = " + typeof(Option));
+    ok(Option.prototype === HTMLOptionElement.prototype, "Option.prototype != HTMLOptionElement.prototype");
+
+    ok(document.implementation instanceof DOMImplementation, "document.implementation is not an instance of DOMImplementation");
+    ok(navigator instanceof Navigator, "navigator is not an instance of Navigator");
+    ok(!(navigator instanceof DOMImplementation), "navigator is an instance of DOMImplementation");
+    ok(document.body instanceof HTMLBodyElement, "body is not an instance of HTMLBodyElement");
+    ok(document.body instanceof HTMLElement, "body is not an instance of HTMLElement");
+    ok(document.body instanceof Element, "body is not an instance of Element");
+    ok(document.body instanceof Node, "body is not an instance of Node");
+});
+
+sync_test("prototypes_delete", function() {
+    function check_prop(name) {
+        var orig = Object.getOwnPropertyDescriptor(Element.prototype, name);
+        ok(orig != undefined, "Could not get " + name + " descriptor");
+        var is_func = "value" in orig;
+
+        function check(obj, has_own, has_prop, has_enum, todo_enum) {
+            var r = obj.hasOwnProperty(name);
+            ok(r === has_own, obj + ".hasOwnProperty(" + name + ") returned " + r);
+            r = name in obj;
+            ok(r === has_prop, name + " in " + obj + " returned " + r);
+            r = check_enum(obj, name);
+            todo_wine_if(todo_enum).
+            ok(r === has_enum, "enumerating " + name + " in " + obj + "returned " + r);
+        }
+
+        check(document.body, false, true, true, is_func);
+        check(Element.prototype, true, true, true, is_func);
+        check(Node.prototype, false, false, false);
+
+        delete Element.prototype[name];
+        check(document.body, false, false, false);
+        check(Element.prototype, false, false, false);
+        check(Node.prototype, false, false, false);
+
+        Element.prototype[name] = -2;
+        Node.prototype[name] = -3;
+        ok(document.body[name] === -2, "document.body[" + name + "] = " + Element.prototype[name]);
+
+        check(document.body, false, true, true);
+        check(Element.prototype, true, true, true);
+        check(Node.prototype, true, true, true);
+
+        delete Element.prototype[name];
+        ok(document.body[name] === -3, "document.body[" + name + "] = " + Element.prototype[name]);
+        check(document.body, false, true, true);
+        check(Element.prototype, false, true, true);
+        check(Node.prototype, true, true, true);
+
+        delete Node.prototype[name];
+        check(document.body, false, false, false);
+        check(Element.prototype, false, false, false);
+        check(Node.prototype, false, false, false);
+
+        /* Restore the prop */
+        Object.defineProperty(Element.prototype, name, orig);
+        check(document.body, false, true, true, is_func);
+        check(Element.prototype, true, true, true, is_func);
+        check(Node.prototype, false, false, false);
+    }
+
+    check_prop("scrollLeft"); /* accessor prop */
+    check_prop("getBoundingClientRect"); /* function prop */
 });

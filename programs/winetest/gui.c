@@ -62,23 +62,23 @@ MBdefault (int uType)
 static int
 textStatus (va_list ap)
 {
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake( ap );
 
     fputs (str, stderr);
     fputc ('\n', stderr);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
 static int
 guiStatus (va_list ap)
 {
-    size_t len;
-    char *str = vstrmake (&len, ap);
+    char *str = vstrmake(ap);
+    size_t len = strlen(str);
 
     if (len > 128) str[129] = 0;
     SetDlgItemTextA (dialog, IDC_SB, str);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
@@ -116,12 +116,12 @@ guiProgress (va_list ap)
 static int
 textStep (va_list ap)
 {
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
 
     progressCurr++;
     fputs (str, stderr);
     fprintf (stderr, " (%d of %d)\n", progressCurr, progressMax);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
@@ -129,13 +129,13 @@ static int
 guiStep (va_list ap)
 {
     const int pgID = IDC_ST0 + progressGroup * 2;
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
     
     progressCurr++;
     SetDlgItemTextA (dialog, pgID, str);
     SendDlgItemMessageA(dialog, pgID+1, PBM_SETPOS,
                         progressScale * progressCurr, 0);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
@@ -144,12 +144,12 @@ static int
 textDelta (va_list ap)
 {
     const int inc = va_arg (ap, int);
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
 
     progressCurr += inc;
     fputs (str, stderr);
     fprintf (stderr, " (%d of %d)\n", progressCurr, progressMax);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
@@ -158,13 +158,13 @@ guiDelta (va_list ap)
 {
     const int inc = va_arg (ap, int);
     const int pgID = IDC_ST0 + progressGroup * 2;
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
 
     progressCurr += inc;
     SetDlgItemTextA (dialog, pgID, str);
     SendDlgItemMessageA(dialog, pgID+1, PBM_SETPOS,
                         progressScale * progressCurr, 0);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
@@ -189,22 +189,22 @@ guiTag (va_list ap)
 static int
 textDir (va_list ap)
 {
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
 
     fputs ("Temporary directory: ", stderr);
     fputs (str, stderr);
     fputc ('\n', stderr);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
 static int
 guiDir (va_list ap)
 {
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
 
     SetDlgItemTextA (dialog, IDC_DIR, str);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
@@ -212,22 +212,22 @@ guiDir (va_list ap)
 static int
 textOut (va_list ap)
 {
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
 
     fputs ("Log file: ", stderr);
     fputs (str, stderr);
     fputc ('\n', stderr);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
 static int
 guiOut (va_list ap)
 {
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
 
     SetDlgItemTextA (dialog, IDC_OUT, str);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
@@ -243,10 +243,10 @@ textWarning (va_list ap)
 static int
 guiWarning (va_list ap)
 {
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
 
     MessageBoxA (dialog, str, "Warning", MB_ICONWARNING | MB_OK);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
@@ -262,10 +262,10 @@ textError (va_list ap)
 static int
 guiError (va_list ap)
 {
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
 
     MessageBoxA (dialog, str, "Error", MB_ICONERROR | MB_OK);
-    heap_free (str);
+    free(str);
     return 0;
 }
 
@@ -292,11 +292,11 @@ textAsk (va_list ap)
 {
     int uType = va_arg (ap, int);
     int ret = MBdefault (uType);
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
 
     fprintf (stderr, "Question of type %d: %s\n"
              "Returning default: %d\n", uType, str, ret);
-    heap_free (str);
+    free(str);
     return ret;
 }
 
@@ -304,10 +304,10 @@ static int
 guiAsk (va_list ap)
 {
     int uType = va_arg (ap, int);
-    char *str = vstrmake (NULL, ap);
+    char *str = vstrmake(ap);
     int ret = MessageBoxA (dialog, str, "Question", MB_ICONQUESTION | uType);
 
-    heap_free (str);
+    free(str);
     return ret;
 }
 
@@ -342,7 +342,7 @@ AskTagProc (HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                report (R_WARNING, "You must enter a tag to continue");
                return FALSE;
             }
-            tag = heap_alloc (len+1);
+            tag = xalloc(len+1);
             GetDlgItemTextA (hwnd, IDC_TAG, tag, len+1);
             EndDialog (hwnd, IDOK);
             return TRUE;
@@ -375,7 +375,7 @@ AskEmailProc (HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                report (R_WARNING, "You must enter an email address to continue");
                return FALSE;
             }
-            email = heap_alloc (len+1);
+            email = xalloc(len+1);
             GetDlgItemTextA (hwnd, IDC_EMAIL, email, len+1);
             EndDialog (hwnd, IDOK);
             return TRUE;

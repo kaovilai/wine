@@ -57,8 +57,8 @@ static void release_install_ctx(install_ctx_t *ctx)
         IUri_Release(ctx->uri);
     if(ctx->callback)
         IBindStatusCallback_Release(ctx->callback);
-    heap_free(ctx->install_file);
-    heap_free(ctx);
+    free(ctx->install_file);
+    free(ctx);
 }
 
 static inline BOOL file_exists(const WCHAR *file_name)
@@ -74,13 +74,13 @@ static HRESULT extract_cab_file(install_ctx_t *ctx)
 
     hres = ExtractFilesW(ctx->cache_file, ctx->tmp_dir, 0, NULL, NULL, 0);
     if(FAILED(hres)) {
-        WARN("ExtractFilesW failed: %08x\n", hres);
+        WARN("ExtractFilesW failed: %08lx\n", hres);
         return hres;
     }
 
     path_len = lstrlenW(ctx->tmp_dir);
     file_len = lstrlenW(ctx->file_name);
-    ctx->install_file = heap_alloc((path_len+file_len+2)*sizeof(WCHAR));
+    ctx->install_file = malloc((path_len + file_len + 2) * sizeof(WCHAR));
     if(!ctx->install_file)
         return E_OUTOFMEMORY;
 
@@ -192,13 +192,13 @@ static HRESULT process_hook_section(install_ctx_t *ctx, const WCHAR *sect_name)
 
             expand_command(ctx, val, NULL, &size);
 
-            cmd = heap_alloc(size*sizeof(WCHAR));
+            cmd = malloc(size * sizeof(WCHAR));
             if(!cmd)
                 return E_OUTOFMEMORY;
 
             expand_command(ctx, val, cmd, &size);
             hres = RunSetupCommandW(ctx->hwnd, cmd, NULL, ctx->tmp_dir, NULL, NULL, 0, NULL);
-            heap_free(cmd);
+            free(cmd);
             if(FAILED(hres))
                 return hres;
         }else {
@@ -255,7 +255,7 @@ static HRESULT install_inf_file(install_ctx_t *ctx)
             hres = RunSetupCommandW(ctx->hwnd, ctx->install_file, sect_name,
                     ctx->tmp_dir, NULL, NULL, RSC_FLAG_INF, NULL);
             if(FAILED(hres)) {
-                WARN("RunSetupCommandW failed: %08x\n", hres);
+                WARN("RunSetupCommandW failed: %08lx\n", hres);
                 return hres;
             }
         }
@@ -264,7 +264,7 @@ static HRESULT install_inf_file(install_ctx_t *ctx)
     if(default_install) {
         hres = RunSetupCommandW(ctx->hwnd, ctx->install_file, NULL, ctx->tmp_dir, NULL, NULL, RSC_FLAG_INF, NULL);
         if(FAILED(hres)) {
-            WARN("RunSetupCommandW failed: %08x\n", hres);
+            WARN("RunSetupCommandW failed: %08lx\n", hres);
             return hres;
         }
     }
@@ -474,7 +474,7 @@ static HRESULT distunit_on_stop(void *ctx, const WCHAR *cache_file, HRESULT hres
 {
     install_ctx_t *install_ctx = ctx;
 
-    TRACE("(%p %s %08x %s)\n", ctx, debugstr_w(cache_file), hresult, debugstr_w(error_str));
+    TRACE("(%p %s %08lx %s)\n", ctx, debugstr_w(cache_file), hresult, debugstr_w(error_str));
 
     if(hresult == S_OK) {
         hresult = install_file(install_ctx, cache_file);
@@ -499,19 +499,19 @@ HRESULT WINAPI AsyncInstallDistributionUnit(const WCHAR *szDistUnit, const WCHAR
     install_ctx_t *ctx;
     HRESULT hres;
 
-    TRACE("(%s %s %s %x %x %s %p %p %x)\n", debugstr_w(szDistUnit), debugstr_w(szTYPE), debugstr_w(szExt),
+    TRACE("(%s %s %s %lx %lx %s %p %p %lx)\n", debugstr_w(szDistUnit), debugstr_w(szTYPE), debugstr_w(szExt),
           dwFileVersionMS, dwFileVersionLS, debugstr_w(szURL), pbc, pvReserved, flags);
 
     if(szDistUnit || szTYPE || szExt)
         FIXME("Unsupported arguments\n");
 
-    ctx = heap_alloc_zero(sizeof(*ctx));
+    ctx = calloc(1, sizeof(*ctx));
     if(!ctx)
         return E_OUTOFMEMORY;
 
     hres = CreateUri(szURL, 0, 0, &ctx->uri);
     if(FAILED(hres)) {
-        heap_free(ctx);
+        free(ctx);
         return E_OUTOFMEMORY;
     }
 

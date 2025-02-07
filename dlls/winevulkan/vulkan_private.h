@@ -20,81 +20,75 @@
 #ifndef __WINE_VULKAN_PRIVATE_H
 #define __WINE_VULKAN_PRIVATE_H
 
-/* Perform vulkan struct conversion on 32-bit x86 platforms. */
-#if defined(__i386__)
-#define USE_STRUCT_CONVERSION
-#endif
-#define VK_NO_PROTOTYPES
-
 #include <pthread.h>
-
-#include "wine/list.h"
 
 #include "vulkan_loader.h"
 #include "vulkan_thunks.h"
 
-/* Some extensions have callbacks for those we need to be able to
- * get the wine wrapper for a native handle
- */
-struct wine_vk_mapping
+#include "wine/rbtree.h"
+
+extern const struct vulkan_funcs *vk_funcs;
+
+struct wine_cmd_buffer
 {
-    struct list link;
-    uint64_t native_handle;
-    uint64_t wine_wrapped_handle;
+    VULKAN_OBJECT_HEADER( VkCommandBuffer, command_buffer );
+    struct vulkan_device *device;
 };
 
-struct VkCommandBuffer_T
+static inline struct wine_cmd_buffer *wine_cmd_buffer_from_handle(VkCommandBuffer handle)
 {
-    struct wine_vk_base base;
-    struct VkDevice_T *device; /* parent */
-    VkCommandBuffer command_buffer; /* native command buffer */
+    struct vulkan_client_object *client = (struct vulkan_client_object *)handle;
+    return (struct wine_cmd_buffer *)(UINT_PTR)client->unix_handle;
+}
 
-    struct list pool_link;
-    struct wine_vk_mapping mapping;
+struct wine_queue
+{
+    struct vulkan_queue obj;
+
+    uint32_t family_index;
+    uint32_t queue_index;
+    VkDeviceQueueCreateFlags flags;
 };
 
-struct VkDevice_T
+struct wine_device
 {
-    struct wine_vk_device_base base;
-    struct vulkan_device_funcs funcs;
-    struct VkPhysicalDevice_T *phys_dev; /* parent */
-    VkDevice device; /* native device */
-
-    struct VkQueue_T* queues;
-    uint32_t queue_count;
-
-    struct wine_vk_mapping mapping;
+    struct vulkan_device obj;
+    uint64_t queue_count;
+    struct wine_queue queues[];
 };
+
+C_ASSERT(sizeof(struct wine_device) == offsetof(struct wine_device, queues[0]));
 
 struct wine_debug_utils_messenger;
 
 struct wine_debug_report_callback
 {
-    struct VkInstance_T *instance; /* parent */
-    VkDebugReportCallbackEXT debug_callback; /* native callback object */
+    VULKAN_OBJECT_HEADER( VkDebugReportCallbackEXT, debug_callback );
+    struct vulkan_instance *instance;
 
-    /* application callback + data */
-    PFN_vkDebugReportCallbackEXT user_callback;
-    void *user_data;
-
-    struct wine_vk_mapping mapping;
+    UINT64 user_callback; /* client pointer */
+    UINT64 user_data; /* client pointer */
 };
 
-struct VkInstance_T
+struct wine_phys_dev
 {
-    struct wine_vk_base base;
-    struct vulkan_instance_funcs funcs;
-    VkInstance instance; /* native instance */
+    struct vulkan_physical_device obj;
 
-    /* We cache devices as we need to wrap them as they are
-     * dispatchable objects.
-     */
-    struct VkPhysicalDevice_T **phys_devs;
-    uint32_t phys_dev_count;
+    VkPhysicalDeviceMemoryProperties memory_properties;
+    VkExtensionProperties *extensions;
+    uint32_t extension_count;
 
-    VkBool32 enable_wrapper_list;
-    struct list wrappers;
-    pthread_rwlock_t wrapper_lock;
+    uint32_t external_memory_align;
+    uint32_t map_placed_align;
+};
+
+struct wine_debug_report_callback;
+
+struct wine_instance
+{
+    struct vulkan_instance obj;
+
+    VkBool32 enable_win32_surface;
 
     struct wine_debug_utils_messenger *utils_messengers;
     uint32_t utils_messenger_count;
@@ -103,63 +97,46 @@ struct VkInstance_T
 
     unsigned int quirks;
 
-    struct wine_vk_mapping mapping;
+    struct rb_tree objects;
+    pthread_rwlock_t objects_lock;
+
+    /* We cache devices as we need to wrap them as they are dispatchable objects. */
+    uint32_t phys_dev_count;
+    struct wine_phys_dev phys_devs[];
 };
 
-struct VkPhysicalDevice_T
-{
-    struct wine_vk_base base;
-    struct VkInstance_T *instance; /* parent */
-    VkPhysicalDevice phys_dev; /* native physical device */
-
-    VkExtensionProperties *extensions;
-    uint32_t extension_count;
-
-    struct wine_vk_mapping mapping;
-};
-
-struct VkQueue_T
-{
-    struct wine_vk_base base;
-    struct VkDevice_T *device; /* parent */
-    VkQueue queue; /* native queue */
-
-    uint32_t family_index;
-    uint32_t queue_index;
-    VkDeviceQueueCreateFlags flags;
-
-    struct wine_vk_mapping mapping;
-};
+C_ASSERT(sizeof(struct wine_instance) == offsetof(struct wine_instance, phys_devs[0]));
 
 struct wine_cmd_pool
 {
-    VkCommandPool command_pool;
-
-    struct list command_buffers;
-
-    struct wine_vk_mapping mapping;
+    VULKAN_OBJECT_HEADER( VkCommandPool, command_pool );
 };
 
 static inline struct wine_cmd_pool *wine_cmd_pool_from_handle(VkCommandPool handle)
 {
-    return (struct wine_cmd_pool *)(uintptr_t)handle;
+    struct vulkan_client_object *client = &command_pool_from_handle(handle)->obj;
+    return (struct wine_cmd_pool *)(UINT_PTR)client->unix_handle;
 }
 
-static inline VkCommandPool wine_cmd_pool_to_handle(struct wine_cmd_pool *cmd_pool)
+struct wine_device_memory
 {
-    return (VkCommandPool)(uintptr_t)cmd_pool;
+    VULKAN_OBJECT_HEADER( VkDeviceMemory, device_memory );
+    VkDeviceSize size;
+    void *vm_map;
+};
+
+static inline struct wine_device_memory *wine_device_memory_from_handle(VkDeviceMemory handle)
+{
+    return (struct wine_device_memory *)(uintptr_t)handle;
 }
 
 struct wine_debug_utils_messenger
 {
-    struct VkInstance_T *instance; /* parent */
-    VkDebugUtilsMessengerEXT debug_messenger; /* native messenger */
+    VULKAN_OBJECT_HEADER( VkDebugUtilsMessengerEXT, debug_messenger );
+    struct vulkan_instance *instance;
 
-    /* application callback + data */
-    PFN_vkDebugUtilsMessengerCallbackEXT user_callback;
-    void *user_data;
-
-    struct wine_vk_mapping mapping;
+    UINT64 user_callback; /* client pointer */
+    UINT64 user_data; /* client pointer */
 };
 
 static inline struct wine_debug_utils_messenger *wine_debug_utils_messenger_from_handle(
@@ -168,53 +145,113 @@ static inline struct wine_debug_utils_messenger *wine_debug_utils_messenger_from
     return (struct wine_debug_utils_messenger *)(uintptr_t)handle;
 }
 
-static inline VkDebugUtilsMessengerEXT wine_debug_utils_messenger_to_handle(
-        struct wine_debug_utils_messenger *debug_messenger)
-{
-    return (VkDebugUtilsMessengerEXT)(uintptr_t)debug_messenger;
-}
-
 static inline struct wine_debug_report_callback *wine_debug_report_callback_from_handle(
         VkDebugReportCallbackEXT handle)
 {
     return (struct wine_debug_report_callback *)(uintptr_t)handle;
 }
 
-static inline VkDebugReportCallbackEXT wine_debug_report_callback_to_handle(
-        struct wine_debug_report_callback *debug_messenger)
-{
-    return (VkDebugReportCallbackEXT)(uintptr_t)debug_messenger;
-}
+BOOL wine_vk_device_extension_supported(const char *name);
+BOOL wine_vk_instance_extension_supported(const char *name);
+BOOL wine_vk_is_host_surface_extension(const char *name);
 
-struct wine_surface
-{
-    VkSurfaceKHR surface; /* native surface */
-    VkSurfaceKHR driver_surface; /* wine driver surface */
+BOOL wine_vk_is_type_wrapped(VkObjectType type);
 
-    struct wine_vk_mapping mapping;
+NTSTATUS init_vulkan(void *args);
+
+NTSTATUS vk_is_available_instance_function(void *arg);
+NTSTATUS vk_is_available_device_function(void *arg);
+NTSTATUS vk_is_available_instance_function32(void *arg);
+NTSTATUS vk_is_available_device_function32(void *arg);
+
+struct conversion_context
+{
+    char buffer[2048];
+    uint32_t used;
+    struct list alloc_entries;
 };
 
-static inline struct wine_surface *wine_surface_from_handle(VkSurfaceKHR handle)
+static inline void init_conversion_context(struct conversion_context *pool)
 {
-    return (struct wine_surface *)(uintptr_t)handle;
+    pool->used = 0;
+    list_init(&pool->alloc_entries);
 }
 
-static inline VkSurfaceKHR wine_surface_to_handle(struct wine_surface *surface)
+static inline void free_conversion_context(struct conversion_context *pool)
 {
-    return (VkSurfaceKHR)(uintptr_t)surface;
+    struct list *entry, *next;
+    LIST_FOR_EACH_SAFE(entry, next, &pool->alloc_entries)
+        free(entry);
 }
 
-BOOL wine_vk_device_extension_supported(const char *name) DECLSPEC_HIDDEN;
-BOOL wine_vk_instance_extension_supported(const char *name) DECLSPEC_HIDDEN;
+static inline void *conversion_context_alloc(struct conversion_context *pool, size_t size)
+{
+    if (pool->used + size <= sizeof(pool->buffer))
+    {
+        void *ret = pool->buffer + pool->used;
+        pool->used += (size + sizeof(UINT64) - 1) & ~(sizeof(UINT64) - 1);
+        return ret;
+    }
+    else
+    {
+        struct list *entry;
+        if (!(entry = malloc(sizeof(*entry) + size)))
+            return NULL;
+        list_add_tail(&pool->alloc_entries, entry);
+        return entry + 1;
+    }
+}
 
-BOOL wine_vk_is_type_wrapped(VkObjectType type) DECLSPEC_HIDDEN;
-uint64_t wine_vk_unwrap_handle(VkObjectType type, uint64_t handle) DECLSPEC_HIDDEN;
+struct wine_deferred_operation
+{
+    VULKAN_OBJECT_HEADER( VkDeferredOperationKHR, deferred_operation );
+    struct conversion_context ctx; /* to keep params alive. */
+};
 
-NTSTATUS init_vulkan(void *args) DECLSPEC_HIDDEN;
+static inline struct wine_deferred_operation *wine_deferred_operation_from_handle(
+        VkDeferredOperationKHR handle)
+{
+    return (struct wine_deferred_operation *)(uintptr_t)handle;
+}
 
-extern const struct unix_funcs loader_funcs;
+typedef UINT32 PTR32;
 
-BOOL WINAPI wine_vk_is_available_instance_function(VkInstance instance, const char *name) DECLSPEC_HIDDEN;
-BOOL WINAPI wine_vk_is_available_device_function(VkDevice device, const char *name) DECLSPEC_HIDDEN;
+typedef struct
+{
+    VkStructureType sType;
+    PTR32 pNext;
+} VkBaseInStructure32;
+
+typedef struct
+{
+    VkStructureType sType;
+    PTR32 pNext;
+} VkBaseOutStructure32;
+
+static inline void *find_next_struct32(void *s, VkStructureType t)
+{
+    VkBaseOutStructure32 *header;
+
+    for (header = s; header; header = UlongToPtr(header->pNext))
+    {
+        if (header->sType == t)
+            return header;
+    }
+
+    return NULL;
+}
+
+static inline void *find_next_struct(const void *s, VkStructureType t)
+{
+    VkBaseOutStructure *header;
+
+    for (header = (VkBaseOutStructure *)s; header; header = header->pNext)
+    {
+        if (header->sType == t)
+            return header;
+    }
+
+    return NULL;
+}
 
 #endif /* __WINE_VULKAN_PRIVATE_H */

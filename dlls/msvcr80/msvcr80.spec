@@ -1,31 +1,44 @@
 # MS VC++2005 runtime library
 
+@ cdecl -arch=arm ??0__non_rtti_object@std@@QAA@ABV01@@Z(ptr ptr) __non_rtti_object_copy_ctor
 @ thiscall -arch=i386 ??0__non_rtti_object@std@@QAE@ABV01@@Z(ptr ptr) __non_rtti_object_copy_ctor
 @ cdecl -arch=win64 ??0__non_rtti_object@std@@QEAA@AEBV01@@Z(ptr ptr) __non_rtti_object_copy_ctor
 @ cdecl -arch=win64 ??0__non_rtti_object@std@@QEAA@PEBD@Z(ptr ptr) __non_rtti_object_ctor
 @ cdecl -arch=win64 ??0bad_cast@std@@AEAA@PEBQEBD@Z(ptr ptr) bad_cast_ctor
+@ cdecl -arch=arm ??0bad_cast@std@@QAA@ABV01@@Z(ptr ptr) bad_cast_copy_ctor
 @ thiscall -arch=i386 ??0bad_cast@std@@QAE@ABV01@@Z(ptr ptr) bad_cast_copy_ctor
 @ cdecl -arch=win64 ??0bad_cast@std@@QEAA@AEBV01@@Z(ptr ptr) bad_cast_copy_ctor
+@ cdecl -arch=arm ??0bad_cast@std@@QAA@PBD@Z(ptr str) bad_cast_ctor_charptr
 @ thiscall -arch=i386 ??0bad_cast@std@@QAE@PBD@Z(ptr str) bad_cast_ctor_charptr
 @ cdecl -arch=win64 ??0bad_cast@std@@QEAA@PEBD@Z(ptr str) bad_cast_ctor_charptr
+@ cdecl -arch=arm ??0bad_typeid@std@@QAA@ABV01@@Z(ptr ptr) bad_typeid_copy_ctor
 @ thiscall -arch=i386 ??0bad_typeid@std@@QAE@ABV01@@Z(ptr ptr) bad_typeid_copy_ctor
 @ cdecl -arch=win64 ??0bad_typeid@std@@QEAA@AEBV01@@Z(ptr ptr) bad_typeid_copy_ctor
+@ cdecl -arch=arm ??0bad_typeid@std@@QAA@PBD@Z(ptr str) bad_typeid_ctor
 @ thiscall -arch=i386 ??0bad_typeid@std@@QAE@PBD@Z(ptr str) bad_typeid_ctor
 @ cdecl -arch=win64 ??0bad_typeid@std@@QEAA@PEBD@Z(ptr str) bad_typeid_ctor
+@ cdecl -arch=arm ??0exception@std@@QAA@ABQBD@Z(ptr ptr) exception_ctor
 @ thiscall -arch=i386 ??0exception@std@@QAE@ABQBD@Z(ptr ptr) exception_ctor
 @ cdecl -arch=win64 ??0exception@std@@QEAA@AEBQEBD@Z(ptr ptr) exception_ctor
+@ cdecl -arch=arm ??0exception@std@@QAA@ABQBDH@Z(ptr ptr long) exception_ctor_noalloc
 @ thiscall -arch=i386 ??0exception@std@@QAE@ABQBDH@Z(ptr ptr long) exception_ctor_noalloc
 @ cdecl -arch=win64 ??0exception@std@@QEAA@AEBQEBDH@Z(ptr ptr long) exception_ctor_noalloc
+@ cdecl -arch=arm ??0exception@std@@QAA@ABV01@@Z(ptr ptr) exception_copy_ctor
 @ thiscall -arch=i386 ??0exception@std@@QAE@ABV01@@Z(ptr ptr) exception_copy_ctor
 @ cdecl -arch=win64 ??0exception@std@@QEAA@AEBV01@@Z(ptr ptr) exception_copy_ctor
+@ cdecl -arch=arm ??0exception@std@@QAA@XZ(ptr) exception_default_ctor
 @ thiscall -arch=i386 ??0exception@std@@QAE@XZ(ptr) exception_default_ctor
 @ cdecl -arch=win64 ??0exception@std@@QEAA@XZ(ptr) exception_default_ctor
+@ cdecl -arch=arm ??1__non_rtti_object@std@@UAA@XZ(ptr) __non_rtti_object_dtor
 @ thiscall -arch=i386 ??1__non_rtti_object@std@@UAE@XZ(ptr) __non_rtti_object_dtor
 @ cdecl -arch=win64 ??1__non_rtti_object@std@@UEAA@XZ(ptr) __non_rtti_object_dtor
+@ cdecl -arch=arm ??1bad_cast@std@@UAA@XZ(ptr) bad_cast_dtor
 @ thiscall -arch=i386 ??1bad_cast@std@@UAE@XZ(ptr) bad_cast_dtor
 @ cdecl -arch=win64 ??1bad_cast@std@@UEAA@XZ(ptr) bad_cast_dtor
+@ cdecl -arch=arm ??1bad_typeid@std@@UAA@XZ(ptr) bad_typeid_dtor
 @ thiscall -arch=i386 ??1bad_typeid@std@@UAE@XZ(ptr) bad_typeid_dtor
 @ cdecl -arch=win64 ??1bad_typeid@std@@UEAA@XZ(ptr) bad_typeid_dtor
+@ cdecl -arch=arm ??1exception@std@@UAA@XZ(ptr) exception_dtor
 @ thiscall -arch=i386 ??1exception@std@@UAE@XZ(ptr) exception_dtor
 @ cdecl -arch=win64 ??1exception@std@@UEAA@XZ(ptr) exception_dtor
 @ cdecl -arch=arm ??1type_info@@UAA@XZ(ptr) type_info_dtor
@@ -37,12 +50,16 @@
 @ cdecl -arch=win64 ??2@YAPEAX_KHPEBDH@Z(long long str long) operator_new_dbg
 @ cdecl -arch=win32 ??3@YAXPAX@Z(ptr) operator_delete
 @ cdecl -arch=win64 ??3@YAXPEAX@Z(ptr) operator_delete
+@ cdecl -arch=arm ??4__non_rtti_object@std@@QAAAAV01@ABV01@@Z(ptr ptr) __non_rtti_object_opequals
 @ thiscall -arch=i386 ??4__non_rtti_object@std@@QAEAAV01@ABV01@@Z(ptr ptr) __non_rtti_object_opequals
 @ cdecl -arch=win64 ??4__non_rtti_object@std@@QEAAAEAV01@AEBV01@@Z(ptr ptr) __non_rtti_object_opequals
+@ cdecl -arch=arm ??4bad_cast@std@@QAAAAV01@ABV01@@Z(ptr ptr) bad_cast_opequals
 @ thiscall -arch=i386 ??4bad_cast@std@@QAEAAV01@ABV01@@Z(ptr ptr) bad_cast_opequals
 @ cdecl -arch=win64 ??4bad_cast@std@@QEAAAEAV01@AEBV01@@Z(ptr ptr) bad_cast_opequals
+@ cdecl -arch=arm ??4bad_typeid@std@@QAAAAV01@ABV01@@Z(ptr ptr) bad_typeid_opequals
 @ thiscall -arch=i386 ??4bad_typeid@std@@QAEAAV01@ABV01@@Z(ptr ptr) bad_typeid_opequals
 @ cdecl -arch=win64 ??4bad_typeid@std@@QEAAAEAV01@AEBV01@@Z(ptr ptr) bad_typeid_opequals
+@ cdecl -arch=arm ??4exception@std@@QAAAAV01@ABV01@@Z(ptr ptr) exception_opequals
 @ thiscall -arch=i386 ??4exception@std@@QAEAAV01@ABV01@@Z(ptr ptr) exception_opequals
 @ cdecl -arch=win64 ??4exception@std@@QEAAAEAV01@AEBV01@@Z(ptr ptr) exception_opequals
 @ cdecl -arch=arm ??8type_info@@QBA_NABV0@@Z(ptr ptr) type_info_opequals_equals
@@ -56,8 +73,10 @@
 @ extern ??_7bad_typeid@std@@6B@ bad_typeid_vtable
 @ extern ??_7exception@@6B@ exception_old_vtable
 @ extern ??_7exception@std@@6B@ exception_vtable
+@ cdecl -arch=arm ??_Fbad_cast@std@@QAAXXZ(ptr) bad_cast_default_ctor
 @ thiscall -arch=i386 ??_Fbad_cast@std@@QAEXXZ(ptr) bad_cast_default_ctor
 @ cdecl -arch=win64 ??_Fbad_cast@std@@QEAAXXZ(ptr) bad_cast_default_ctor
+@ cdecl -arch=arm ??_Fbad_typeid@std@@QAAXXZ(ptr) bad_typeid_default_ctor
 @ thiscall -arch=i386 ??_Fbad_typeid@std@@QAEXXZ(ptr) bad_typeid_default_ctor
 @ cdecl -arch=win64 ??_Fbad_typeid@std@@QEAAXXZ(ptr) bad_typeid_default_ctor
 @ cdecl -arch=win32 ??_U@YAPAXI@Z(long) operator_new
@@ -105,15 +124,18 @@
 @ cdecl -arch=win64 ?_set_se_translator@@YAP6AXIPEAU_EXCEPTION_POINTERS@@@ZP6AXI0@Z@Z(ptr) _set_se_translator
 @ cdecl -arch=win32 ?_sopen@@YAHPBDHHH@Z(str long long long) _sopen
 @ cdecl -arch=win64 ?_sopen@@YAHPEBDHHH@Z(str long long long) _sopen
-@ stub -arch=win32 ?_type_info_dtor_internal_method@type_info@@QAEXXZ  # public: void __thiscall type_info::_type_info_dtor_internal_method(void)
+@ stub -arch=arm ?_type_info_dtor_internal_method@type_info@@QAAXXZ
+@ stub -arch=i386 ?_type_info_dtor_internal_method@type_info@@QAEXXZ  # public: void __thiscall type_info::_type_info_dtor_internal_method(void)
 @ stub -arch=win64 ?_type_info_dtor_internal_method@type_info@@QEAAXXZ  # public: void __cdecl type_info::_type_info_dtor_internal_method(void) __ptr64
 @ cdecl -arch=win32 ?_wopen@@YAHPB_WHH@Z(wstr long long) _wopen
 @ cdecl -arch=win64 ?_wopen@@YAHPEB_WHH@Z(wstr long long) _wopen
 @ cdecl -arch=win32 ?_wsopen@@YAHPB_WHHH@Z(wstr long long long) _wsopen
 @ cdecl -arch=win64 ?_wsopen@@YAHPEB_WHHH@Z(wstr long long long) _wsopen
+@ cdecl -arch=arm ?before@type_info@@QBAHABV1@@Z(ptr ptr) type_info_before
 @ thiscall -arch=i386 ?before@type_info@@QBEHABV1@@Z(ptr ptr) type_info_before
 @ cdecl -arch=win64 ?before@type_info@@QEBAHAEBV1@@Z(ptr ptr) type_info_before
-@ thiscall -arch=win32 ?name@type_info@@QBEPBDPAU__type_info_node@@@Z(ptr ptr) type_info_name_internal_method
+@ cdecl -arch=arm ?name@type_info@@QBAPBDPAU__type_info_node@@@Z(ptr ptr) type_info_name_internal_method
+@ thiscall -arch=i386 ?name@type_info@@QBEPBDPAU__type_info_node@@@Z(ptr ptr) type_info_name_internal_method
 @ cdecl -arch=win64 ?name@type_info@@QEBAPEBDPEAU__type_info_node@@@Z(ptr ptr) type_info_name_internal_method
 @ cdecl -arch=arm ?raw_name@type_info@@QBAPBDXZ(ptr) type_info_raw_name
 @ thiscall -arch=i386 ?raw_name@type_info@@QBEPBDXZ(ptr) type_info_raw_name
@@ -128,6 +150,7 @@
 @ cdecl ?terminate@@YAXXZ() terminate
 @ cdecl ?unexpected@@YAXXZ() unexpected
 @ cdecl ?vswprintf@@YAHPA_WIPB_WPAD@Z(ptr long wstr ptr) _vsnwprintf
+@ cdecl -arch=arm ?what@exception@std@@UBAPBDXZ(ptr) exception_what
 @ thiscall -arch=i386 ?what@exception@std@@UBEPBDXZ(ptr) exception_what
 @ cdecl -arch=win64 ?what@exception@std@@UEBAPEBDXZ(ptr) exception_what
 @ stub @_calloc_crt@8
@@ -175,19 +198,19 @@
 @ cdecl __AdjustPointer(ptr ptr)
 @ stub __BuildCatchObject
 @ stub __BuildCatchObjectHelper
-@ stdcall -arch=x86_64 __C_specific_handler(ptr long ptr ptr) ntdll.__C_specific_handler
-@ cdecl -arch=i386,x86_64,arm,arm64 __CppXcptFilter(long ptr)
+@ stdcall -arch=!i386 __C_specific_handler(ptr long ptr ptr) ntdll.__C_specific_handler
+@ cdecl __CppXcptFilter(long ptr)
 @ stub __CxxCallUnwindDelDtor
 @ stub __CxxCallUnwindDtor
 @ stub __CxxCallUnwindStdDelDtor
 @ stub __CxxCallUnwindVecDtor
-@ cdecl -arch=i386,x86_64,arm,arm64 __CxxDetectRethrow(ptr)
-@ cdecl -arch=i386,x86_64,arm,arm64 __CxxExceptionFilter(ptr ptr long ptr)
-@ cdecl -arch=i386,x86_64,arm,arm64 -norelay __CxxFrameHandler(ptr ptr ptr ptr)
-@ cdecl -arch=i386,x86_64,arm,arm64 -norelay __CxxFrameHandler2(ptr ptr ptr ptr) __CxxFrameHandler
-@ cdecl -arch=i386,x86_64,arm,arm64 -norelay __CxxFrameHandler3(ptr ptr ptr ptr) __CxxFrameHandler
+@ cdecl __CxxDetectRethrow(ptr)
+@ cdecl __CxxExceptionFilter(ptr ptr long ptr)
+@ cdecl -norelay __CxxFrameHandler(ptr ptr ptr ptr)
+@ cdecl -norelay __CxxFrameHandler2(ptr ptr ptr ptr) __CxxFrameHandler
+@ cdecl -norelay __CxxFrameHandler3(ptr ptr ptr ptr) __CxxFrameHandler
 @ stdcall -arch=i386 __CxxLongjmpUnwind(ptr)
-@ cdecl -arch=i386,x86_64,arm,arm64 __CxxQueryExceptionSize()
+@ cdecl __CxxQueryExceptionSize()
 @ cdecl __CxxRegisterExceptionObject(ptr ptr)
 @ cdecl __CxxUnregisterExceptionObject(ptr long)
 @ cdecl __DestructExceptionObject(ptr)
@@ -237,8 +260,8 @@
 @ cdecl __isascii(long)
 @ cdecl __iscsym(long)
 @ cdecl __iscsymf(long)
-@ stub __iswcsym
-@ stub __iswcsymf
+@ cdecl __iswcsym(long)
+@ cdecl __iswcsymf(long)
 # extern __lc_clike
 @ extern __lc_codepage MSVCRT___lc_codepage
 @ extern __lc_collate_cp MSVCRT___lc_collate_cp
@@ -397,10 +420,10 @@
 @ cdecl _control87(long long)
 @ cdecl _controlfp(long long)
 @ cdecl _controlfp_s(ptr long long)
-@ cdecl _copysign(double double)
-@ cdecl -arch=!i386 _copysignf(float float)
+@ cdecl _copysign(double double) copysign
+@ cdecl -arch=!i386 _copysignf(float float) copysignf
 @ varargs _cprintf(str)
-@ stub _cprintf_l
+@ varargs _cprintf_l(str ptr)
 @ stub _cprintf_p
 @ stub _cprintf_p_l
 @ stub _cprintf_s
@@ -421,7 +444,7 @@
 @ cdecl _ctime64_s(str long ptr)
 @ cdecl _cwait(ptr long long)
 @ varargs _cwprintf(wstr)
-@ stub _cwprintf_l
+@ varargs _cwprintf_l(wstr ptr)
 @ stub _cwprintf_p
 @ stub _cwprintf_p_l
 @ stub _cwprintf_s
@@ -491,12 +514,12 @@
 @ extern _fmode MSVCRT__fmode
 @ cdecl _fpclass(double)
 @ cdecl -arch=!i386 _fpclassf(float)
-@ cdecl -arch=i386,x86_64,arm,arm64 _fpieee_flt(long ptr ptr)
+@ cdecl _fpieee_flt(long ptr ptr)
 @ cdecl _fpreset()
-@ stub _fprintf_l
-@ stub _fprintf_p
-@ stub _fprintf_p_l
-@ stub _fprintf_s_l
+@ varargs _fprintf_l(ptr str ptr)
+@ varargs _fprintf_p(ptr str)
+@ varargs _fprintf_p_l(ptr str ptr)
+@ varargs _fprintf_s_l(ptr str ptr)
 @ cdecl _fputc_nolock(long ptr)
 @ cdecl _fputchar(long)
 @ cdecl _fputwc_nolock(long ptr)
@@ -529,9 +552,9 @@
 @ cdecl _futime32(long ptr)
 @ cdecl _futime64(long ptr)
 @ varargs _fwprintf_l(ptr wstr ptr)
-@ stub _fwprintf_p
-@ stub _fwprintf_p_l
-@ stub _fwprintf_s_l
+@ varargs _fwprintf_p(ptr wstr)
+@ varargs _fwprintf_p_l(ptr wstr ptr)
+@ varargs _fwprintf_s_l(ptr wstr ptr)
 @ cdecl _fwrite_nolock(ptr long long ptr)
 @ varargs _fwscanf_l(ptr wstr ptr)
 @ varargs _fwscanf_s_l(ptr wstr ptr)
@@ -655,9 +678,9 @@
 @ cdecl _ismbcgraph(long)
 @ cdecl _ismbcgraph_l(long ptr)
 @ cdecl _ismbchira(long)
-@ stub _ismbchira_l
+@ cdecl _ismbchira_l(long ptr)
 @ cdecl _ismbckata(long)
-@ stub _ismbckata_l
+@ cdecl _ismbckata_l(long ptr)
 @ cdecl _ismbcl0(long)
 @ cdecl _ismbcl0_l(long ptr)
 @ cdecl _ismbcl1(long)
@@ -675,13 +698,13 @@
 @ cdecl _ismbcspace(long)
 @ cdecl _ismbcspace_l(long ptr)
 @ cdecl _ismbcsymbol(long)
-@ stub _ismbcsymbol_l
+@ cdecl _ismbcsymbol_l(long ptr)
 @ cdecl _ismbcupper(long)
 @ cdecl _ismbcupper_l(long ptr)
 @ cdecl _ismbslead(ptr ptr)
-@ stub _ismbslead_l
+@ cdecl _ismbslead_l(ptr ptr ptr)
 @ cdecl _ismbstrail(ptr ptr)
-@ stub _ismbstrail_l
+@ cdecl _ismbstrail_l(ptr ptr ptr)
 @ cdecl _isnan(double)
 @ cdecl -arch=x86_64 _isnanf(float)
 @ cdecl _isprint_l(long ptr)
@@ -714,7 +737,7 @@
 @ cdecl _lfind(ptr ptr ptr long ptr)
 @ cdecl _lfind_s(ptr ptr ptr long ptr ptr)
 @ cdecl _loaddll(str)
-@ cdecl -arch=x86_64 _local_unwind(ptr ptr)
+@ cdecl -arch=win64 _local_unwind(ptr ptr)
 @ cdecl -arch=i386 _local_unwind2(ptr long)
 @ cdecl -arch=i386 _local_unwind4(ptr ptr long)
 @ cdecl _localtime32(ptr)
@@ -724,9 +747,9 @@
 @ cdecl _lock(long)
 @ cdecl _lock_file(ptr)
 @ cdecl _locking(long long long)
-@ cdecl _logb(double)
-@ cdecl -arch=!i386 _logbf(float)
-@ cdecl -arch=i386 _longjmpex(ptr long) MSVCRT_longjmp
+@ cdecl _logb(double) logb
+@ cdecl -arch=!i386 _logbf(float) logbf
+@ cdecl -arch=i386 _longjmpex(ptr long) longjmp
 @ cdecl _lrotl(long long) MSVCRT__lrotl
 @ cdecl _lrotr(long long) MSVCRT__lrotr
 @ cdecl _lsearch(ptr ptr ptr long ptr)
@@ -741,7 +764,7 @@
 @ cdecl _makepath_s(ptr long str str str str)
 @ cdecl _malloc_crt(long) malloc
 @ cdecl _mbbtombc(long)
-@ stub _mbbtombc_l
+@ cdecl _mbbtombc_l(long ptr)
 @ cdecl _mbbtype(long long)
 @ cdecl _mbbtype_l(long long ptr)
 # extern _mbcasemap
@@ -750,29 +773,29 @@
 @ cdecl _mbccpy_s(ptr long ptr ptr)
 @ cdecl _mbccpy_s_l(ptr long ptr ptr ptr)
 @ cdecl _mbcjistojms(long)
-@ stub _mbcjistojms_l
+@ cdecl _mbcjistojms_l(long ptr)
 @ cdecl _mbcjmstojis(long)
-@ stub _mbcjmstojis_l
+@ cdecl _mbcjmstojis_l(long ptr)
 @ cdecl _mbclen(ptr)
-@ stub _mbclen_l
+@ cdecl _mbclen_l(ptr ptr)
 @ cdecl _mbctohira(long)
-@ stub _mbctohira_l
+@ cdecl _mbctohira_l(long ptr)
 @ cdecl _mbctokata(long)
-@ stub _mbctokata_l
+@ cdecl _mbctokata_l(long ptr)
 @ cdecl _mbctolower(long)
-@ stub _mbctolower_l
+@ cdecl _mbctolower_l(long ptr)
 @ cdecl _mbctombb(long)
-@ stub _mbctombb_l
+@ cdecl _mbctombb_l(long ptr)
 @ cdecl _mbctoupper(long)
-@ stub _mbctoupper_l
+@ cdecl _mbctoupper_l(long ptr)
 @ extern _mbctype MSVCRT_mbctype
-@ stub _mblen_l
+@ cdecl _mblen_l(str long ptr)
 @ cdecl _mbsbtype(str long)
-@ stub _mbsbtype_l
+@ cdecl _mbsbtype_l(str long ptr)
 @ cdecl _mbscat_s(ptr long str)
 @ cdecl _mbscat_s_l(ptr long str ptr)
 @ cdecl _mbschr(str long)
-@ stub _mbschr_l
+@ cdecl _mbschr_l(str long ptr)
 @ cdecl _mbscmp(str str)
 @ cdecl _mbscmp_l(str str ptr)
 @ cdecl _mbscoll(str str)
@@ -782,59 +805,59 @@
 @ cdecl _mbscspn(str str)
 @ cdecl _mbscspn_l(str str ptr)
 @ cdecl _mbsdec(ptr ptr)
-@ stub _mbsdec_l
+@ cdecl _mbsdec_l(ptr ptr ptr)
 @ cdecl _mbsicmp(str str)
-@ stub _mbsicmp_l
+@ cdecl _mbsicmp_l(str str ptr)
 @ cdecl _mbsicoll(str str)
 @ cdecl _mbsicoll_l(str str ptr)
 @ cdecl _mbsinc(str)
-@ stub _mbsinc_l
+@ cdecl _mbsinc_l(str ptr)
 @ cdecl _mbslen(str)
 @ cdecl _mbslen_l(str ptr)
 @ cdecl _mbslwr(str)
-@ stub _mbslwr_l
+@ cdecl _mbslwr_l(str ptr)
 @ cdecl _mbslwr_s(str long)
-@ stub _mbslwr_s_l
+@ cdecl _mbslwr_s_l(str long ptr)
 @ cdecl _mbsnbcat(str str long)
-@ stub _mbsnbcat_l
+@ cdecl _mbsnbcat_l(str str long ptr)
 @ cdecl _mbsnbcat_s(str long ptr long)
-@ stub _mbsnbcat_s_l
+@ cdecl _mbsnbcat_s_l(str long ptr long ptr)
 @ cdecl _mbsnbcmp(str str long)
-@ stub _mbsnbcmp_l
+@ cdecl _mbsnbcmp_l(str str long ptr)
 @ cdecl _mbsnbcnt(ptr long)
-@ stub _mbsnbcnt_l
+@ cdecl _mbsnbcnt_l(ptr long ptr)
 @ cdecl _mbsnbcoll(str str long)
 @ cdecl _mbsnbcoll_l(str str long ptr)
 @ cdecl _mbsnbcpy(ptr str long)
-@ stub _mbsnbcpy_l
+@ cdecl _mbsnbcpy_l(ptr str long ptr)
 @ cdecl _mbsnbcpy_s(ptr long str long)
 @ cdecl _mbsnbcpy_s_l(ptr long str long ptr)
 @ cdecl _mbsnbicmp(str str long)
-@ stub _mbsnbicmp_l
+@ cdecl _mbsnbicmp_l(str str long ptr)
 @ cdecl _mbsnbicoll(str str long)
 @ cdecl _mbsnbicoll_l(str str long ptr)
 @ cdecl _mbsnbset(ptr long long)
-@ stub _mbsnbset_l
+@ cdecl _mbsnbset_l(str long long ptr)
 @ stub _mbsnbset_s
 @ stub _mbsnbset_s_l
 @ cdecl _mbsncat(str str long)
-@ stub _mbsncat_l
+@ cdecl _mbsncat_l(str str long ptr)
 @ stub _mbsncat_s
 @ stub _mbsncat_s_l
 @ cdecl _mbsnccnt(str long)
-@ stub _mbsnccnt_l
+@ cdecl _mbsnccnt_l(str long ptr)
 @ cdecl _mbsncmp(str str long)
-@ stub _mbsncmp_l
+@ cdecl _mbsncmp_l(str str long ptr)
 @ stub _mbsncoll(str str long)
 @ stub _mbsncoll_l
 @ cdecl _mbsncpy(ptr str long)
-@ stub _mbsncpy_l
-@ stub _mbsncpy_s
-@ stub _mbsncpy_s_l
+@ cdecl _mbsncpy_l(ptr str long ptr)
+@ cdecl _mbsncpy_s(ptr long str long)
+@ cdecl _mbsncpy_s_l(ptr long str long ptr)
 @ cdecl _mbsnextc(str)
 @ cdecl _mbsnextc_l(str ptr)
 @ cdecl _mbsnicmp(str str long)
-@ stub _mbsnicmp_l
+@ cdecl _mbsnicmp_l(str str long ptr)
 @ stub _mbsnicoll(str str long)
 @ stub _mbsnicoll_l
 @ cdecl _mbsninc(str long)
@@ -842,23 +865,23 @@
 @ cdecl _mbsnlen(str long)
 @ cdecl _mbsnlen_l(str long ptr)
 @ cdecl _mbsnset(ptr long long)
-@ stub _mbsnset_l
+@ cdecl _mbsnset_l(ptr long long ptr)
 @ stub _mbsnset_s
 @ stub _mbsnset_s_l
 @ cdecl _mbspbrk(str str)
-@ stub _mbspbrk_l
+@ cdecl _mbspbrk_l(str str ptr)
 @ cdecl _mbsrchr(str long)
-@ stub _mbsrchr_l
+@ cdecl _mbsrchr_l(str long ptr)
 @ cdecl _mbsrev(str)
-@ stub _mbsrev_l
+@ cdecl _mbsrev_l(str ptr)
 @ cdecl _mbsset(ptr long)
-@ stub _mbsset_l
+@ cdecl _mbsset_l(ptr long ptr)
 @ stub _mbsset_s
 @ stub _mbsset_s_l
 @ cdecl _mbsspn(str str)
 @ cdecl _mbsspn_l(str str ptr)
 @ cdecl _mbsspnp(str str)
-@ stub _mbsspnp_l
+@ cdecl _mbsspnp_l(str str ptr)
 @ cdecl _mbsstr(str str)
 @ stub _mbsstr_l
 @ cdecl _mbstok(str str)
@@ -872,9 +895,9 @@
 @ stub _mbstrnlen
 @ stub _mbstrnlen_l
 @ cdecl _mbsupr(str)
-@ stub _mbsupr_l
+@ cdecl _mbsupr_l(str ptr)
 @ cdecl _mbsupr_s(str long)
-@ stub _mbsupr_s_l
+@ cdecl _mbsupr_s_l(str long ptr)
 @ cdecl _mbtowc_l(ptr str long ptr)
 @ cdecl _memccpy(ptr ptr long long)
 @ cdecl _memicmp(str str long)
@@ -887,8 +910,8 @@
 @ cdecl _mktime32(ptr)
 @ cdecl _mktime64(ptr)
 @ cdecl _msize(ptr)
-@ cdecl _nextafter(double double)
-@ cdecl -arch=x86_64 _nextafterf(float float)
+@ cdecl _nextafter(double double) nextafter
+@ cdecl -arch=x86_64 _nextafterf(float float) nextafterf
 @ cdecl _onexit(ptr)
 @ varargs _open(str long)
 @ cdecl _open_osfhandle(long long)
@@ -938,13 +961,13 @@
 @ varargs _scanf_l(str ptr)
 @ varargs _scanf_s_l(str ptr)
 @ varargs _scprintf(str)
-@ stub _scprintf_l
-@ stub _scprintf_p
-@ stub _scprintf_p_l
+@ varargs _scprintf_l(str ptr)
+@ varargs _scprintf_p(str)
+@ varargs _scprintf_p_l(str ptr)
 @ varargs _scwprintf(wstr)
-@ stub _scwprintf_l
-@ stub _scwprintf_p
-@ stub _scwprintf_p_l
+@ varargs _scwprintf_l(wstr ptr)
+@ varargs _scwprintf_p(wstr)
+@ varargs _scwprintf_p_l(wstr ptr)
 @ cdecl _searchenv(str str ptr)
 @ cdecl _searchenv_s(str str ptr long)
 @ stdcall -arch=i386 _seh_longjmp_unwind4(ptr)
@@ -964,9 +987,9 @@
 @ cdecl _set_purecall_handler(ptr)
 @ cdecl _set_sbh_threshold(long)
 @ cdecl _seterrormode(long)
-@ cdecl -arch=i386,x86_64,arm,arm64 -norelay _setjmp(ptr) MSVCRT__setjmp
-@ cdecl -arch=i386 -norelay _setjmp3(ptr long) MSVCRT__setjmp3
-@ cdecl -arch=x86_64,arm -norelay _setjmpex(ptr ptr) __wine_setjmpex
+@ cdecl -norelay _setjmp(ptr)
+@ cdecl -arch=i386 -norelay _setjmp3(ptr long)
+@ cdecl -arch=!i386 -norelay _setjmpex(ptr ptr)
 @ cdecl _setmaxstdio(long)
 @ cdecl _setmbcp(long)
 @ cdecl _setmode(long long)
@@ -1058,7 +1081,7 @@
 @ varargs _swprintf(ptr wstr)
 @ varargs _swprintf_c(ptr long str)
 @ varargs _swprintf_c_l(ptr long str ptr)
-@ stub _swprintf_p
+@ varargs _swprintf_p(ptr long wstr)
 @ varargs _swprintf_p_l(ptr long wstr ptr)
 @ varargs _swprintf_s_l(ptr long wstr ptr)
 @ varargs _swscanf_l(wstr wstr ptr)
@@ -1102,13 +1125,13 @@
 @ cdecl _utime32(str ptr)
 @ cdecl _utime64(str ptr)
 @ cdecl _vcprintf(str ptr)
-@ stub _vcprintf_l
+@ cdecl _vcprintf_l(str ptr ptr)
 @ stub _vcprintf_p
 @ stub _vcprintf_p_l
 @ stub _vcprintf_s
 @ stub _vcprintf_s_l
 @ cdecl _vcwprintf(wstr ptr)
-@ stub _vcwprintf_l
+@ cdecl _vcwprintf_l(wstr ptr ptr)
 @ stub _vcwprintf_p
 @ stub _vcwprintf_p_l
 @ stub _vcwprintf_s
@@ -1313,7 +1336,7 @@
 @ cdecl -arch=!i386 acosf(float)
 @ cdecl asctime(ptr)
 @ cdecl asctime_s(ptr long ptr)
-@ cdecl asin(double)
+@ cdecl asin(double) MSVCRT_asin
 @ cdecl -arch=!i386 asinf(float)
 @ cdecl atan(double)
 @ cdecl -arch=!i386 atanf(float)
@@ -1420,7 +1443,7 @@
 @ cdecl -arch=!i386 logf(float)
 @ cdecl log10(double)
 @ cdecl -arch=!i386 log10f(float)
-@ cdecl -arch=i386,x86_64,arm,arm64 longjmp(ptr long) MSVCRT_longjmp
+@ cdecl longjmp(ptr long)
 @ cdecl malloc(long)
 @ cdecl mblen(ptr long)
 @ cdecl mbrlen(ptr long ptr)
@@ -1461,7 +1484,7 @@
 @ varargs scanf(str)
 @ varargs scanf_s(str)
 @ cdecl setbuf(ptr ptr)
-@ cdecl -arch=arm,x86_64 -norelay -private setjmp(ptr) MSVCRT__setjmp
+@ cdecl -arch=arm,x86_64 -norelay -private setjmp(ptr ptr) _setjmp
 @ cdecl setlocale(long str)
 @ cdecl setvbuf(ptr str long long)
 @ cdecl signal(long long)
@@ -1471,8 +1494,8 @@
 @ cdecl -arch=!i386 sinhf(float)
 @ varargs sprintf(ptr str)
 @ varargs sprintf_s(ptr long str)
-@ cdecl sqrt(double)
-@ cdecl -arch=!i386 sqrtf(float)
+@ cdecl sqrt(double) MSVCRT_sqrt
+@ cdecl -arch=!i386 sqrtf(float) MSVCRT_sqrtf
 @ cdecl srand(long)
 @ varargs sscanf(str str)
 @ varargs sscanf_s(str str)
@@ -1510,8 +1533,8 @@
 @ cdecl system(str)
 @ cdecl tan(double)
 @ cdecl -arch=!i386 tanf(float)
-@ cdecl tanh(double)
-@ cdecl -arch=!i386 tanhf(float)
+@ cdecl tanh(double) MSVCRT_tanh
+@ cdecl -arch=!i386 tanhf(float) MSVCRT_tanhf
 @ cdecl tmpfile()
 @ cdecl tmpfile_s(ptr)
 @ cdecl tmpnam(ptr)

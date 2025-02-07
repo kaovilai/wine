@@ -32,13 +32,6 @@ enum name_type {
     NAME_C
 };
 
-attr_list_t *check_apicontract_attrs(const char *name, attr_list_t *attrs);
-attr_list_t *check_coclass_attrs(const char *name, attr_list_t *attrs);
-attr_list_t *check_dispiface_attrs(const char *name, attr_list_t *attrs);
-attr_list_t *check_interface_attrs(const char *name, attr_list_t *attrs);
-attr_list_t *check_module_attrs(const char *name, attr_list_t *attrs);
-attr_list_t *check_runtimeclass_attrs(const char *name, attr_list_t *attrs);
-
 type_t *find_parameterized_type(type_t *type, typeref_list_t *params);
 
 type_t *type_new_function(var_list_t *args);
@@ -51,28 +44,41 @@ type_t *type_new_basic(enum type_basic_type basic_type);
 type_t *type_new_int(enum type_basic_type basic_type, int sign);
 type_t *type_new_void(void);
 type_t *type_coclass_declare(char *name);
-type_t *type_new_enum(const char *name, struct namespace *namespace, int defined, var_list_t *enums);
-type_t *type_new_struct(char *name, struct namespace *namespace, int defined, var_list_t *fields);
-type_t *type_new_nonencapsulated_union(const char *name, int defined, var_list_t *fields);
-type_t *type_new_encapsulated_union(char *name, var_t *switch_field, var_t *union_field, var_list_t *cases);
+type_t *type_new_enum(const char *name, struct namespace *namespace,
+        int defined, var_list_t *enums, const struct location *where);
+type_t *type_new_struct(char *name, struct namespace *namespace,
+        int defined, var_list_t *fields, const struct location *where);
+type_t *type_new_nonencapsulated_union(const char *name, struct namespace *namespace,
+        int defined, var_list_t *fields, const struct location *where);
+type_t *type_new_encapsulated_union(char *name, var_t *switch_field,
+        var_t *union_field, var_list_t *cases, const struct location *where);
 type_t *type_new_bitfield(type_t *field_type, const expr_t *bits);
 type_t *type_runtimeclass_declare(char *name, struct namespace *namespace);
 type_t *type_interface_declare(char *name, struct namespace *namespace);
-type_t *type_interface_define(type_t *iface, attr_list_t *attrs, type_t *inherit, statement_list_t *stmts, typeref_list_t *requires);
+type_t *type_interface_define(type_t *iface, attr_list_t *attrs, type_t *inherit,
+        statement_list_t *stmts, typeref_list_t *requires, const struct location *where);
 type_t *type_dispinterface_declare(char *name);
-type_t *type_dispinterface_define(type_t *iface, attr_list_t *attrs, var_list_t *props, var_list_t *methods);
-type_t *type_dispinterface_define_from_iface(type_t *dispiface, attr_list_t *attrs, type_t *iface);
-type_t *type_module_define(type_t* module, attr_list_t *attrs, statement_list_t *stmts);
-type_t *type_coclass_define(type_t *coclass, attr_list_t *attrs, typeref_list_t *ifaces);
-type_t *type_runtimeclass_define(type_t *runtimeclass, attr_list_t *attrs, typeref_list_t *ifaces);
+type_t *type_dispinterface_define(type_t *iface, attr_list_t *attrs,
+        var_list_t *props, var_list_t *methods, const struct location *where);
+type_t *type_dispinterface_define_from_iface(type_t *dispiface,
+        attr_list_t *attrs, type_t *iface, const struct location *where);
+type_t *type_module_define(type_t* module, attr_list_t *attrs,
+        statement_list_t *stmts, const struct location *where);
+type_t *type_coclass_define(type_t *coclass, attr_list_t *attrs,
+        typeref_list_t *ifaces, const struct location *where);
+type_t *type_runtimeclass_define(type_t *runtimeclass, attr_list_t *attrs,
+        typeref_list_t *ifaces, const struct location *where);
 type_t *type_apicontract_declare(char *name, struct namespace *namespace);
-type_t *type_apicontract_define(type_t *apicontract, attr_list_t *attrs);
+type_t *type_apicontract_define(type_t *apicontract, attr_list_t *attrs, const struct location *where);
 type_t *type_delegate_declare(char *name, struct namespace *namespace);
-type_t *type_delegate_define(type_t *delegate, attr_list_t *attrs, statement_list_t *stmts);
+type_t *type_delegate_define(type_t *delegate, attr_list_t *attrs,
+        statement_list_t *stmts, const struct location *where);
 type_t *type_parameterized_interface_declare(char *name, struct namespace *namespace, typeref_list_t *params);
-type_t *type_parameterized_interface_define(type_t *type, attr_list_t *attrs, type_t *inherit, statement_list_t *stmts, typeref_list_t *requires);
+type_t *type_parameterized_interface_define(type_t *type, attr_list_t *attrs, type_t *inherit,
+        statement_list_t *stmts, typeref_list_t *requires, const struct location *where);
 type_t *type_parameterized_delegate_declare(char *name, struct namespace *namespace, typeref_list_t *params);
-type_t *type_parameterized_delegate_define(type_t *type, attr_list_t *attrs, statement_list_t *stmts);
+type_t *type_parameterized_delegate_define(type_t *type, attr_list_t *attrs,
+        statement_list_t *stmts, const struct location *where);
 type_t *type_parameterized_type_specialize_partial(type_t *type, typeref_list_t *params);
 type_t *type_parameterized_type_specialize_declare(type_t *type, typeref_list_t *params);
 type_t *type_parameterized_type_specialize_define(type_t *type);
@@ -80,12 +86,9 @@ int type_is_equal(const type_t *type1, const type_t *type2);
 const char *type_get_decl_name(const type_t *type, enum name_type name_type);
 const char *type_get_name(const type_t *type, enum name_type name_type);
 char *gen_name(void);
-extern int is_attr(const attr_list_t *list, enum attr_type t);
 
 typeref_t *make_typeref(type_t *type);
 typeref_list_t *append_typeref(typeref_list_t *list, typeref_t *ref);
-attr_t *make_attrp(enum attr_type type, void *val);
-attr_list_t *append_attr(attr_list_t *list, attr_t *attr);
 
 /* FIXME: shouldn't need to export this */
 type_t *duptype(type_t *t, int dupname);
@@ -356,6 +359,11 @@ static inline int type_is_alias(const type_t *type)
     return type->type_type == TYPE_ALIAS;
 }
 
+static inline int type_is_ptr( const type_t *type )
+{
+    return type->type_type == TYPE_POINTER;
+}
+
 static inline const decl_spec_t *type_alias_get_aliasee(const type_t *type)
 {
     assert(type_is_alias(type));
@@ -392,7 +400,7 @@ static inline type_t *type_runtimeclass_get_default_iface(const type_t *type, in
             return ref->type;
 
     if (!check) return NULL;
-    error_loc_info(&type->loc_info, "runtimeclass %s needs a default interface\n", type->name);
+    error_at( &type->where, "runtimeclass %s needs a default interface\n", type->name );
 }
 
 static inline type_t *type_delegate_get_iface(const type_t *type)

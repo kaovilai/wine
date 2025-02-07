@@ -48,11 +48,11 @@ void send_callback( struct object_header *hdr, DWORD status, void *info, DWORD b
 {
     if (hdr->callback && (hdr->notify_mask & status))
     {
-        TRACE("%p, 0x%08x, %p, %u, %u\n", hdr, status, info, buflen, hdr->recursion_count);
+        TRACE( "%p, %#lx, %p, %lu, %lu\n", hdr, status, info, buflen, hdr->recursion_count );
         InterlockedIncrement( &hdr->recursion_count );
         hdr->callback( hdr->handle, hdr->context, status, info, buflen );
         InterlockedDecrement( &hdr->recursion_count );
-        TRACE("returning from 0x%08x callback\n", status);
+        TRACE("returning from %#lx callback\n", status);
     }
 }
 
@@ -144,8 +144,22 @@ static BOOL session_query_option( struct object_header *hdr, DWORD option, void 
         *buflen = sizeof(DWORD);
         return TRUE;
 
+    case WINHTTP_OPTION_WEB_SOCKET_RECEIVE_BUFFER_SIZE:
+        if (!validate_buffer( buffer, buflen, sizeof(DWORD) )) return FALSE;
+
+        *(DWORD *)buffer = session->websocket_receive_buffer_size;
+        *buflen = sizeof(DWORD);
+        return TRUE;
+
+    case WINHTTP_OPTION_WEB_SOCKET_SEND_BUFFER_SIZE:
+        if (!validate_buffer( buffer, buflen, sizeof(DWORD) )) return FALSE;
+
+        *(DWORD *)buffer = session->websocket_send_buffer_size;
+        *buflen = sizeof(DWORD);
+        return TRUE;
+
     default:
-        FIXME("unimplemented option %u\n", option);
+        FIXME( "unimplemented option %lu\n", option );
         SetLastError( ERROR_INVALID_PARAMETER );
         return FALSE;
     }
@@ -161,7 +175,7 @@ static BOOL session_set_option( struct object_header *hdr, DWORD option, void *b
     {
         WINHTTP_PROXY_INFO *pi = buffer;
 
-        FIXME("%u %s %s\n", pi->dwAccessType, debugstr_w(pi->lpszProxy), debugstr_w(pi->lpszProxyBypass));
+        FIXME( "%lu %s %s\n", pi->dwAccessType, debugstr_w(pi->lpszProxy), debugstr_w(pi->lpszProxyBypass) );
         return TRUE;
     }
     case WINHTTP_OPTION_REDIRECT_POLICY:
@@ -175,7 +189,7 @@ static BOOL session_set_option( struct object_header *hdr, DWORD option, void *b
         }
 
         policy = *(DWORD *)buffer;
-        TRACE("0x%x\n", policy);
+        TRACE( "%#lx\n", policy );
         hdr->redirect_policy = policy;
         return TRUE;
     }
@@ -189,7 +203,7 @@ static BOOL session_set_option( struct object_header *hdr, DWORD option, void *b
         EnterCriticalSection( &session->cs );
         session->secure_protocols = *(DWORD *)buffer;
         LeaveCriticalSection( &session->cs );
-        TRACE("0x%x\n", session->secure_protocols);
+        TRACE( "%#lx\n", session->secure_protocols );
         return TRUE;
     }
     case WINHTTP_OPTION_DISABLE_FEATURE:
@@ -226,15 +240,47 @@ static BOOL session_set_option( struct object_header *hdr, DWORD option, void *b
         return TRUE;
 
     case WINHTTP_OPTION_MAX_CONNS_PER_SERVER:
-        FIXME("WINHTTP_OPTION_MAX_CONNS_PER_SERVER: %d\n", *(DWORD *)buffer);
+        FIXME( "WINHTTP_OPTION_MAX_CONNS_PER_SERVER: %lu\n", *(DWORD *)buffer );
         return TRUE;
 
     case WINHTTP_OPTION_MAX_CONNS_PER_1_0_SERVER:
-        FIXME("WINHTTP_OPTION_MAX_CONNS_PER_1_0_SERVER: %d\n", *(DWORD *)buffer);
+        FIXME( "WINHTTP_OPTION_MAX_CONNS_PER_1_0_SERVER: %lu\n", *(DWORD *)buffer );
         return TRUE;
 
+    case WINHTTP_OPTION_WEB_SOCKET_RECEIVE_BUFFER_SIZE:
+    {
+        DWORD buffer_size;
+
+        if (buflen != sizeof(buffer_size))
+        {
+            SetLastError( ERROR_INSUFFICIENT_BUFFER );
+            return FALSE;
+        }
+
+        buffer_size = *(DWORD *)buffer;
+        TRACE( "%#lx\n", buffer_size );
+        session->websocket_receive_buffer_size = buffer_size;
+        return TRUE;
+    }
+
+    case WINHTTP_OPTION_WEB_SOCKET_SEND_BUFFER_SIZE:
+    {
+        DWORD buffer_size;
+
+        if (buflen != sizeof(buffer_size))
+        {
+            SetLastError( ERROR_INSUFFICIENT_BUFFER );
+            return FALSE;
+        }
+
+        buffer_size = *(DWORD *)buffer;
+        TRACE( "%#lx\n", buffer_size );
+        session->websocket_send_buffer_size = buffer_size;
+        return TRUE;
+    }
+
     default:
-        FIXME("unimplemented option %u\n", option);
+        FIXME( "unimplemented option %lu\n", option );
         SetLastError( ERROR_WINHTTP_INVALID_OPTION );
         return FALSE;
     }
@@ -242,6 +288,7 @@ static BOOL session_set_option( struct object_header *hdr, DWORD option, void *b
 
 static const struct object_vtbl session_vtbl =
 {
+    NULL,
     session_destroy,
     session_query_option,
     session_set_option
@@ -255,7 +302,7 @@ HINTERNET WINAPI WinHttpOpen( LPCWSTR agent, DWORD access, LPCWSTR proxy, LPCWST
     struct session *session;
     HINTERNET handle = NULL;
 
-    TRACE("%s, %u, %s, %s, 0x%08x\n", debugstr_w(agent), access, debugstr_w(proxy), debugstr_w(bypass), flags);
+    TRACE( "%s, %lu, %s, %s, %#lx\n", debugstr_w(agent), access, debugstr_w(proxy), debugstr_w(bypass), flags );
 
     if (!(session = calloc( 1, sizeof(*session) ))) return NULL;
 
@@ -269,24 +316,26 @@ HINTERNET WINAPI WinHttpOpen( LPCWSTR agent, DWORD access, LPCWSTR proxy, LPCWST
     session->send_timeout = DEFAULT_SEND_TIMEOUT;
     session->receive_timeout = DEFAULT_RECEIVE_TIMEOUT;
     session->receive_response_timeout = DEFAULT_RECEIVE_RESPONSE_TIMEOUT;
+    session->websocket_receive_buffer_size = 32768;
+    session->websocket_send_buffer_size = 32768;
     list_init( &session->cookie_cache );
-    InitializeCriticalSection( &session->cs );
+    InitializeCriticalSectionEx( &session->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
     session->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": session.cs");
 
-    if (agent && !(session->agent = strdupW( agent ))) goto end;
+    if (agent && !(session->agent = wcsdup( agent ))) goto end;
     if (access == WINHTTP_ACCESS_TYPE_DEFAULT_PROXY)
     {
         WINHTTP_PROXY_INFO info;
 
         WinHttpGetDefaultProxyConfiguration( &info );
         session->access = info.dwAccessType;
-        if (info.lpszProxy && !(session->proxy_server = strdupW( info.lpszProxy )))
+        if (info.lpszProxy && !(session->proxy_server = wcsdup( info.lpszProxy )))
         {
             GlobalFree( info.lpszProxy );
             GlobalFree( info.lpszProxyBypass );
             goto end;
         }
-        if (info.lpszProxyBypass && !(session->proxy_bypass = strdupW( info.lpszProxyBypass )))
+        if (info.lpszProxyBypass && !(session->proxy_bypass = wcsdup( info.lpszProxyBypass )))
         {
             GlobalFree( info.lpszProxy );
             GlobalFree( info.lpszProxyBypass );
@@ -296,8 +345,8 @@ HINTERNET WINAPI WinHttpOpen( LPCWSTR agent, DWORD access, LPCWSTR proxy, LPCWST
     else if (access == WINHTTP_ACCESS_TYPE_NAMED_PROXY)
     {
         session->access = access;
-        if (proxy && !(session->proxy_server = strdupW( proxy ))) goto end;
-        if (bypass && !(session->proxy_bypass = strdupW( bypass ))) goto end;
+        if (proxy && !(session->proxy_server = wcsdup( proxy ))) goto end;
+        if (bypass && !(session->proxy_bypass = wcsdup( bypass ))) goto end;
     }
 
     handle = alloc_handle( &session->hdr );
@@ -334,7 +383,7 @@ static BOOL connect_query_option( struct object_header *hdr, DWORD option, void 
     {
         if (!validate_buffer( buffer, buflen, sizeof(HINTERNET) )) return FALSE;
 
-        *(HINTERNET *)buffer = ((struct object_header *)connect->session)->handle;
+        *(HINTERNET *)buffer = connect->session->hdr.handle;
         *buflen = sizeof(HINTERNET);
         return TRUE;
     }
@@ -374,7 +423,7 @@ static BOOL connect_query_option( struct object_header *hdr, DWORD option, void 
         return TRUE;
 
     default:
-        FIXME("unimplemented option %u\n", option);
+        FIXME( "unimplemented option %lu\n", option );
         SetLastError( ERROR_INVALID_PARAMETER );
         return FALSE;
     }
@@ -382,6 +431,7 @@ static BOOL connect_query_option( struct object_header *hdr, DWORD option, void 
 
 static const struct object_vtbl connect_vtbl =
 {
+    NULL,
     connect_destroy,
     connect_query_option,
     NULL
@@ -506,7 +556,7 @@ BOOL set_server_for_hostname( struct connect *connect, const WCHAR *server, INTE
             {
                 free( connect->servername );
                 connect->resolved = FALSE;
-                if (!(connect->servername = strdupW( session->proxy_server )))
+                if (!(connect->servername = wcsdup( session->proxy_server )))
                 {
                     ret = FALSE;
                     goto end;
@@ -519,7 +569,7 @@ BOOL set_server_for_hostname( struct connect *connect, const WCHAR *server, INTE
     {
         free( connect->servername );
         connect->resolved = FALSE;
-        if (!(connect->servername = strdupW( server )))
+        if (!(connect->servername = wcsdup( server )))
         {
             ret = FALSE;
             goto end;
@@ -533,13 +583,13 @@ end:
 /***********************************************************************
  *          WinHttpConnect (winhttp.@)
  */
-HINTERNET WINAPI WinHttpConnect( HINTERNET hsession, LPCWSTR server, INTERNET_PORT port, DWORD reserved )
+HINTERNET WINAPI WinHttpConnect( HINTERNET hsession, const WCHAR *server, INTERNET_PORT port, DWORD reserved )
 {
     struct connect *connect;
     struct session *session;
     HINTERNET hconnect = NULL;
 
-    TRACE("%p, %s, %u, %x\n", hsession, debugstr_w(server), port, reserved);
+    TRACE( "%p, %s, %u, %#lx\n", hsession, debugstr_w(server), port, reserved );
 
     if (!server)
     {
@@ -574,7 +624,7 @@ HINTERNET WINAPI WinHttpConnect( HINTERNET hsession, LPCWSTR server, INTERNET_PO
     addref_object( &session->hdr );
     connect->session = session;
 
-    if (!(connect->hostname = strdupW( server ))) goto end;
+    if (!(connect->hostname = wcsdup( server ))) goto end;
     connect->hostport = port;
     if (!set_server_for_hostname( connect, server, port )) goto end;
 
@@ -631,16 +681,24 @@ static void request_destroy( struct object_header *hdr )
     free( request );
 }
 
-static void str_to_buffer( WCHAR *buffer, const WCHAR *str, LPDWORD buflen )
+static BOOL return_string_option( WCHAR *buffer, const WCHAR *str, LPDWORD buflen )
 {
-    int len = 0;
-    if (str) len = lstrlenW( str );
-    if (buffer && *buflen > len)
+    int len = sizeof(WCHAR);
+    if (str) len += lstrlenW( str ) * sizeof(WCHAR);
+    if (buffer && *buflen >= len)
     {
-        if (str) memcpy( buffer, str, len * sizeof(WCHAR) );
-        buffer[len] = 0;
+        if (str) memcpy( buffer, str, len );
+        len -= sizeof(WCHAR);
+        buffer[len / sizeof(WCHAR)] = 0;
+        *buflen = len;
+        return TRUE;
     }
-    *buflen = len * sizeof(WCHAR);
+    else
+    {
+        *buflen = len;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
 }
 
 static WCHAR *blob_to_str( DWORD encoding, CERT_NAME_BLOB *blob )
@@ -681,12 +739,47 @@ static BOOL copy_sockaddr( const struct sockaddr *addr, SOCKADDR_STORAGE *addr_s
     }
 }
 
+static WCHAR *build_url( struct request *request )
+{
+    URL_COMPONENTS uc;
+    DWORD len = 0;
+    WCHAR *ret;
+
+    memset( &uc, 0, sizeof(uc) );
+    uc.dwStructSize = sizeof(uc);
+    uc.nScheme = (request->hdr.flags & WINHTTP_FLAG_SECURE) ? INTERNET_SCHEME_HTTPS : INTERNET_SCHEME_HTTP;
+    uc.lpszHostName = request->connect->hostname;
+    uc.dwHostNameLength = wcslen( uc.lpszHostName );
+    uc.nPort = request->connect->hostport;
+    uc.lpszUserName = request->connect->username;
+    uc.dwUserNameLength = request->connect->username ? wcslen( request->connect->username ) : 0;
+    uc.lpszPassword = request->connect->password;
+    uc.dwPasswordLength = request->connect->password ? wcslen( request->connect->password ) : 0;
+    uc.lpszUrlPath = request->path;
+    uc.dwUrlPathLength = wcslen( uc.lpszUrlPath );
+
+    WinHttpCreateUrl( &uc, 0, NULL, &len );
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || !(ret = malloc( len * sizeof(WCHAR) ))) return NULL;
+
+    if (WinHttpCreateUrl( &uc, 0, ret, &len )) return ret;
+    free( ret );
+    return NULL;
+}
+
 static BOOL request_query_option( struct object_header *hdr, DWORD option, void *buffer, DWORD *buflen )
 {
     struct request *request = (struct request *)hdr;
 
     switch (option)
     {
+    case WINHTTP_OPTION_PARENT_HANDLE:
+    {
+        if (!validate_buffer( buffer, buflen, sizeof(HINTERNET) )) return FALSE;
+
+        *(HINTERNET *)buffer = request->connect->hdr.handle;
+        *buflen = sizeof(HINTERNET);
+        return TRUE;
+    }
     case WINHTTP_OPTION_SECURITY_FLAGS:
     {
         DWORD flags;
@@ -810,20 +903,16 @@ static BOOL request_query_option( struct object_header *hdr, DWORD option, void 
         return TRUE;
 
     case WINHTTP_OPTION_USERNAME:
-        str_to_buffer( buffer, request->connect->username, buflen );
-        return TRUE;
+        return return_string_option( buffer, request->connect->username, buflen );
 
     case WINHTTP_OPTION_PASSWORD:
-        str_to_buffer( buffer, request->connect->password, buflen );
-        return TRUE;
+        return return_string_option( buffer, request->connect->password, buflen );
 
     case WINHTTP_OPTION_PROXY_USERNAME:
-        str_to_buffer( buffer, request->connect->session->proxy_username, buflen );
-        return TRUE;
+        return return_string_option( buffer, request->connect->session->proxy_username, buflen );
 
     case WINHTTP_OPTION_PROXY_PASSWORD:
-        str_to_buffer( buffer, request->connect->session->proxy_password, buflen );
-        return TRUE;
+        return return_string_option( buffer, request->connect->session->proxy_password, buflen );
 
     case WINHTTP_OPTION_MAX_HTTP_AUTOMATIC_REDIRECTS:
         if (!validate_buffer( buffer, buflen, sizeof(DWORD) )) return FALSE;
@@ -840,8 +929,33 @@ static BOOL request_query_option( struct object_header *hdr, DWORD option, void 
         *buflen = sizeof(DWORD);
         return TRUE;
 
+    case WINHTTP_OPTION_WEB_SOCKET_RECEIVE_BUFFER_SIZE:
+        if (!validate_buffer( buffer, buflen, sizeof(DWORD) )) return FALSE;
+
+        *(DWORD *)buffer = request->websocket_receive_buffer_size;
+        *buflen = sizeof(DWORD);
+        return TRUE;
+
+    case WINHTTP_OPTION_WEB_SOCKET_SEND_BUFFER_SIZE:
+        if (!validate_buffer( buffer, buflen, sizeof(DWORD) )) return FALSE;
+
+        *(DWORD *)buffer = request->websocket_set_send_buffer_size;
+        *buflen = sizeof(DWORD);
+        return TRUE;
+
+    case WINHTTP_OPTION_URL:
+    {
+        WCHAR *url;
+        BOOL ret;
+
+        if (!(url = build_url( request ))) return FALSE;
+        ret = return_string_option( buffer, url, buflen );
+        free( url );
+        return ret;
+    }
+
     default:
-        FIXME("unimplemented option %u\n", option);
+        FIXME( "unimplemented option %lu\n", option );
         SetLastError( ERROR_INVALID_PARAMETER );
         return FALSE;
     }
@@ -870,7 +984,7 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
     {
         WINHTTP_PROXY_INFO *pi = buffer;
 
-        FIXME("%u %s %s\n", pi->dwAccessType, debugstr_w(pi->lpszProxy), debugstr_w(pi->lpszProxyBypass));
+        FIXME( "%lu %s %s\n", pi->dwAccessType, debugstr_w(pi->lpszProxy), debugstr_w(pi->lpszProxyBypass) );
         return TRUE;
     }
     case WINHTTP_OPTION_DISABLE_FEATURE:
@@ -884,7 +998,7 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
         }
 
         disable = *(DWORD *)buffer;
-        TRACE("0x%x\n", disable);
+        TRACE( "%#lx\n", disable );
         hdr->disable_flags |= disable;
         return TRUE;
     }
@@ -899,7 +1013,7 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
         }
 
         policy = *(DWORD *)buffer;
-        TRACE("0x%x\n", policy);
+        TRACE( "%#lx\n", policy );
         hdr->logon_policy = policy;
         return TRUE;
     }
@@ -914,7 +1028,7 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
         }
 
         policy = *(DWORD *)buffer;
-        TRACE("0x%x\n", policy);
+        TRACE( "%#lx\n", policy );
         hdr->redirect_policy = policy;
         return TRUE;
     }
@@ -932,7 +1046,7 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
             return FALSE;
         }
         flags = *(DWORD *)buffer;
-        TRACE("0x%x\n", flags);
+        TRACE( "%#lx\n", flags );
         if (flags && (flags & ~accepted))
         {
             SetLastError( ERROR_INVALID_PARAMETER );
@@ -1070,14 +1184,46 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
     case WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL:
         if (buflen == sizeof(DWORD))
         {
-            FIXME("WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL %08x\n", *(DWORD *)buffer);
+            FIXME( "WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL %#lx\n", *(DWORD *)buffer );
             return TRUE;
         }
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
 
+    case WINHTTP_OPTION_WEB_SOCKET_RECEIVE_BUFFER_SIZE:
+    {
+        DWORD buffer_size;
+
+        if (buflen != sizeof(buffer_size))
+        {
+            SetLastError( ERROR_INSUFFICIENT_BUFFER );
+            return FALSE;
+        }
+
+        buffer_size = *(DWORD *)buffer;
+        WARN( "Setting websocket receive buffer size currently has not effct, size %lu\n", buffer_size );
+        request->websocket_receive_buffer_size = buffer_size;
+        return TRUE;
+    }
+
+    case WINHTTP_OPTION_WEB_SOCKET_SEND_BUFFER_SIZE:
+    {
+        DWORD buffer_size;
+
+        if (buflen != sizeof(buffer_size))
+        {
+            SetLastError( ERROR_INSUFFICIENT_BUFFER );
+            return FALSE;
+        }
+
+        buffer_size = *(DWORD *)buffer;
+        request->websocket_set_send_buffer_size = buffer_size;
+        TRACE( "Websocket send buffer size %lu.\n", buffer_size);
+        return TRUE;
+    }
+
     default:
-        FIXME("unimplemented option %u\n", option);
+        FIXME( "unimplemented option %lu\n", option );
         SetLastError( ERROR_WINHTTP_INVALID_OPTION );
         return FALSE;
     }
@@ -1085,6 +1231,7 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
 
 static const struct object_vtbl request_vtbl =
 {
+    NULL,
     request_destroy,
     request_query_option,
     request_set_option
@@ -1119,15 +1266,15 @@ static WCHAR *get_request_path( const WCHAR *object )
 /***********************************************************************
  *          WinHttpOpenRequest (winhttp.@)
  */
-HINTERNET WINAPI WinHttpOpenRequest( HINTERNET hconnect, LPCWSTR verb, LPCWSTR object, LPCWSTR version,
-                                     LPCWSTR referrer, LPCWSTR *types, DWORD flags )
+HINTERNET WINAPI WinHttpOpenRequest( HINTERNET hconnect, const WCHAR *verb, const WCHAR *object, const WCHAR *version,
+                                     const WCHAR *referrer, const WCHAR **types, DWORD flags )
 {
     struct request *request;
     struct connect *connect;
     HINTERNET hrequest = NULL;
 
-    TRACE("%p, %s, %s, %s, %s, %p, 0x%08x\n", hconnect, debugstr_w(verb), debugstr_w(object),
-          debugstr_w(version), debugstr_w(referrer), types, flags);
+    TRACE( "%p, %s, %s, %s, %s, %p, %#lx\n", hconnect, debugstr_w(verb), debugstr_w(object),
+          debugstr_w(version), debugstr_w(referrer), types, flags );
 
     if (types && TRACE_ON(winhttp))
     {
@@ -1160,6 +1307,7 @@ HINTERNET WINAPI WinHttpOpenRequest( HINTERNET hconnect, LPCWSTR verb, LPCWSTR o
     request->hdr.notify_mask = connect->hdr.notify_mask;
     request->hdr.context = connect->hdr.context;
     request->hdr.redirect_policy = connect->hdr.redirect_policy;
+    init_queue( &request->queue );
 
     addref_object( &connect->hdr );
     request->connect = connect;
@@ -1170,13 +1318,17 @@ HINTERNET WINAPI WinHttpOpenRequest( HINTERNET hconnect, LPCWSTR verb, LPCWSTR o
     request->receive_timeout = connect->session->receive_timeout;
     request->receive_response_timeout = connect->session->receive_response_timeout;
     request->max_redirects = 10;
+    request->websocket_receive_buffer_size = connect->session->websocket_receive_buffer_size;
+    request->websocket_send_buffer_size = connect->session->websocket_send_buffer_size;
+    request->websocket_set_send_buffer_size = request->websocket_send_buffer_size;
+    request->read_reply_status = ERROR_WINHTTP_INCORRECT_HANDLE_STATE;
 
     if (!verb || !verb[0]) verb = L"GET";
-    if (!(request->verb = strdupW( verb ))) goto end;
+    if (!(request->verb = wcsdup( verb ))) goto end;
     if (!(request->path = get_request_path( object ))) goto end;
 
     if (!version || !version[0]) version = L"HTTP/1.1";
-    if (!(request->version = strdupW( version ))) goto end;
+    if (!(request->version = wcsdup( version ))) goto end;
     if (!(add_accept_types_header( request, types ))) goto end;
 
     if ((hrequest = alloc_handle( &request->hdr )))
@@ -1224,6 +1376,15 @@ static BOOL query_option( struct object_header *hdr, DWORD option, void *buffer,
 
     switch (option)
     {
+    case WINHTTP_OPTION_WORKER_THREAD_COUNT:
+    {
+        FIXME( "WINHTTP_OPTION_WORKER_THREAD_COUNT semi-stub.\n" );
+        if (!validate_buffer( buffer, buflen, sizeof(DWORD) )) return FALSE;
+
+        *(DWORD *)buffer = 0;
+        *buflen = sizeof(DWORD);
+        return TRUE;
+    }
     case WINHTTP_OPTION_CONTEXT_VALUE:
     {
         if (!validate_buffer( buffer, buflen, sizeof(DWORD_PTR) )) return FALSE;
@@ -1236,7 +1397,7 @@ static BOOL query_option( struct object_header *hdr, DWORD option, void *buffer,
         if (hdr->vtbl->query_option) ret = hdr->vtbl->query_option( hdr, option, buffer, buflen );
         else
         {
-            FIXME("unimplemented option %u\n", option);
+            FIXME( "unimplemented option %lu\n", option );
             SetLastError( ERROR_WINHTTP_INCORRECT_HANDLE_TYPE );
             return FALSE;
         }
@@ -1248,12 +1409,12 @@ static BOOL query_option( struct object_header *hdr, DWORD option, void *buffer,
 /***********************************************************************
  *          WinHttpQueryOption (winhttp.@)
  */
-BOOL WINAPI WinHttpQueryOption( HINTERNET handle, DWORD option, LPVOID buffer, LPDWORD buflen )
+BOOL WINAPI WinHttpQueryOption( HINTERNET handle, DWORD option, void *buffer, DWORD *buflen )
 {
     BOOL ret = FALSE;
     struct object_header *hdr;
 
-    TRACE("%p, %u, %p, %p\n", handle, option, buffer, buflen);
+    TRACE( "%p, %lu, %p, %p\n", handle, option, buffer, buflen );
 
     if (!(hdr = grab_object( handle )))
     {
@@ -1295,7 +1456,7 @@ static BOOL set_option( struct object_header *hdr, DWORD option, void *buffer, D
         if (hdr->vtbl->set_option) ret = hdr->vtbl->set_option( hdr, option, buffer, buflen );
         else
         {
-            FIXME("unimplemented option %u\n", option);
+            FIXME( "unimplemented option %lu\n", option );
             SetLastError( ERROR_WINHTTP_INCORRECT_HANDLE_TYPE );
             return FALSE;
         }
@@ -1307,12 +1468,12 @@ static BOOL set_option( struct object_header *hdr, DWORD option, void *buffer, D
 /***********************************************************************
  *          WinHttpSetOption (winhttp.@)
  */
-BOOL WINAPI WinHttpSetOption( HINTERNET handle, DWORD option, LPVOID buffer, DWORD buflen )
+BOOL WINAPI WinHttpSetOption( HINTERNET handle, DWORD option,  void *buffer, DWORD buflen )
 {
     BOOL ret = FALSE;
     struct object_header *hdr;
 
-    TRACE("%p, %u, %p, %u\n", handle, option, buffer, buflen);
+    TRACE( "%p, %lu, %p, %lu\n", handle, option, buffer, buflen );
 
     if (!(hdr = grab_object( handle )))
     {
@@ -1366,7 +1527,7 @@ static WCHAR *detect_autoproxyconfig_url_dhcp(void)
     for (ptr = adapters; ptr; ptr = ptr->Next)
     {
         MultiByteToWideChar( CP_ACP, 0, ptr->AdapterName, -1, name, ARRAY_SIZE(name) );
-        TRACE( "adapter '%s' type %u dhcpv4 enabled %d\n", wine_dbgstr_w(name), ptr->IfType, ptr->Dhcpv4Enabled );
+        TRACE( "adapter '%s' type %lu dhcpv4 enabled %d\n", wine_dbgstr_w(name), ptr->IfType, ptr->Dhcpv4Enabled );
 
         if (ptr->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
         /* FIXME: also skip adapters where DHCP is disabled */
@@ -1503,9 +1664,9 @@ static WCHAR *detect_autoproxyconfig_url_dns(void)
 /***********************************************************************
  *          WinHttpDetectAutoProxyConfigUrl (winhttp.@)
  */
-BOOL WINAPI WinHttpDetectAutoProxyConfigUrl( DWORD flags, LPWSTR *url )
+BOOL WINAPI WinHttpDetectAutoProxyConfigUrl( DWORD flags, WCHAR **url )
 {
-    TRACE("0x%08x, %p\n", flags, url);
+    TRACE( "%#lx, %p\n", flags, url );
 
     if (!flags || !url)
     {
@@ -1777,7 +1938,17 @@ static BOOL parse_script_result( const char *result, WINHTTP_PROXY_INFO *info )
         p += 5;
         while (*p == ' ') p++;
         if (!*p || *p == ';') return TRUE;
-        if (!(info->lpszProxy = q = strdupAW( p ))) return FALSE;
+        if (!(q = strdupAW( p ))) return FALSE;
+        len = wcslen( q );
+        info->lpszProxy = GlobalAlloc( 0, (len + 1) * sizeof(WCHAR) );
+        if (!info->lpszProxy)
+        {
+            free( q );
+            return FALSE;
+        }
+        memcpy( info->lpszProxy, q, (len + 1) * sizeof(WCHAR) );
+        free( q );
+        q = info->lpszProxy;
         info->dwAccessType = WINHTTP_ACCESS_TYPE_NAMED_PROXY;
         for (; *q; q++)
         {
@@ -1791,6 +1962,50 @@ static BOOL parse_script_result( const char *result, WINHTTP_PROXY_INFO *info )
     return TRUE;
 }
 
+static SRWLOCK cache_lock = SRWLOCK_INIT;
+static DWORD cached_script_size;
+static ULONGLONG cache_update_time;
+static char *cached_script;
+static WCHAR *cached_url;
+
+static BOOL get_cached_script( const WCHAR *url, char **buffer, DWORD *out_size )
+{
+    BOOL ret = FALSE;
+
+    *buffer = NULL;
+    *out_size = 0;
+
+    AcquireSRWLockExclusive( &cache_lock );
+    if (cached_url && !wcscmp( cached_url, url ) && GetTickCount64() - cache_update_time < 60000)
+    {
+        ret = TRUE;
+        if (cached_script && (*buffer = malloc( cached_script_size )))
+        {
+            memcpy( *buffer, cached_script, cached_script_size );
+            *out_size = cached_script_size;
+        }
+    }
+    ReleaseSRWLockExclusive( &cache_lock );
+    return ret;
+}
+
+static void cache_script( const WCHAR *url, char *buffer, DWORD size )
+{
+    AcquireSRWLockExclusive( &cache_lock );
+    free( cached_url );
+    free( cached_script );
+    cached_script_size = 0;
+    cached_script = NULL;
+
+    if ((cached_url = wcsdup( url )) && buffer && (cached_script = malloc( size )))
+    {
+        memcpy( cached_script, buffer, size );
+        cached_script_size = size;
+    }
+    cache_update_time = GetTickCount64();
+    ReleaseSRWLockExclusive( &cache_lock );
+}
+
 static char *download_script( const WCHAR *url, DWORD *out_size )
 {
     static const WCHAR *acceptW[] = {L"*/*", NULL};
@@ -1798,9 +2013,14 @@ static char *download_script( const WCHAR *url, DWORD *out_size )
     WCHAR *hostname;
     URL_COMPONENTSW uc;
     DWORD status, size = sizeof(status), offset, to_read, bytes_read, flags = 0;
-    char *tmp, *buffer = NULL;
+    char *tmp, *buffer;
 
-    *out_size = 0;
+    if (get_cached_script( url, &buffer, out_size ))
+    {
+        TRACE( "Returning cached result.\n" );
+        if (!buffer) SetLastError( ERROR_WINHTTP_UNABLE_TO_DOWNLOAD_SCRIPT );
+        return buffer;
+    }
 
     memset( &uc, 0, sizeof(uc) );
     uc.dwStructSize = sizeof(uc);
@@ -1812,6 +2032,7 @@ static char *download_script( const WCHAR *url, DWORD *out_size )
     hostname[uc.dwHostNameLength] = 0;
 
     if (!(ses = WinHttpOpen( NULL, WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0 ))) goto done;
+    WinHttpSetTimeouts( ses, 5000, 60000, 30000, 30000 );
     if (!(con = WinHttpConnect( ses, hostname, uc.nPort, 0 ))) goto done;
     if (uc.nScheme == INTERNET_SCHEME_HTTPS) flags |= WINHTTP_FLAG_SECURE;
     if (!(req = WinHttpOpenRequest( con, NULL, uc.lpszUrlPath, NULL, NULL, acceptW, flags ))) goto done;
@@ -1846,6 +2067,7 @@ done:
     WinHttpCloseHandle( con );
     WinHttpCloseHandle( ses );
     free( hostname );
+    cache_script( url, buffer, *out_size );
     if (!buffer) SetLastError( ERROR_WINHTTP_UNABLE_TO_DOWNLOAD_SCRIPT );
     return buffer;
 }
@@ -1861,42 +2083,69 @@ BOOL WINAPI InternetDeInitializeAutoProxyDll(LPSTR, DWORD);
 BOOL WINAPI InternetGetProxyInfo(LPCSTR, DWORD, LPSTR, DWORD, LPSTR *, LPDWORD);
 BOOL WINAPI InternetInitializeAutoProxyDll(DWORD, LPSTR, LPSTR, void *, struct AUTO_PROXY_SCRIPT_BUFFER *);
 
-static BOOL run_script( char *script, DWORD size, const WCHAR *url, WINHTTP_PROXY_INFO *info )
+#define MAX_SCHEME_LENGTH 32
+static BOOL run_script( char *script, DWORD size, const WCHAR *url, WINHTTP_PROXY_INFO *info, DWORD flags )
 {
+    WCHAR scheme[MAX_SCHEME_LENGTH + 1], buf[MAX_HOST_NAME_LENGTH + 1], *hostname;
     BOOL ret;
-    char *result, *urlA;
-    DWORD len_result;
+    char *result, *urlA, *hostnameA;
+    DWORD len, len_scheme, len_hostname;
     struct AUTO_PROXY_SCRIPT_BUFFER buffer;
     URL_COMPONENTSW uc;
+
+    memset( &uc, 0, sizeof(uc) );
+    uc.dwStructSize = sizeof(uc);
+    uc.dwSchemeLength = -1;
+    uc.dwHostNameLength = -1;
+
+    if (!WinHttpCrackUrl( url, 0, 0, &uc ))
+        return FALSE;
+
+    memcpy( scheme, uc.lpszScheme, uc.dwSchemeLength * sizeof(WCHAR) );
+    scheme[uc.dwSchemeLength] = 0;
+    wcslwr( scheme );
+    len_scheme = WideCharToMultiByte( CP_ACP, 0, scheme, uc.dwSchemeLength, NULL, 0, NULL, NULL );
+
+    if (flags & WINHTTP_AUTOPROXY_HOST_LOWERCASE && !(flags & WINHTTP_AUTOPROXY_HOST_KEEPCASE))
+    {
+        memcpy( buf, uc.lpszHostName, uc.dwHostNameLength * sizeof(WCHAR) );
+        buf[uc.dwHostNameLength] = 0;
+        wcslwr( buf );
+        hostname = buf;
+    }
+    else
+    {
+        hostname = uc.lpszHostName;
+    }
+    len_hostname = WideCharToMultiByte( CP_ACP, 0, hostname, uc.dwHostNameLength, NULL, 0, NULL, NULL );
+
+    len = WideCharToMultiByte( CP_ACP, 0, uc.lpszHostName + uc.dwHostNameLength, -1, NULL, 0, NULL, NULL );
+    if (!(urlA = malloc( len + len_scheme + len_hostname + 3 ))) return FALSE;
+    WideCharToMultiByte( CP_ACP, 0, scheme, uc.dwSchemeLength, urlA, len_scheme, NULL, NULL );
+    urlA[len_scheme++] = ':';
+    urlA[len_scheme++] = '/';
+    urlA[len_scheme++] = '/';
+    WideCharToMultiByte( CP_ACP, 0, hostname, uc.dwHostNameLength, urlA + len_scheme, len_hostname, NULL, NULL );
+    hostnameA = urlA + len_scheme;
+    WideCharToMultiByte( CP_ACP, 0, uc.lpszHostName + uc.dwHostNameLength, -1,
+            urlA + len_scheme + len_hostname, len, NULL, NULL );
 
     buffer.dwStructSize = sizeof(buffer);
     buffer.lpszScriptBuffer = script;
     buffer.dwScriptBufferSize = size;
 
-    if (!(urlA = strdupWA( url ))) return FALSE;
-    if (!(ret = InternetInitializeAutoProxyDll( 0, NULL, NULL, NULL, &buffer )))
+    if (!InternetInitializeAutoProxyDll( 0, NULL, NULL, NULL, &buffer ))
     {
         free( urlA );
         return FALSE;
     }
 
-    memset( &uc, 0, sizeof(uc) );
-    uc.dwStructSize = sizeof(uc);
-    uc.dwHostNameLength = -1;
-
-    if ((ret = WinHttpCrackUrl( url, 0, 0, &uc )))
+    if ((ret = InternetGetProxyInfo( urlA, strlen(urlA), hostnameA, len_hostname, &result, &len )))
     {
-        char *hostnameA = strdupWA_sized( uc.lpszHostName, uc.dwHostNameLength );
-
-        if ((ret = InternetGetProxyInfo( urlA, strlen(urlA),
-                        hostnameA, strlen(hostnameA), &result, &len_result )))
-        {
-            ret = parse_script_result( result, info );
-            free( result );
-        }
-
-        free( hostnameA );
+        ret = parse_script_result( result, info );
+        free( result );
     }
+
     free( urlA );
     InternetDeInitializeAutoProxyDll( NULL, 0 );
     return ret;
@@ -1908,10 +2157,9 @@ static BOOL run_script( char *script, DWORD size, const WCHAR *url, WINHTTP_PROX
 BOOL WINAPI WinHttpGetProxyForUrl( HINTERNET hsession, LPCWSTR url, WINHTTP_AUTOPROXY_OPTIONS *options,
                                    WINHTTP_PROXY_INFO *info )
 {
-    WCHAR *detected_pac_url = NULL;
-    const WCHAR *pac_url;
+    WCHAR *pac_url;
     struct session *session;
-    char *script;
+    char *script = NULL;
     DWORD size;
     BOOL ret = FALSE;
 
@@ -1931,28 +2179,29 @@ BOOL WINAPI WinHttpGetProxyForUrl( HINTERNET hsession, LPCWSTR url, WINHTTP_AUTO
     if (!url || !options || !info ||
         !(options->dwFlags & (WINHTTP_AUTOPROXY_AUTO_DETECT|WINHTTP_AUTOPROXY_CONFIG_URL)) ||
         ((options->dwFlags & WINHTTP_AUTOPROXY_AUTO_DETECT) && !options->dwAutoDetectFlags) ||
-        ((options->dwFlags & WINHTTP_AUTOPROXY_AUTO_DETECT) &&
-         (options->dwFlags & WINHTTP_AUTOPROXY_CONFIG_URL)))
+        (options->dwFlags & WINHTTP_AUTOPROXY_CONFIG_URL && !options->lpszAutoConfigUrl))
     {
         release_object( &session->hdr );
         SetLastError( ERROR_INVALID_PARAMETER );
         return FALSE;
     }
+
     if (options->dwFlags & WINHTTP_AUTOPROXY_AUTO_DETECT &&
-        !WinHttpDetectAutoProxyConfigUrl( options->dwAutoDetectFlags, &detected_pac_url ))
-        goto done;
-
-    if (options->dwFlags & WINHTTP_AUTOPROXY_CONFIG_URL) pac_url = options->lpszAutoConfigUrl;
-    else pac_url = detected_pac_url;
-
-    if ((script = download_script( pac_url, &size )))
+        WinHttpDetectAutoProxyConfigUrl( options->dwAutoDetectFlags, &pac_url ))
     {
-        ret = run_script( script, size, url, info );
+        script = download_script( pac_url, &size );
+        GlobalFree( pac_url );
+    }
+
+    if (!script && options->dwFlags & WINHTTP_AUTOPROXY_CONFIG_URL)
+        script = download_script( options->lpszAutoConfigUrl, &size );
+
+    if (script)
+    {
+        ret = run_script( script, size, url, info, options->dwFlags );
         free( script );
     }
 
-done:
-    GlobalFree( detected_pac_url );
     release_object( &session->hdr );
     if (ret) SetLastError( ERROR_SUCCESS );
     return ret;
@@ -2104,7 +2353,7 @@ void WINAPI WinHttpFreeProxySettings( WINHTTP_PROXY_SETTINGS *settings )
 DWORD WINAPI WinHttpGetProxyForUrlEx( HINTERNET hresolver, const WCHAR *url, WINHTTP_AUTOPROXY_OPTIONS *options,
                                       DWORD_PTR ctx )
 {
-    FIXME("%p, %s, %p, %lx\n", hresolver, debugstr_w(url), options, ctx);
+    FIXME( "%p, %s, %p, %Ix\n", hresolver, debugstr_w(url), options, ctx );
     return ERROR_WINHTTP_AUTO_PROXY_SERVICE_ERROR;
 }
 
@@ -2114,7 +2363,7 @@ DWORD WINAPI WinHttpGetProxyForUrlEx( HINTERNET hresolver, const WCHAR *url, WIN
 DWORD WINAPI WinHttpGetProxyForUrlEx2( HINTERNET hresolver, const WCHAR *url, WINHTTP_AUTOPROXY_OPTIONS *options,
                                        DWORD selection_len, BYTE *selection, DWORD_PTR ctx )
 {
-    FIXME("%p, %s, %p, %u, %p, %lx\n", hresolver, debugstr_w(url), options, selection_len, selection, ctx);
+    FIXME( "%p, %s, %p, %lu, %p, %Ix\n", hresolver, debugstr_w(url), options, selection_len, selection, ctx );
     return ERROR_WINHTTP_AUTO_PROXY_SERVICE_ERROR;
 }
 
@@ -2162,7 +2411,7 @@ DWORD WINAPI WinHttpReadProxySettings( HINTERNET hsession, const WCHAR *connecti
  */
 DWORD WINAPI WinHttpResetAutoProxy( HINTERNET hsession, DWORD flags )
 {
-    FIXME("%p, %08x\n", hsession, flags);
+    FIXME( "%p, %#lx\n", hsession, flags );
     return ERROR_WINHTTP_AUTO_PROXY_SERVICE_ERROR;
 }
 
@@ -2181,7 +2430,7 @@ WINHTTP_STATUS_CALLBACK WINAPI WinHttpSetStatusCallback( HINTERNET handle, WINHT
     struct object_header *hdr;
     WINHTTP_STATUS_CALLBACK ret;
 
-    TRACE("%p, %p, 0x%08x, 0x%lx\n", handle, callback, flags, reserved);
+    TRACE( "%p, %p, %#lx, %Ix\n", handle, callback, flags, reserved );
 
     if (!(hdr = grab_object( handle )))
     {

@@ -67,7 +67,7 @@ static ULONG STDMETHODCALLTYPE d2d_state_block_Release(ID2D1DrawingStateBlock1 *
         if (state_block->text_rendering_params)
             IDWriteRenderingParams_Release(state_block->text_rendering_params);
         ID2D1Factory_Release(state_block->factory);
-        heap_free(state_block);
+        free(state_block);
     }
 
     return refcount;
@@ -186,6 +186,10 @@ struct d2d_state_block *unsafe_impl_from_ID2D1DrawingStateBlock(ID2D1DrawingStat
 {
     if (!iface)
         return NULL;
-    assert(iface->lpVtbl == (ID2D1DrawingStateBlockVtbl *)&d2d_state_block_vtbl);
+    if (iface->lpVtbl != (ID2D1DrawingStateBlockVtbl *)&d2d_state_block_vtbl)
+    {
+        WARN("Unexpected state block vtbl %p.\n", iface->lpVtbl);
+        return NULL;
+    }
     return CONTAINING_RECORD(iface, struct d2d_state_block, ID2D1DrawingStateBlock1_iface);
 }

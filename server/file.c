@@ -245,7 +245,7 @@ static struct object *create_file( struct fd *root, const char *nameptr, data_si
     {
         const struct sid *owner = sd_get_owner( sd );
         if (!owner)
-            owner = token_get_user( current->process->token );
+            owner = token_get_owner( current->process->token );
         mode = sd_to_mode( sd, owner );
     }
     else if (options & FILE_DIRECTORY_FILE)
@@ -332,11 +332,8 @@ struct security_descriptor *mode_to_sd( mode_t mode, const struct sid *user, con
     sd->sacl_len = 0;
     sd->dacl_len = dacl_size;
 
-    ptr = (char *)(sd + 1);
-    memcpy( ptr, user, sd->owner_len );
-    ptr += sd->owner_len;
-    memcpy( ptr, group, sd->group_len );
-    ptr += sd->group_len;
+    ptr = mem_append( sd + 1, user, sd->owner_len );
+    ptr = mem_append( ptr, group, sd->group_len );
 
     dacl = (struct acl *)ptr;
     dacl->revision = ACL_REVISION;
@@ -528,7 +525,7 @@ static int file_set_sd( struct object *obj, const struct security_descriptor *sd
     else if (obj->sd)
         owner = sd_get_owner( obj->sd );
     else
-        owner = token_get_user( current->process->token );
+        owner = token_get_owner( current->process->token );
 
     /* group and sacl not supported */
 

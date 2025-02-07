@@ -21,43 +21,33 @@
 #ifndef __WINE_WINE_UNIXLIB_H
 #define __WINE_WINE_UNIXLIB_H
 
-typedef NTSTATUS (*unixlib_entry_t)( void *args );
-typedef UINT64 unixlib_handle_t;
+#include "winternl.h"
 
-extern NTSTATUS WINAPI __wine_unix_call( unixlib_handle_t handle, unsigned int code, void *args );
+typedef UINT64 unixlib_handle_t;
 
 #ifdef WINE_UNIX_LIB
 
+typedef NTSTATUS (*unixlib_entry_t)( void *args );
+
+extern DECLSPEC_EXPORT const unixlib_entry_t __wine_unix_call_funcs[];
+extern DECLSPEC_EXPORT const unixlib_entry_t __wine_unix_call_wow64_funcs[];
+
 /* some useful helpers from ntdll */
-extern const char *ntdll_get_build_dir(void);
-extern const char *ntdll_get_data_dir(void);
-extern DWORD ntdll_umbstowcs( const char *src, DWORD srclen, WCHAR *dst, DWORD dstlen );
-extern int ntdll_wcstoumbs( const WCHAR *src, DWORD srclen, char *dst, DWORD dstlen, BOOL strict );
-extern int ntdll_wcsicmp( const WCHAR *str1, const WCHAR *str2 );
-extern int ntdll_wcsnicmp( const WCHAR *str1, const WCHAR *str2, int n );
-extern NTSTATUS ntdll_init_syscalls( ULONG id, SYSTEM_SERVICE_TABLE *table, void **dispatcher );
+NTSYSAPI const char *ntdll_get_build_dir(void);
+NTSYSAPI const char *ntdll_get_data_dir(void);
+NTSYSAPI DWORD ntdll_umbstowcs( const char *src, DWORD srclen, WCHAR *dst, DWORD dstlen );
+NTSYSAPI int ntdll_wcstoumbs( const WCHAR *src, DWORD srclen, char *dst, DWORD dstlen, BOOL strict );
+NTSYSAPI int ntdll_wcsicmp( const WCHAR *str1, const WCHAR *str2 );
+NTSYSAPI int ntdll_wcsnicmp( const WCHAR *str1, const WCHAR *str2, int n );
 
 /* exception handling */
 
-#ifdef __i386__
-typedef struct { int reg[16]; } __wine_jmp_buf;
-#elif defined(__x86_64__)
-typedef struct { DECLSPEC_ALIGN(16) struct { unsigned __int64 Part[2]; } reg[16]; } __wine_jmp_buf;
-#elif defined(__arm__)
-typedef struct { int reg[28]; } __wine_jmp_buf;
-#elif defined(__aarch64__)
-typedef struct { __int64 reg[24]; } __wine_jmp_buf;
-#else
-typedef struct { int reg; } __wine_jmp_buf;
-#endif
+#include <setjmp.h>
 
-extern int __cdecl __attribute__ ((__nothrow__,__returns_twice__)) __wine_setjmpex( __wine_jmp_buf *buf,
-                                                   EXCEPTION_REGISTRATION_RECORD *frame );
-extern void DECLSPEC_NORETURN __cdecl __wine_longjmp( __wine_jmp_buf *buf, int retval );
-extern void ntdll_set_exception_jmp_buf( __wine_jmp_buf *jmp );
+NTSYSAPI void ntdll_set_exception_jmp_buf( jmp_buf jmp );
 
 #define __TRY \
-    do { __wine_jmp_buf __jmp; \
+    do { jmp_buf __jmp; \
          int __first = 1; \
          for (;;) if (!__first) \
          { \
@@ -68,21 +58,27 @@ extern void ntdll_set_exception_jmp_buf( __wine_jmp_buf *jmp );
              ntdll_set_exception_jmp_buf( NULL ); \
              break; \
          } else { \
-             if (__wine_setjmpex( &__jmp, NULL )) { \
+             if (setjmp( __jmp )) { \
                  do {
 
 #define __ENDTRY \
                  } while (0); \
                  break; \
              } \
-             ntdll_set_exception_jmp_buf( &__jmp ); \
+             ntdll_set_exception_jmp_buf( __jmp ); \
              __first = 0; \
          } \
     } while (0);
 
-NTSTATUS WINAPI KeUserModeCallback( ULONG id, const void *args, ULONG len, void **ret_ptr, ULONG *ret_len );
+NTSYSAPI BOOLEAN KeAddSystemServiceTable( ULONG_PTR *funcs, ULONG_PTR *counters, ULONG limit,
+                                          BYTE *arguments, ULONG index );
 
 /* wide char string functions */
+
+static inline int ntdll_iswspace( WCHAR wc )
+{
+    return ('\t' <= wc && wc <= '\r') || wc == ' ' || wc == 0xa0;
+}
 
 static inline size_t ntdll_wcslen( const WCHAR *str )
 {
@@ -150,6 +146,100 @@ static inline SIZE_T ntdll_wcscspn( const WCHAR *str, const WCHAR *reject )
     return ptr - str;
 }
 
+static inline LONG ntdll_wcstol( const WCHAR *s, WCHAR **end, int base )
+{
+    BOOL negative = FALSE, empty = TRUE;
+    LONG ret = 0;
+
+    if (base < 0 || base == 1 || base > 36) return 0;
+    if (end) *end = (WCHAR *)s;
+    while (ntdll_iswspace(*s)) s++;
+
+    if (*s == '-')
+    {
+        negative = TRUE;
+        s++;
+    }
+    else if (*s == '+') s++;
+
+    if ((base == 0 || base == 16) && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+    {
+        base = 16;
+        s += 2;
+    }
+    if (base == 0) base = s[0] != '0' ? 10 : 8;
+
+    while (*s)
+    {
+        int v;
+
+        if ('0' <= *s && *s <= '9') v = *s - '0';
+        else if ('A' <= *s && *s <= 'Z') v = *s - 'A' + 10;
+        else if ('a' <= *s && *s <= 'z') v = *s - 'a' + 10;
+        else break;
+        if (v >= base) break;
+        if (negative) v = -v;
+        s++;
+        empty = FALSE;
+
+        if (!negative && (ret > MAXLONG / base || ret * base > MAXLONG - v))
+            ret = MAXLONG;
+        else if (negative && (ret < (LONG)MINLONG / base || ret * base < (LONG)(MINLONG - v)))
+            ret = MINLONG;
+        else
+            ret = ret * base + v;
+    }
+
+    if (end && !empty) *end = (WCHAR *)s;
+    return ret;
+}
+
+static inline ULONG ntdll_wcstoul( const WCHAR *s, WCHAR **end, int base )
+{
+    BOOL negative = FALSE, empty = TRUE;
+    ULONG ret = 0;
+
+    if (base < 0 || base == 1 || base > 36) return 0;
+    if (end) *end = (WCHAR *)s;
+    while (ntdll_iswspace(*s)) s++;
+
+    if (*s == '-')
+    {
+        negative = TRUE;
+        s++;
+    }
+    else if (*s == '+') s++;
+
+    if ((base == 0 || base == 16) && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+    {
+        base = 16;
+        s += 2;
+    }
+    if (base == 0) base = s[0] != '0' ? 10 : 8;
+
+    while (*s)
+    {
+        int v;
+
+        if ('0' <= *s && *s <= '9') v = *s - '0';
+        else if ('A' <= *s && *s <= 'Z') v = *s - 'A' + 10;
+        else if ('a' <= *s && *s <= 'z') v = *s - 'a' + 10;
+        else break;
+        if (v >= base) break;
+        s++;
+        empty = FALSE;
+
+        if (ret > MAXDWORD / base || ret * base > MAXDWORD - v)
+            ret = MAXDWORD;
+        else
+            ret = ret * base + v;
+    }
+
+    if (end && !empty) *end = (WCHAR *)s;
+    return negative ? -ret : ret;
+}
+
+#define iswspace(ch)       ntdll_iswspace(ch)
 #define wcslen(str)        ntdll_wcslen(str)
 #define wcscpy(dst,src)    ntdll_wcscpy(dst,src)
 #define wcscat(dst,src)    ntdll_wcscat(dst,src)
@@ -162,6 +252,29 @@ static inline SIZE_T ntdll_wcscspn( const WCHAR *str, const WCHAR *reject )
 #define wcscspn(str,rej)   ntdll_wcscspn(str,rej)
 #define wcsicmp(s1, s2)    ntdll_wcsicmp(s1,s2)
 #define wcsnicmp(s1, s2,n) ntdll_wcsnicmp(s1,s2,n)
+#define wcstol(str,e,b)    ntdll_wcstol(str,e,b)
+#define wcstoul(str,e,b)   ntdll_wcstoul(str,e,b)
+
+#else /* WINE_UNIX_LIB */
+
+extern unixlib_handle_t __wine_unixlib_handle;
+extern NTSTATUS (WINAPI *__wine_unix_call_dispatcher)( unixlib_handle_t, unsigned int, void * );
+extern NTSTATUS WINAPI __wine_init_unix_call(void);
+
+#ifdef __arm64ec__
+NTSTATUS __wine_unix_call_arm64ec( unixlib_handle_t handle, unsigned int code, void *args );
+static inline NTSTATUS __wine_unix_call( unixlib_handle_t handle, unsigned int code, void *args )
+{
+    return __wine_unix_call_arm64ec( handle, code, args );
+}
+#else
+static inline NTSTATUS __wine_unix_call( unixlib_handle_t handle, unsigned int code, void *args )
+{
+    return __wine_unix_call_dispatcher( handle, code, args );
+}
+#endif
+
+#define WINE_UNIX_CALL(code,args) __wine_unix_call( __wine_unixlib_handle, (code), (args) )
 
 #endif /* WINE_UNIX_LIB */
 

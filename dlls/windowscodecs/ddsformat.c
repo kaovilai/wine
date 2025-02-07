@@ -248,7 +248,7 @@ static struct dds_format {
     { { sizeof(DDS_PIXELFORMAT), DDPF_RGB,       0, 32, 0x3FF00000,0xFFC00,0x3FF,0xC0000000 },
       &GUID_WICPixelFormat32bppR10G10B10A2, 32, DXGI_FORMAT_R10G10B10A2_UNORM },
     { { sizeof(DDS_PIXELFORMAT), DDPF_RGB,       0, 32, 0x3FF,0xFFC00,0x3FF00000,0xC0000000 },
-      &GUID_WICPixelFormat32bppRGBA1010102, 32, DXGI_FORMAT_UNKNOWN },
+      &GUID_WICPixelFormat32bppRGBA1010102, 32, DXGI_FORMAT_R10G10B10A2_UNORM },
     { { sizeof(DDS_PIXELFORMAT), DDPF_RGB ,      0, 32, 0xFFFF,0xFFFF0000,0,0 },
       &GUID_WICPixelFormatUndefined,        0,  DXGI_FORMAT_R16G16_UNORM },
     { { sizeof(DDS_PIXELFORMAT), DDPF_RGB ,      0, 32, 0xFFFFFFFF,0,0,0 },
@@ -780,7 +780,7 @@ static ULONG WINAPI DdsFrameDecode_AddRef(IWICBitmapFrameDecode *iface)
     DdsFrameDecode *This = impl_from_IWICBitmapFrameDecode(iface);
     ULONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) refcount=%u\n", iface, ref);
+    TRACE("(%p) refcount=%lu\n", iface, ref);
 
     return ref;
 }
@@ -790,12 +790,12 @@ static ULONG WINAPI DdsFrameDecode_Release(IWICBitmapFrameDecode *iface)
     DdsFrameDecode *This = impl_from_IWICBitmapFrameDecode(iface);
     ULONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) refcount=%u\n", iface, ref);
+    TRACE("(%p) refcount=%lu\n", iface, ref);
 
     if (ref == 0) {
-        if (This->pixel_data != This->block_data) HeapFree(GetProcessHeap(), 0, This->pixel_data);
-        HeapFree(GetProcessHeap(), 0, This->block_data);
-        HeapFree(GetProcessHeap(), 0, This);
+        if (This->pixel_data != This->block_data) free(This->pixel_data);
+        free(This->block_data);
+        free(This);
     }
 
     return ref;
@@ -884,7 +884,7 @@ static HRESULT WINAPI DdsFrameDecode_CopyPixels(IWICBitmapFrameDecode *iface,
 
     if (!This->pixel_data) {
         if (is_compressed(This->info.format)) {
-            This->pixel_data = HeapAlloc(GetProcessHeap(), 0, frame_size);
+            This->pixel_data = malloc(frame_size);
             if (!This->pixel_data) {
                 hr = E_OUTOFMEMORY;
                 goto end;
@@ -1045,13 +1045,13 @@ static HRESULT DdsFrameDecode_CreateInstance(DdsFrameDecode **frame_decode)
 {
     DdsFrameDecode *result;
 
-    result = HeapAlloc(GetProcessHeap(), 0, sizeof(*result));
+    result = malloc(sizeof(*result));
     if (!result) return E_OUTOFMEMORY;
 
     result->IWICBitmapFrameDecode_iface.lpVtbl = &DdsFrameDecode_Vtbl;
     result->IWICDdsFrameDecode_iface.lpVtbl = &DdsFrameDecode_Dds_Vtbl;
     result->ref = 1;
-    InitializeCriticalSection(&result->lock);
+    InitializeCriticalSectionEx(&result->lock, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
     result->lock.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": DdsFrameDecode.lock");
 
     *frame_decode = result;
@@ -1087,7 +1087,7 @@ static ULONG WINAPI DdsDecoder_AddRef(IWICBitmapDecoder *iface)
     DdsDecoder *This = impl_from_IWICBitmapDecoder(iface);
     ULONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) refcount=%u\n", iface, ref);
+    TRACE("(%p) refcount=%lu\n", iface, ref);
 
     return ref;
 }
@@ -1097,14 +1097,14 @@ static ULONG WINAPI DdsDecoder_Release(IWICBitmapDecoder *iface)
     DdsDecoder *This = impl_from_IWICBitmapDecoder(iface);
     ULONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) refcount=%u\n", iface, ref);
+    TRACE("(%p) refcount=%lu\n", iface, ref);
 
     if (ref == 0)
     {
         This->lock.DebugInfo->Spare[0] = 0;
         DeleteCriticalSection(&This->lock);
         if (This->stream) IStream_Release(This->stream);
-        HeapFree(GetProcessHeap(), 0, This);
+        free(This);
     }
 
     return ref;
@@ -1331,7 +1331,8 @@ static HRESULT WINAPI DdsDecoder_Dds_GetFrame(IWICDdsDecoder *iface,
     LARGE_INTEGER seek;
     UINT width, height, depth, block_width, block_height, width_in_blocks, height_in_blocks, size;
     UINT frame_width = 0, frame_height = 0, frame_width_in_blocks = 0, frame_height_in_blocks = 0, frame_size = 0;
-    UINT bytes_per_block, bytesread, i;
+    UINT bytes_per_block, i;
+    DWORD bytesread;
     DdsFrameDecode *frame_decode = NULL;
 
     TRACE("(%p,%u,%u,%u,%p)\n", iface, arrayIndex, mipLevel, sliceIndex, bitmapFrame);
@@ -1402,9 +1403,9 @@ static HRESULT WINAPI DdsDecoder_Dds_GetFrame(IWICDdsDecoder *iface,
     frame_decode->info.height_in_blocks = frame_height_in_blocks;
     frame_decode->info.pixel_format = This->info.pixel_format;
     frame_decode->info.pixel_format_bpp = This->info.pixel_format_bpp;
-    frame_decode->block_data = HeapAlloc(GetProcessHeap(), 0, frame_size);
+    frame_decode->block_data = malloc(frame_size);
     frame_decode->pixel_data = NULL;
-    hr = IStream_Seek(This->stream, seek, SEEK_SET, NULL);
+    hr = IStream_Seek(This->stream, seek, STREAM_SEEK_SET, NULL);
     if (hr != S_OK) goto end;
     hr = IStream_Read(This->stream, frame_decode->block_data, frame_size, &bytesread);
     if (hr != S_OK || bytesread != frame_size) {
@@ -1469,7 +1470,7 @@ static HRESULT WINAPI DdsDecoder_Wine_Initialize(IWICWineDecoder *iface, IStream
     }
 
     seek.QuadPart = 0;
-    hr = IStream_Seek(stream, seek, SEEK_SET, NULL);
+    hr = IStream_Seek(stream, seek, STREAM_SEEK_SET, NULL);
     if (FAILED(hr)) goto end;
 
     hr = IStream_Read(stream, &magic, sizeof(magic), &bytesread);
@@ -1549,7 +1550,7 @@ static ULONG WINAPI DdsFrameEncode_AddRef(IWICBitmapFrameEncode *iface)
     DdsFrameEncode *This = impl_from_IWICBitmapFrameEncode(iface);
     ULONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) refcount=%u\n", iface, ref);
+    TRACE("(%p) refcount=%lu\n", iface, ref);
 
     return ref;
 }
@@ -1559,12 +1560,12 @@ static ULONG WINAPI DdsFrameEncode_Release(IWICBitmapFrameEncode *iface)
     DdsFrameEncode *This = impl_from_IWICBitmapFrameEncode(iface);
     ULONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) refcount=%u\n", iface, ref);
+    TRACE("(%p) refcount=%lu\n", iface, ref);
 
     if (ref == 0)
     {
         IWICBitmapEncoder_Release(&This->parent->IWICBitmapEncoder_iface);
-        HeapFree(GetProcessHeap(), 0, This);
+        free(This);
     }
 
     return ref;
@@ -1751,7 +1752,7 @@ HRESULT DdsDecoder_CreateInstance(REFIID iid, void** ppv)
 
     *ppv = NULL;
 
-    This = HeapAlloc(GetProcessHeap(), 0, sizeof(DdsDecoder));
+    This = malloc(sizeof(DdsDecoder));
     if (!This) return E_OUTOFMEMORY;
 
     This->IWICBitmapDecoder_iface.lpVtbl = &DdsDecoder_Vtbl;
@@ -1760,7 +1761,7 @@ HRESULT DdsDecoder_CreateInstance(REFIID iid, void** ppv)
     This->ref = 1;
     This->initialized = FALSE;
     This->stream = NULL;
-    InitializeCriticalSection(&This->lock);
+    InitializeCriticalSectionEx(&This->lock, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
     This->lock.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": DdsDecoder.lock");
 
     ret = IWICBitmapDecoder_QueryInterface(&This->IWICBitmapDecoder_iface, iid, ppv);
@@ -1883,7 +1884,7 @@ static HRESULT WINAPI DdsEncoder_Dds_CreateNewFrame(IWICDdsEncoder *iface,
         goto end;
     }
 
-    result = HeapAlloc(GetProcessHeap(), 0, sizeof(*result));
+    result = malloc(sizeof(*result));
     if (!result)
     {
         hr = E_OUTOFMEMORY;
@@ -1949,7 +1950,7 @@ static ULONG WINAPI DdsEncoder_AddRef(IWICBitmapEncoder *iface)
     DdsEncoder *This = impl_from_IWICBitmapEncoder(iface);
     ULONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) refcount=%u\n", iface, ref);
+    TRACE("(%p) refcount=%lu\n", iface, ref);
 
     return ref;
 }
@@ -1959,13 +1960,13 @@ static ULONG WINAPI DdsEncoder_Release(IWICBitmapEncoder *iface)
     DdsEncoder *This = impl_from_IWICBitmapEncoder(iface);
     ULONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) refcount=%u\n", iface, ref);
+    TRACE("(%p) refcount=%lu\n", iface, ref);
 
     if (ref == 0) {
         This->lock.DebugInfo->Spare[0] = 0;
         DeleteCriticalSection(&This->lock);
         if (This->stream) IStream_Release(This->stream);
-        HeapFree(GetProcessHeap(), 0, This);
+        free(This);
     }
 
     return ref;
@@ -2128,7 +2129,7 @@ HRESULT DdsEncoder_CreateInstance( REFIID iid, void **ppv)
 
     *ppv = NULL;
 
-    This = HeapAlloc(GetProcessHeap(), 0, sizeof(DdsEncoder));
+    This = malloc(sizeof(DdsEncoder));
     if (!This) return E_OUTOFMEMORY;
 
     This->IWICBitmapEncoder_iface.lpVtbl = &DdsEncoder_Vtbl;
@@ -2139,7 +2140,7 @@ HRESULT DdsEncoder_CreateInstance( REFIID iid, void **ppv)
     This->frame_index = 0;
     This->uncommitted_frame = FALSE;
     This->committed = FALSE;
-    InitializeCriticalSection(&This->lock);
+    InitializeCriticalSectionEx(&This->lock, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
     This->lock.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": DdsEncoder.lock");
 
     ret = IWICBitmapEncoder_QueryInterface(&This->IWICBitmapEncoder_iface, iid, ppv);

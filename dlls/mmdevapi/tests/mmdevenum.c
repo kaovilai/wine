@@ -29,6 +29,7 @@
 #include "dshow.h"
 #include "dsound.h"
 #include "devpkey.h"
+#include "devicetopology.h"
 
 DEFINE_GUID(GUID_NULL,0,0,0,0,0,0,0,0,0,0,0);
 
@@ -51,17 +52,17 @@ static void test_collection(IMMDeviceEnumerator *mme, IMMDeviceCollection *col)
     /* collection doesn't keep a ref on parent */
     IMMDeviceEnumerator_AddRef(mme);
     ref = IMMDeviceEnumerator_Release(mme);
-    ok(ref == 2, "Reference count on parent is %u\n", ref);
+    ok(ref == 2, "Reference count on parent is %lu\n", ref);
 
     ref = IMMDeviceCollection_AddRef(col);
     IMMDeviceCollection_Release(col);
-    ok(ref == 2, "Invalid reference count %u on collection\n", ref);
+    ok(ref == 2, "Invalid reference count %lu on collection\n", ref);
 
     hr = IMMDeviceCollection_QueryInterface(col, &IID_IUnknown, NULL);
-    ok(hr == E_POINTER, "Null ppv returns %08x\n", hr);
+    ok(hr == E_POINTER, "Null ppv returns %08lx\n", hr);
 
     hr = IMMDeviceCollection_QueryInterface(col, &IID_IUnknown, (void**)&unk);
-    ok(hr == S_OK, "Cannot query for IID_IUnknown: 0x%08x\n", hr);
+    ok(hr == S_OK, "Cannot query for IID_IUnknown: 0x%08lx\n", hr);
     if (hr == S_OK)
     {
         ok((IUnknown*)col == unk, "Pointers are not identical %p/%p/%p\n", col, unk, mme);
@@ -69,24 +70,24 @@ static void test_collection(IMMDeviceEnumerator *mme, IMMDeviceCollection *col)
     }
 
     hr = IMMDeviceCollection_QueryInterface(col, &IID_IMMDeviceCollection, (void**)&col2);
-    ok(hr == S_OK, "Cannot query for IID_IMMDeviceCollection: 0x%08x\n", hr);
+    ok(hr == S_OK, "Cannot query for IID_IMMDeviceCollection: 0x%08lx\n", hr);
     if (hr == S_OK)
         IMMDeviceCollection_Release(col2);
 
     hr = IMMDeviceCollection_QueryInterface(col, &IID_IMMDeviceEnumerator, (void**)&mme2);
-    ok(hr == E_NOINTERFACE, "Query for IID_IMMDeviceEnumerator returned: 0x%08x\n", hr);
+    ok(hr == E_NOINTERFACE, "Query for IID_IMMDeviceEnumerator returned: 0x%08lx\n", hr);
     if (hr == S_OK)
         IMMDeviceEnumerator_Release(mme2);
 
     hr = IMMDeviceCollection_GetCount(col, NULL);
-    ok(hr == E_POINTER, "GetCount returned 0x%08x\n", hr);
+    ok(hr == E_POINTER, "GetCount returned 0x%08lx\n", hr);
 
     hr = IMMDeviceCollection_GetCount(col, &numdev);
-    ok(hr == S_OK, "GetCount returned 0x%08x\n", hr);
+    ok(hr == S_OK, "GetCount returned 0x%08lx\n", hr);
 
     dev = (void*)(LONG_PTR)0x12345678;
     hr = IMMDeviceCollection_Item(col, numdev, &dev);
-    ok(hr == E_INVALIDARG, "Asking for too high device returned 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Asking for too high device returned 0x%08lx\n", hr);
     ok(dev == NULL, "Returned non-null device\n");
 
     g_num_mmdevs = numdev;
@@ -94,10 +95,10 @@ static void test_collection(IMMDeviceEnumerator *mme, IMMDeviceCollection *col)
     if (numdev)
     {
         hr = IMMDeviceCollection_Item(col, 0, NULL);
-        ok(hr == E_POINTER, "Query with null pointer returned 0x%08x\n", hr);
+        ok(hr == E_POINTER, "Query with null pointer returned 0x%08lx\n", hr);
 
         hr = IMMDeviceCollection_Item(col, 0, &dev);
-        ok(hr == S_OK, "Valid Item returned 0x%08x\n", hr);
+        ok(hr == S_OK, "Valid Item returned 0x%08lx\n", hr);
         ok(dev != NULL, "Device is null!\n");
         if (dev != NULL)
         {
@@ -113,7 +114,7 @@ static void test_collection(IMMDeviceEnumerator *mme, IMMDeviceCollection *col)
                 trace("Device found: %s\n", temp);
 
                 hr = IMMDeviceEnumerator_GetDevice(mme, id, &dev2);
-                ok(hr == S_OK, "GetDevice failed: %08x\n", hr);
+                ok(hr == S_OK, "GetDevice failed: %08lx\n", hr);
 
                 IMMDevice_Release(dev2);
 
@@ -188,7 +189,7 @@ static HRESULT WINAPI async_activate_ActivateCompleted(
     hr = IActivateAudioInterfaceAsyncOperation_GetActivateResult(op,
             &async_activate_test.result_hr, &async_activate_test.result_iface);
     ok(hr == S_OK,
-            "%s: GetActivateResult failed: %08x\n",
+            "%s: GetActivateResult failed: %08lx\n",
             async_activate_test.msg_pfx, hr);
 
     return S_OK;
@@ -244,16 +245,16 @@ static void test_ActivateAudioInterfaceAsync(void)
 
     EnterCriticalSection(&async_activate_test.lock);
     hr = pActivateAudioInterfaceAsync(L"winetest_bogus", &IID_IAudioClient3, NULL, &async_activate_done, &async_activate_test.op);
-    ok(hr == S_OK, "ActivateAudioInterfaceAsync failed: %08x\n", hr);
+    ok(hr == S_OK, "ActivateAudioInterfaceAsync failed: %08lx\n", hr);
     LeaveCriticalSection(&async_activate_test.lock);
 
     IActivateAudioInterfaceAsyncOperation_Release(async_activate_test.op);
 
     dr = WaitForSingleObject(async_activate_test.evt, 1000); /* wait for all refs other than our own to be released */
     ok(dr == WAIT_OBJECT_0, "Timed out waiting for async activate to complete\n");
-    ok(async_activate_test.ref == 1, "ActivateAudioInterfaceAsync leaked a handler ref: %u\n", async_activate_test.ref);
+    ok(async_activate_test.ref == 1, "ActivateAudioInterfaceAsync leaked a handler ref: %lu\n", async_activate_test.ref);
     ok(async_activate_test.result_hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND),
-            "mmdevice activation gave wrong result: %08x\n", async_activate_test.result_hr);
+            "mmdevice activation gave wrong result: %08lx\n", async_activate_test.result_hr);
     ok(async_activate_test.result_iface == NULL, "Got non-NULL iface pointer: %p\n", async_activate_test.result_iface);
 
 
@@ -263,16 +264,16 @@ static void test_ActivateAudioInterfaceAsync(void)
 
         EnterCriticalSection(&async_activate_test.lock);
         hr = pActivateAudioInterfaceAsync(g_device_path, &IID_IAudioClient3, NULL, &async_activate_done, &async_activate_test.op);
-        ok(hr == S_OK, "ActivateAudioInterfaceAsync failed: %08x\n", hr);
+        ok(hr == S_OK, "ActivateAudioInterfaceAsync failed: %08lx\n", hr);
         LeaveCriticalSection(&async_activate_test.lock);
 
         IActivateAudioInterfaceAsyncOperation_Release(async_activate_test.op);
 
         dr = WaitForSingleObject(async_activate_test.evt, 1000);
         ok(dr == WAIT_OBJECT_0, "Timed out waiting for async activate to complete\n");
-        ok(async_activate_test.ref == 1, "ActivateAudioInterfaceAsync leaked a handler ref: %u\n", async_activate_test.ref);
+        ok(async_activate_test.ref == 1, "ActivateAudioInterfaceAsync leaked a handler ref: %lu\n", async_activate_test.ref);
         ok(async_activate_test.result_hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND),
-                "mmdevice activation gave wrong result: %08x\n", async_activate_test.result_hr);
+                "mmdevice activation gave wrong result: %08lx\n", async_activate_test.result_hr);
         ok(async_activate_test.result_iface == NULL, "Got non-NULL iface pointer: %p\n", async_activate_test.result_iface);
     }
 
@@ -283,7 +284,7 @@ static void test_ActivateAudioInterfaceAsync(void)
 
     EnterCriticalSection(&async_activate_test.lock);
     hr = pActivateAudioInterfaceAsync(path, &IID_IAudioClient3, NULL, &async_activate_done, &async_activate_test.op);
-    ok(hr == S_OK, "ActivateAudioInterfaceAsync failed: %08x\n", hr);
+    ok(hr == S_OK, "ActivateAudioInterfaceAsync failed: %08lx\n", hr);
     LeaveCriticalSection(&async_activate_test.lock);
 
     IActivateAudioInterfaceAsyncOperation_Release(async_activate_test.op);
@@ -294,14 +295,14 @@ static void test_ActivateAudioInterfaceAsync(void)
     ok(async_activate_test.result_hr == S_OK ||
             (g_num_mmdevs == 0 && async_activate_test.result_hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) || /* no devices */
             broken(async_activate_test.result_hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)), /* win8 doesn't support DEVINTERFACE_AUDIO_RENDER */
-            "mmdevice activation gave wrong result: %08x\n", async_activate_test.result_hr);
+            "mmdevice activation gave wrong result: %08lx\n", async_activate_test.result_hr);
 
     if(async_activate_test.result_hr == S_OK){
         ok(async_activate_test.result_iface != NULL, "Got NULL iface pointer on success?\n");
 
         /* returned iface should be the IID we requested */
         hr = IUnknown_QueryInterface(async_activate_test.result_iface, &IID_IAudioClient3, (void**)&ac3);
-        ok(hr == S_OK, "Failed to query IAudioClient3: %08x\n", hr);
+        ok(hr == S_OK, "Failed to query IAudioClient3: %08lx\n", hr);
         ok(async_activate_test.result_iface == (IUnknown*)ac3,
                 "Activated interface other than IAudioClient3!\n");
         IAudioClient3_Release(ac3);
@@ -382,6 +383,70 @@ static IMMNotificationClientVtbl notif_vtbl = {
 
 static IMMNotificationClient notif = { &notif_vtbl };
 
+static void test_connectors(IDeviceTopology *dt)
+{
+    HRESULT hr;
+    UINT connector_count;
+
+    hr = IDeviceTopology_GetConnectorCount(dt, &connector_count);
+    ok(hr == S_OK, "GetConnectorCount returns 0x%08lx\n", hr);
+    trace("connector count: %u\n", connector_count);
+
+    if (hr == S_OK && connector_count > 0)
+    {
+        IConnector *connector;
+
+        hr = IDeviceTopology_GetConnector(dt, 0, &connector);
+        ok(hr == S_OK, "GetConnector returns 0x%08lx\n", hr);
+
+        if (hr == S_OK)
+        {
+            ConnectorType type;
+
+            hr = IConnector_GetType(connector, &type);
+            ok(hr == S_OK, "GetConnector returns 0x%08lx\n", hr);
+            trace("connector 0 type: %u\n", connector_count);
+        }
+    }
+}
+
+static void test_DeviceTopology(IMMDeviceEnumerator *mme)
+{
+    IMMDevice *dev = NULL;
+    IDeviceTopology *dt = NULL;
+    HRESULT hr;
+
+    hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(mme, eRender, eMultimedia, &dev);
+    ok(hr == S_OK || hr == E_NOTFOUND, "GetDefaultAudioEndpoint failed: 0x%08lx\n", hr);
+    if (hr != S_OK || !dev)
+    {
+        if (hr == E_NOTFOUND)
+            win_skip("No sound card available\n");
+        else
+            skip("GetDefaultAudioEndpoint returns 0x%08lx\n", hr);
+        goto cleanup;
+    }
+
+    hr = IMMDevice_Activate(dev, &IID_IDeviceTopology, CLSCTX_INPROC_SERVER, NULL, (void**)&dt);
+    ok(hr == S_OK || hr == E_NOINTERFACE, "IDeviceTopology Activation failed: 0x%08lx\n", hr);
+    if (hr != S_OK || !dev)
+    {
+        if (hr == E_NOINTERFACE)
+            win_skip("IDeviceTopology interface not found\n");
+        else
+            skip("IDeviceTopology Activation returns 0x%08lx\n", hr);
+        goto cleanup;
+    }
+
+    test_connectors(dt);
+
+    IDeviceTopology_Release(dt);
+
+cleanup:
+    if (dev)
+        IMMDevice_Release(dev);
+}
+
 /* Only do parameter tests here, the actual MMDevice testing should be a separate test */
 START_TEST(mmdevenum)
 {
@@ -396,17 +461,17 @@ START_TEST(mmdevenum)
     hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_INPROC_SERVER, &IID_IMMDeviceEnumerator, (void**)&mme);
     if (FAILED(hr))
     {
-        skip("mmdevapi not available: 0x%08x\n", hr);
+        skip("mmdevapi not available: 0x%08lx\n", hr);
         return;
     }
 
     /* Odd behavior.. bug? */
     ref = IMMDeviceEnumerator_AddRef(mme);
-    ok(ref == 3, "Invalid reference count after incrementing: %u\n", ref);
+    ok(ref == 3, "Invalid reference count after incrementing: %lu\n", ref);
     IMMDeviceEnumerator_Release(mme);
 
     hr = IMMDeviceEnumerator_QueryInterface(mme, &IID_IUnknown, (void**)&unk);
-    ok(hr == S_OK, "returned 0x%08x\n", hr);
+    ok(hr == S_OK, "returned 0x%08lx\n", hr);
     if (hr != S_OK) return;
 
     ok( (LONG_PTR)mme == (LONG_PTR)unk, "Pointers are unequal %p/%p\n", unk, mme);
@@ -414,39 +479,39 @@ START_TEST(mmdevenum)
 
     /* Proving that it is static.. */
     hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_INPROC_SERVER, &IID_IMMDeviceEnumerator, (void**)&mme2);
-    ok(hr == S_OK, "CoCreateInstance failed: 0x%08x\n", hr);
+    ok(hr == S_OK, "CoCreateInstance failed: 0x%08lx\n", hr);
     IMMDeviceEnumerator_Release(mme2);
     ok(mme == mme2, "Pointers are not equal!\n");
 
     hr = IMMDeviceEnumerator_QueryInterface(mme, &IID_IUnknown, NULL);
-    ok(hr == E_POINTER, "Null pointer on QueryInterface returned %08x\n", hr);
+    ok(hr == E_POINTER, "Null pointer on QueryInterface returned %08lx\n", hr);
 
     hr = IMMDeviceEnumerator_QueryInterface(mme, &GUID_NULL, (void**)&unk);
     ok(!unk, "Unk not reset to null after invalid QI\n");
-    ok(hr == E_NOINTERFACE, "Invalid hr %08x returned on IID_NULL\n", hr);
+    ok(hr == E_NOINTERFACE, "Invalid hr %08lx returned on IID_NULL\n", hr);
 
     hr = IMMDeviceEnumerator_GetDevice(mme, L"notadevice", NULL);
-    ok(hr == E_POINTER, "GetDevice gave wrong error: %08x\n", hr);
+    ok(hr == E_POINTER, "GetDevice gave wrong error: %08lx\n", hr);
 
     hr = IMMDeviceEnumerator_GetDevice(mme, NULL, &dev);
-    ok(hr == E_POINTER, "GetDevice gave wrong error: %08x\n", hr);
+    ok(hr == E_POINTER, "GetDevice gave wrong error: %08lx\n", hr);
 
     hr = IMMDeviceEnumerator_GetDevice(mme, L"notadevice", &dev);
-    ok(hr == E_INVALIDARG, "GetDevice gave wrong error: %08x\n", hr);
+    ok(hr == E_INVALIDARG, "GetDevice gave wrong error: %08lx\n", hr);
 
     col = (void*)(LONG_PTR)0x12345678;
     hr = IMMDeviceEnumerator_EnumAudioEndpoints(mme, 0xffff, DEVICE_STATEMASK_ALL, &col);
-    ok(hr == E_INVALIDARG, "Setting invalid data flow returned 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Setting invalid data flow returned 0x%08lx\n", hr);
     ok(col == NULL, "Collection pointer non-null on failure\n");
 
     hr = IMMDeviceEnumerator_EnumAudioEndpoints(mme, eAll, DEVICE_STATEMASK_ALL+1, &col);
-    ok(hr == E_INVALIDARG, "Setting invalid mask returned 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Setting invalid mask returned 0x%08lx\n", hr);
 
     hr = IMMDeviceEnumerator_EnumAudioEndpoints(mme, eAll, DEVICE_STATEMASK_ALL, NULL);
-    ok(hr == E_POINTER, "Invalid pointer returned: 0x%08x\n", hr);
+    ok(hr == E_POINTER, "Invalid pointer returned: 0x%08lx\n", hr);
 
     hr = IMMDeviceEnumerator_EnumAudioEndpoints(mme, eAll, DEVICE_STATEMASK_ALL, &col);
-    ok(hr == S_OK, "Valid EnumAudioEndpoints returned 0x%08x\n", hr);
+    ok(hr == S_OK, "Valid EnumAudioEndpoints returned 0x%08lx\n", hr);
     if (hr == S_OK)
     {
         ok(!!col, "Returned null pointer\n");
@@ -455,28 +520,30 @@ START_TEST(mmdevenum)
     }
 
     hr = IMMDeviceEnumerator_RegisterEndpointNotificationCallback(mme, NULL);
-    ok(hr == E_POINTER, "RegisterEndpointNotificationCallback failed: %08x\n", hr);
+    ok(hr == E_POINTER, "RegisterEndpointNotificationCallback failed: %08lx\n", hr);
 
     hr = IMMDeviceEnumerator_RegisterEndpointNotificationCallback(mme, &notif);
-    ok(hr == S_OK, "RegisterEndpointNotificationCallback failed: %08x\n", hr);
+    ok(hr == S_OK, "RegisterEndpointNotificationCallback failed: %08lx\n", hr);
 
     hr = IMMDeviceEnumerator_RegisterEndpointNotificationCallback(mme, &notif);
-    ok(hr == S_OK, "RegisterEndpointNotificationCallback failed: %08x\n", hr);
+    ok(hr == S_OK, "RegisterEndpointNotificationCallback failed: %08lx\n", hr);
 
     hr = IMMDeviceEnumerator_UnregisterEndpointNotificationCallback(mme, NULL);
-    ok(hr == E_POINTER, "UnregisterEndpointNotificationCallback failed: %08x\n", hr);
+    ok(hr == E_POINTER, "UnregisterEndpointNotificationCallback failed: %08lx\n", hr);
 
     hr = IMMDeviceEnumerator_UnregisterEndpointNotificationCallback(mme, (IMMNotificationClient*)0xdeadbeef);
-    ok(hr == E_NOTFOUND, "UnregisterEndpointNotificationCallback failed: %08x\n", hr);
+    ok(hr == E_NOTFOUND, "UnregisterEndpointNotificationCallback failed: %08lx\n", hr);
 
     hr = IMMDeviceEnumerator_UnregisterEndpointNotificationCallback(mme, &notif);
-    ok(hr == S_OK, "UnregisterEndpointNotificationCallback failed: %08x\n", hr);
+    ok(hr == S_OK, "UnregisterEndpointNotificationCallback failed: %08lx\n", hr);
 
     hr = IMMDeviceEnumerator_UnregisterEndpointNotificationCallback(mme, &notif);
-    ok(hr == S_OK, "UnregisterEndpointNotificationCallback failed: %08x\n", hr);
+    ok(hr == S_OK, "UnregisterEndpointNotificationCallback failed: %08lx\n", hr);
 
     hr = IMMDeviceEnumerator_UnregisterEndpointNotificationCallback(mme, &notif);
-    ok(hr == E_NOTFOUND, "UnregisterEndpointNotificationCallback failed: %08x\n", hr);
+    ok(hr == E_NOTFOUND, "UnregisterEndpointNotificationCallback failed: %08lx\n", hr);
+
+    test_DeviceTopology(mme);
 
     IMMDeviceEnumerator_Release(mme);
 

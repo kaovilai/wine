@@ -525,11 +525,19 @@ void find_domain_name(const WCHAR *host, DWORD host_len,
                     return;
             }
         } else if(last_tld-host < 3)
-            /* Anything less than 3 characters is considered part
+        {
+            /* Anything less than 3 ASCII characters is considered part
              * of the TLD name.
              *  Ex: ak.uk -> Has no domain name.
              */
-            return;
+            for(p = host; p < last_tld; p++) {
+                if(!is_ascii(*p))
+                    break;
+            }
+
+            if(p == last_tld)
+                return;
+        }
 
         /* Otherwise the domain name is the whole host name. */
         *domain_start = 0;
@@ -634,7 +642,7 @@ static DWORD remove_dot_segments(WCHAR *path, DWORD path_len) {
     }
 
     len = out - path;
-    TRACE("(%p %d): Path after dot segments removed %s len=%d\n", path, path_len,
+    TRACE("(%p %ld): Path after dot segments removed %s len=%ld\n", path, path_len,
         debugstr_wn(path, len), len);
     return len;
 }
@@ -974,12 +982,12 @@ static BOOL parse_scheme(const WCHAR **ptr, parse_data *data, DWORD flags, DWORD
             data->scheme_len = lstrlenW(L"file");
             data->has_implicit_scheme = TRUE;
 
-            TRACE("(%p %p %x): URI is an implicit file path.\n", ptr, data, flags);
+            TRACE("(%p %p %lx): URI is an implicit file path.\n", ptr, data, flags);
         } else {
             /* Windows does not consider anything that can implicitly be a file
              * path to be a valid URI if the ALLOW_IMPLICIT_FILE_SCHEME flag is not set...
              */
-            TRACE("(%p %p %x): URI is implicitly a file path, but, the ALLOW_IMPLICIT_FILE_SCHEME flag wasn't set.\n",
+            TRACE("(%p %p %lx): URI is implicitly a file path, but, the ALLOW_IMPLICIT_FILE_SCHEME flag wasn't set.\n",
                     ptr, data, flags);
             return FALSE;
         }
@@ -994,24 +1002,24 @@ static BOOL parse_scheme(const WCHAR **ptr, parse_data *data, DWORD flags, DWORD
             data->scheme_len = lstrlenW(L"*");
             data->has_implicit_scheme = TRUE;
 
-            TRACE("(%p %p %x): URI is an implicit wildcard scheme.\n", ptr, data, flags);
+            TRACE("(%p %p %lx): URI is an implicit wildcard scheme.\n", ptr, data, flags);
         } else if (flags & Uri_CREATE_ALLOW_RELATIVE) {
             data->is_relative = TRUE;
-            TRACE("(%p %p %x): URI is relative.\n", ptr, data, flags);
+            TRACE("(%p %p %lx): URI is relative.\n", ptr, data, flags);
         } else {
-            TRACE("(%p %p %x): Malformed URI found. Unable to deduce scheme name.\n", ptr, data, flags);
+            TRACE("(%p %p %lx): Malformed URI found. Unable to deduce scheme name.\n", ptr, data, flags);
             return FALSE;
         }
     }
 
     if(!data->is_relative)
-        TRACE("(%p %p %x): Found scheme=%s scheme_len=%d\n", ptr, data, flags,
+        TRACE("(%p %p %lx): Found scheme=%s scheme_len=%ld\n", ptr, data, flags,
                 debugstr_wn(data->scheme, data->scheme_len), data->scheme_len);
 
     if(!parse_scheme_type(data))
         return FALSE;
 
-    TRACE("(%p %p %x): Assigned %d as the URL_SCHEME.\n", ptr, data, flags, data->scheme_type);
+    TRACE("(%p %p %lx): Assigned %d as the URL_SCHEME.\n", ptr, data, flags, data->scheme_type);
     return TRUE;
 }
 
@@ -1094,7 +1102,7 @@ static void parse_userinfo(const WCHAR **ptr, parse_data *data, DWORD flags) {
     const WCHAR *start = *ptr;
 
     if(!parse_username(ptr, data, flags, 0)) {
-        TRACE("(%p %p %x): URI contained no userinfo.\n", ptr, data, flags);
+        TRACE("(%p %p %lx): URI contained no userinfo.\n", ptr, data, flags);
         return;
     }
 
@@ -1104,7 +1112,7 @@ static void parse_userinfo(const WCHAR **ptr, parse_data *data, DWORD flags) {
             *ptr = start;
             data->username = NULL;
             data->username_len = 0;
-            TRACE("(%p %p %x): URI contained no userinfo.\n", ptr, data, flags);
+            TRACE("(%p %p %lx): URI contained no userinfo.\n", ptr, data, flags);
             return;
         }
     }
@@ -1116,16 +1124,16 @@ static void parse_userinfo(const WCHAR **ptr, parse_data *data, DWORD flags) {
         data->password = NULL;
         data->password_len = 0;
 
-        TRACE("(%p %p %x): URI contained no userinfo.\n", ptr, data, flags);
+        TRACE("(%p %p %lx): URI contained no userinfo.\n", ptr, data, flags);
         return;
     }
 
     if(data->username)
-        TRACE("(%p %p %x): Found username %s len=%d.\n", ptr, data, flags,
+        TRACE("(%p %p %lx): Found username %s len=%ld.\n", ptr, data, flags,
             debugstr_wn(data->username, data->username_len), data->username_len);
 
     if(data->password)
-        TRACE("(%p %p %x): Found password %s len=%d.\n", ptr, data, flags,
+        TRACE("(%p %p %lx): Found password %s len=%ld.\n", ptr, data, flags,
             debugstr_wn(data->password, data->password_len), data->password_len);
 
     ++(*ptr);
@@ -1165,7 +1173,7 @@ static BOOL parse_port(const WCHAR **ptr, parse_data *data) {
     data->port_value = port;
     data->port_len = *ptr - data->port;
 
-    TRACE("(%p %p): Found port %s len=%d value=%u\n", ptr, data,
+    TRACE("(%p %p): Found port %s len=%ld value=%lu\n", ptr, data,
         debugstr_wn(data->port, data->port_len), data->port_len, data->port_value);
     return TRUE;
 }
@@ -1219,7 +1227,7 @@ static BOOL parse_ipv4address(const WCHAR **ptr, parse_data *data) {
         return FALSE;
     }
 
-    TRACE("(%p %p): IPv4 address found. host=%s host_len=%d host_type=%d\n",
+    TRACE("(%p %p): IPv4 address found. host=%s host_len=%ld host_type=%d\n",
         ptr, data, debugstr_wn(data->host, data->host_len),
         data->host_len, data->host_type);
     return TRUE;
@@ -1290,7 +1298,7 @@ static BOOL parse_reg_name(const WCHAR **ptr, parse_data *data, DWORD extras) {
                     if(data->scheme_type != URL_SCHEME_UNKNOWN) {
                         *ptr = data->host;
                         data->host = NULL;
-                        TRACE("(%p %p %x): Expected valid port\n", ptr, data, extras);
+                        TRACE("(%p %p %lx): Expected valid port\n", ptr, data, extras);
                         return FALSE;
                     } else
                         /* Windows gives up on trying to parse a port when it
@@ -1325,7 +1333,7 @@ static BOOL parse_reg_name(const WCHAR **ptr, parse_data *data, DWORD extras) {
     if(has_start_bracket) {
         /* Make sure the last character of the host wasn't a ']'. */
         if(*(*ptr-1) == ']') {
-            TRACE("(%p %p %x): Expected an IP literal inside of the host\n", ptr, data, extras);
+            TRACE("(%p %p %lx): Expected an IP literal inside of the host\n", ptr, data, extras);
             *ptr = data->host;
             data->host = NULL;
             return FALSE;
@@ -1339,11 +1347,21 @@ static BOOL parse_reg_name(const WCHAR **ptr, parse_data *data, DWORD extras) {
     /* If the host is empty, then it's an unknown host type. */
     if(data->host_len == 0 || is_res)
         data->host_type = Uri_HOST_UNKNOWN;
-    else
+    else {
+        unsigned int i;
+
         data->host_type = Uri_HOST_DNS;
 
-    TRACE("(%p %p %x): Parsed reg-name. host=%s len=%d\n", ptr, data, extras,
-        debugstr_wn(data->host, data->host_len), data->host_len);
+        for(i = 0; i < data->host_len; i++) {
+            if(!is_ascii(data->host[i])) {
+                data->host_type = Uri_HOST_IDN;
+                break;
+            }
+        }
+    }
+
+    TRACE("(%p %p %lx): Parsed reg-name. host=%s len=%ld type=%d\n", ptr, data, extras,
+          debugstr_wn(data->host, data->host_len), data->host_len, data->host_type);
     return TRUE;
 }
 
@@ -1476,7 +1494,7 @@ static BOOL parse_host(const WCHAR **ptr, parse_data *data, DWORD extras) {
     if(!parse_ip_literal(ptr, data, extras)) {
         if(!parse_ipv4address(ptr, data)) {
             if(!parse_reg_name(ptr, data, extras)) {
-                TRACE("(%p %p %x): Malformed URI, Unknown host type.\n",  ptr, data, extras);
+                TRACE("(%p %p %lx): Malformed URI, Unknown host type.\n",  ptr, data, extras);
                 return FALSE;
             }
         }
@@ -1560,10 +1578,10 @@ static BOOL parse_path_hierarchical(const WCHAR **ptr, parse_data *data, DWORD f
     }
 
     if(data->path)
-        TRACE("(%p %p %x): Parsed path %s len=%d\n", ptr, data, flags,
+        TRACE("(%p %p %lx): Parsed path %s len=%ld\n", ptr, data, flags,
             debugstr_wn(data->path, data->path_len), data->path_len);
     else
-        TRACE("(%p %p %x): The URI contained no path\n", ptr, data, flags);
+        TRACE("(%p %p %lx): The URI contained no path\n", ptr, data, flags);
 
     return TRUE;
 }
@@ -1610,7 +1628,7 @@ static BOOL parse_path_opaque(const WCHAR **ptr, parse_data *data, DWORD flags) 
     }
 
     if (data->path) data->path_len = *ptr - data->path;
-    TRACE("(%p %p %x): Parsed opaque URI path %s len=%d\n", ptr, data, flags,
+    TRACE("(%p %p %lx): Parsed opaque URI path %s len=%ld\n", ptr, data, flags,
         debugstr_wn(data->path, data->path_len), data->path_len);
     return TRUE;
 }
@@ -1659,7 +1677,7 @@ static BOOL parse_hierpart(const WCHAR **ptr, parse_data *data, DWORD flags) {
          */
         if(data->scheme_type != URL_SCHEME_UNKNOWN ||
            !(flags & Uri_CREATE_NO_CRACK_UNKNOWN_SCHEMES)) {
-            TRACE("(%p %p %x): Treating URI as an hierarchical URI.\n", ptr, data, flags);
+            TRACE("(%p %p %lx): Treating URI as an hierarchical URI.\n", ptr, data, flags);
             data->is_opaque = FALSE;
 
             if(data->scheme_type == URL_SCHEME_WILDCARD && !data->has_implicit_scheme) {
@@ -1685,7 +1703,7 @@ static BOOL parse_hierpart(const WCHAR **ptr, parse_data *data, DWORD flags) {
      * URI.
      */
 
-    TRACE("(%p %p %x): Treating URI as an opaque URI.\n", ptr, data, flags);
+    TRACE("(%p %p %lx): Treating URI as an opaque URI.\n", ptr, data, flags);
 
     data->is_opaque = TRUE;
     if(!parse_path_opaque(ptr, data, flags))
@@ -1705,7 +1723,7 @@ static BOOL parse_query(const WCHAR **ptr, parse_data *data, DWORD flags) {
     const BOOL known_scheme = data->scheme_type != URL_SCHEME_UNKNOWN;
 
     if(**ptr != '?') {
-        TRACE("(%p %p %x): URI didn't contain a query string.\n", ptr, data, flags);
+        TRACE("(%p %p %lx): URI didn't contain a query string.\n", ptr, data, flags);
         return TRUE;
     }
 
@@ -1728,7 +1746,7 @@ static BOOL parse_query(const WCHAR **ptr, parse_data *data, DWORD flags) {
 
     data->query_len = *ptr - data->query;
 
-    TRACE("(%p %p %x): Parsed query string %s len=%d\n", ptr, data, flags,
+    TRACE("(%p %p %lx): Parsed query string %s len=%ld\n", ptr, data, flags,
         debugstr_wn(data->query, data->query_len), data->query_len);
     return TRUE;
 }
@@ -1744,7 +1762,7 @@ static BOOL parse_fragment(const WCHAR **ptr, parse_data *data, DWORD flags) {
     const BOOL known_scheme = data->scheme_type != URL_SCHEME_UNKNOWN;
 
     if(**ptr != '#') {
-        TRACE("(%p %p %x): URI didn't contain a fragment.\n", ptr, data, flags);
+        TRACE("(%p %p %lx): URI didn't contain a fragment.\n", ptr, data, flags);
         return TRUE;
     }
 
@@ -1767,7 +1785,7 @@ static BOOL parse_fragment(const WCHAR **ptr, parse_data *data, DWORD flags) {
 
     data->fragment_len = *ptr - data->fragment;
 
-    TRACE("(%p %p %x): Parsed fragment %s len=%d\n", ptr, data, flags,
+    TRACE("(%p %p %lx): Parsed fragment %s len=%ld\n", ptr, data, flags,
         debugstr_wn(data->fragment, data->fragment_len), data->fragment_len);
     return TRUE;
 }
@@ -1784,7 +1802,7 @@ static BOOL parse_uri(parse_data *data, DWORD flags) {
     ptr = data->uri;
     pptr = &ptr;
 
-    TRACE("(%p %x): BEGINNING TO PARSE URI %s.\n", data, flags, debugstr_w(data->uri));
+    TRACE("(%p %lx): BEGINNING TO PARSE URI %s.\n", data, flags, debugstr_w(data->uri));
 
     if(!parse_scheme(pptr, data, flags, 0))
         return FALSE;
@@ -1798,7 +1816,7 @@ static BOOL parse_uri(parse_data *data, DWORD flags) {
     if(!parse_fragment(pptr, data, flags))
         return FALSE;
 
-    TRACE("(%p %x): FINISHED PARSING URI.\n", data, flags);
+    TRACE("(%p %lx): FINISHED PARSING URI.\n", data, flags);
     return TRUE;
 }
 
@@ -1932,7 +1950,7 @@ static BOOL canonicalize_userinfo(const parse_data *data, Uri *uri, DWORD flags,
 
     uri->userinfo_len = uri->canon_len - uri->userinfo_start;
     if(!computeOnly)
-        TRACE("(%p %p %x %d): Canonicalized userinfo, userinfo_start=%d, userinfo=%s, userinfo_split=%d userinfo_len=%d.\n",
+        TRACE("(%p %p %lx %d): Canonicalized userinfo, userinfo_start=%d, userinfo=%s, userinfo_split=%d userinfo_len=%ld.\n",
                 data, uri, flags, computeOnly, uri->userinfo_start, debugstr_wn(uri->canon_uri + uri->userinfo_start, uri->userinfo_len),
                 uri->userinfo_split, uri->userinfo_len);
 
@@ -2047,7 +2065,7 @@ static BOOL canonicalize_reg_name(const parse_data *data, Uri *uri,
     uri->host_len = uri->canon_len - uri->host_start;
 
     if(!computeOnly)
-        TRACE("(%p %p %x %d): Canonicalize reg_name=%s len=%d\n", data, uri, flags,
+        TRACE("(%p %p %lx %d): Canonicalize reg_name=%s len=%ld\n", data, uri, flags,
             computeOnly, debugstr_wn(uri->canon_uri+uri->host_start, uri->host_len),
             uri->host_len);
 
@@ -2082,7 +2100,7 @@ static BOOL canonicalize_implicit_ipv4address(const parse_data *data, Uri *uri, 
     uri->host_type = Uri_HOST_IPV4;
 
     if(!computeOnly)
-        TRACE("%p %p %x %d): Canonicalized implicit IP address=%s len=%d\n",
+        TRACE("%p %p %lx %d): Canonicalized implicit IP address=%s len=%ld\n",
             data, uri, flags, computeOnly,
             debugstr_wn(uri->canon_uri+uri->host_start, uri->host_len),
             uri->host_len);
@@ -2173,7 +2191,7 @@ static BOOL canonicalize_ipv4address(const parse_data *data, Uri *uri, DWORD fla
 
         uri->host_len = uri->canon_len - uri->host_start;
         if(!computeOnly)
-            TRACE("(%p %p %x %d): Canonicalized IPv4 address, ip=%s len=%d\n",
+            TRACE("(%p %p %lx %d): Canonicalized IPv4 address, ip=%s len=%ld\n",
                 data, uri, flags, computeOnly,
                 debugstr_wn(uri->canon_uri+uri->host_start, uri->host_len),
                 uri->host_len);
@@ -2243,7 +2261,7 @@ static BOOL canonicalize_ipv6address(const parse_data *data, Uri *uri,
     uri->host_len = uri->canon_len - uri->host_start;
 
     if(!computeOnly)
-        TRACE("(%p %p %x %d): Canonicalized IPv6 address %s, len=%d\n", data, uri, flags,
+        TRACE("(%p %p %lx %d): Canonicalized IPv6 address %s, len=%ld\n", data, uri, flags,
             computeOnly, debugstr_wn(uri->canon_uri+uri->host_start, uri->host_len),
             uri->host_len);
 
@@ -2276,6 +2294,13 @@ static BOOL canonicalize_host(const parse_data *data, Uri *uri, DWORD flags, BOO
 
             uri->host_type = Uri_HOST_IPV6;
             break;
+
+        case Uri_HOST_IDN:
+            uri->host_type = Uri_HOST_IDN;
+            if(!canonicalize_reg_name(data, uri, flags, computeOnly))
+                return FALSE;
+
+            break;
         case Uri_HOST_UNKNOWN:
             if(data->host_len > 0 || data->scheme_type != URL_SCHEME_FILE) {
                 uri->host_start = uri->canon_len;
@@ -2290,7 +2315,7 @@ static BOOL canonicalize_host(const parse_data *data, Uri *uri, DWORD flags, BOO
             uri->host_type = Uri_HOST_UNKNOWN;
             break;
         default:
-            FIXME("(%p %p %x %d): Canonicalization for host type %d not supported.\n", data,
+            FIXME("(%p %p %lx %d): Canonicalization for host type %d not supported.\n", data,
                     uri, flags, computeOnly, data->host_type);
             return FALSE;
        }
@@ -2544,7 +2569,7 @@ static DWORD canonicalize_path_hierarchical(const WCHAR *path, DWORD path_len, U
     }
 
     if(ret_path)
-        TRACE("Canonicalized path %s len=%d\n", debugstr_wn(ret_path, len), len);
+        TRACE("Canonicalized path %s len=%ld\n", debugstr_wn(ret_path, len), len);
     return len;
 }
 
@@ -2663,7 +2688,7 @@ static BOOL canonicalize_path_opaque(const parse_data *data, Uri *uri, DWORD fla
     uri->path_len = uri->canon_len - uri->path_start;
 
     if(!computeOnly)
-        TRACE("(%p %p %x %d): Canonicalized opaque URI path %s len=%d\n", data, uri, flags, computeOnly,
+        TRACE("(%p %p %lx %d): Canonicalized opaque URI path %s len=%ld\n", data, uri, flags, computeOnly,
             debugstr_wn(uri->canon_uri+uri->path_start, uri->path_len), uri->path_len);
     return TRUE;
 }
@@ -2809,7 +2834,7 @@ static BOOL canonicalize_query(const parse_data *data, Uri *uri, DWORD flags, BO
     uri->query_len = uri->canon_len - uri->query_start;
 
     if(!computeOnly)
-        TRACE("(%p %p %x %d): Canonicalized query string %s len=%d\n", data, uri, flags,
+        TRACE("(%p %p %lx %d): Canonicalized query string %s len=%ld\n", data, uri, flags,
             computeOnly, debugstr_wn(uri->canon_uri+uri->query_start, uri->query_len),
             uri->query_len);
     return TRUE;
@@ -2859,7 +2884,7 @@ static BOOL canonicalize_fragment(const parse_data *data, Uri *uri, DWORD flags,
     uri->fragment_len = uri->canon_len - uri->fragment_start;
 
     if(!computeOnly)
-        TRACE("(%p %p %x %d): Canonicalized fragment %s len=%d\n", data, uri, flags,
+        TRACE("(%p %p %lx %d): Canonicalized fragment %s len=%ld\n", data, uri, flags,
             computeOnly, debugstr_wn(uri->canon_uri+uri->fragment_start, uri->fragment_len),
             uri->fragment_len);
     return TRUE;
@@ -2875,7 +2900,7 @@ static BOOL canonicalize_scheme(const parse_data *data, Uri *uri, DWORD flags, B
          * URI.
          */
         if(!data->is_relative) {
-            FIXME("(%p %p %x): Unable to determine the scheme type of %s.\n", data,
+            FIXME("(%p %p %lx): Unable to determine the scheme type of %s.\n", data,
                     uri, flags, debugstr_w(data->uri));
             return FALSE;
         }
@@ -2892,7 +2917,7 @@ static BOOL canonicalize_scheme(const parse_data *data, Uri *uri, DWORD flags, B
             uri->canon_uri[i + pos] = ':';
             uri->scheme_start = pos;
 
-            TRACE("(%p %p %x): Canonicalized scheme=%s, len=%d.\n", data, uri, flags,
+            TRACE("(%p %p %lx): Canonicalized scheme=%s, len=%ld.\n", data, uri, flags,
                     debugstr_wn(uri->canon_uri+uri->scheme_start,  data->scheme_len), data->scheme_len);
         }
 
@@ -2914,30 +2939,30 @@ static int compute_canonicalized_length(const parse_data *data, DWORD flags) {
 
     memset(&uri, 0, sizeof(Uri));
 
-    TRACE("(%p %x): Beginning to compute canonicalized length for URI %s\n", data, flags,
+    TRACE("(%p %lx): Beginning to compute canonicalized length for URI %s\n", data, flags,
             debugstr_w(data->uri));
 
     if(!canonicalize_scheme(data, &uri, flags, TRUE)) {
-        ERR("(%p %x): Failed to compute URI scheme length.\n", data, flags);
+        ERR("(%p %lx): Failed to compute URI scheme length.\n", data, flags);
         return -1;
     }
 
     if(!canonicalize_hierpart(data, &uri, flags, TRUE)) {
-        ERR("(%p %x): Failed to compute URI hierpart length.\n", data, flags);
+        ERR("(%p %lx): Failed to compute URI hierpart length.\n", data, flags);
         return -1;
     }
 
     if(!canonicalize_query(data, &uri, flags, TRUE)) {
-        ERR("(%p %x): Failed to compute query string length.\n", data, flags);
+        ERR("(%p %lx): Failed to compute query string length.\n", data, flags);
         return -1;
     }
 
     if(!canonicalize_fragment(data, &uri, flags, TRUE)) {
-        ERR("(%p %x): Failed to compute fragment length.\n", data, flags);
+        ERR("(%p %lx): Failed to compute fragment length.\n", data, flags);
         return -1;
     }
 
-    TRACE("(%p %x): Finished computing canonicalized URI length. length=%d\n", data, flags, uri.canon_len);
+    TRACE("(%p %lx): Finished computing canonicalized URI length. length=%ld\n", data, flags, uri.canon_len);
 
     return uri.canon_len;
 }
@@ -2956,40 +2981,40 @@ static HRESULT canonicalize_uri(const parse_data *data, Uri *uri, DWORD flags) {
     uri->canon_uri = NULL;
     uri->canon_size = uri->canon_len = 0;
 
-    TRACE("(%p %p %x): beginning to canonicalize URI %s.\n", data, uri, flags, debugstr_w(data->uri));
+    TRACE("(%p %p %lx): beginning to canonicalize URI %s.\n", data, uri, flags, debugstr_w(data->uri));
 
     /* First try to compute the length of the URI. */
     len = compute_canonicalized_length(data, flags);
     if(len == -1) {
-        ERR("(%p %p %x): Could not compute the canonicalized length of %s.\n", data, uri, flags,
+        ERR("(%p %p %lx): Could not compute the canonicalized length of %s.\n", data, uri, flags,
                 debugstr_w(data->uri));
         return E_INVALIDARG;
     }
 
-    uri->canon_uri = heap_alloc((len+1)*sizeof(WCHAR));
+    uri->canon_uri = malloc((len + 1) * sizeof(WCHAR));
     if(!uri->canon_uri)
         return E_OUTOFMEMORY;
 
     uri->canon_size = len;
     if(!canonicalize_scheme(data, uri, flags, FALSE)) {
-        ERR("(%p %p %x): Unable to canonicalize the scheme of the URI.\n", data, uri, flags);
+        ERR("(%p %p %lx): Unable to canonicalize the scheme of the URI.\n", data, uri, flags);
         return E_INVALIDARG;
     }
     uri->scheme_type = data->scheme_type;
 
     if(!canonicalize_hierpart(data, uri, flags, FALSE)) {
-        ERR("(%p %p %x): Unable to canonicalize the hierpart of the URI\n", data, uri, flags);
+        ERR("(%p %p %lx): Unable to canonicalize the hierpart of the URI\n", data, uri, flags);
         return E_INVALIDARG;
     }
 
     if(!canonicalize_query(data, uri, flags, FALSE)) {
-        ERR("(%p %p %x): Unable to canonicalize query string of the URI.\n",
+        ERR("(%p %p %lx): Unable to canonicalize query string of the URI.\n",
             data, uri, flags);
         return E_INVALIDARG;
     }
 
     if(!canonicalize_fragment(data, uri, flags, FALSE)) {
-        ERR("(%p %p %x): Unable to canonicalize fragment of the URI.\n",
+        ERR("(%p %p %lx): Unable to canonicalize fragment of the URI.\n",
             data, uri, flags);
         return E_INVALIDARG;
     }
@@ -3001,7 +3026,7 @@ static HRESULT canonicalize_uri(const parse_data *data, Uri *uri, DWORD flags) {
         /* This happens if the URI is hierarchical and dot
          * segments were removed from its path.
          */
-        WCHAR *tmp = heap_realloc(uri->canon_uri, (uri->canon_len+1)*sizeof(WCHAR));
+        WCHAR *tmp = realloc(uri->canon_uri, (uri->canon_len + 1) * sizeof(WCHAR));
         if(!tmp)
             return E_OUTOFMEMORY;
 
@@ -3010,7 +3035,7 @@ static HRESULT canonicalize_uri(const parse_data *data, Uri *uri, DWORD flags) {
     }
 
     uri->canon_uri[uri->canon_len] = '\0';
-    TRACE("(%p %p %x): finished canonicalizing the URI. uri=%s\n", data, uri, flags, debugstr_w(uri->canon_uri));
+    TRACE("(%p %p %lx): finished canonicalizing the URI. uri=%s\n", data, uri, flags, debugstr_w(uri->canon_uri));
 
     return S_OK;
 }
@@ -3034,7 +3059,7 @@ static HRESULT get_builder_component(LPWSTR *component, DWORD *component_len,
         /* Allocate 'component', and copy the contents from 'source'
          * into the new allocation.
          */
-        *component = heap_alloc((source_len+1)*sizeof(WCHAR));
+        *component = malloc((source_len + 1) * sizeof(WCHAR));
         if(!(*component))
             return E_OUTOFMEMORY;
 
@@ -3057,7 +3082,7 @@ static HRESULT get_builder_component(LPWSTR *component, DWORD *component_len,
 static HRESULT set_builder_component(LPWSTR *component, DWORD *component_len, LPCWSTR new_value,
                                      WCHAR prefix, DWORD *flags, DWORD success_flag)
 {
-    heap_free(*component);
+    free(*component);
 
     if(!new_value) {
         *component = NULL;
@@ -3069,9 +3094,9 @@ static HRESULT set_builder_component(LPWSTR *component, DWORD *component_len, LP
 
         if(prefix && *new_value != prefix) {
             add_prefix = TRUE;
-            *component = heap_alloc((len+2)*sizeof(WCHAR));
+            *component = malloc((len + 2) * sizeof(WCHAR));
         } else
-            *component = heap_alloc((len+1)*sizeof(WCHAR));
+            *component = malloc((len + 1) * sizeof(WCHAR));
 
         if(!(*component))
             return E_OUTOFMEMORY;
@@ -3092,31 +3117,31 @@ static void reset_builder(UriBuilder *builder) {
         IUri_Release(&builder->uri->IUri_iface);
     builder->uri = NULL;
 
-    heap_free(builder->fragment);
+    free(builder->fragment);
     builder->fragment = NULL;
     builder->fragment_len = 0;
 
-    heap_free(builder->host);
+    free(builder->host);
     builder->host = NULL;
     builder->host_len = 0;
 
-    heap_free(builder->password);
+    free(builder->password);
     builder->password = NULL;
     builder->password_len = 0;
 
-    heap_free(builder->path);
+    free(builder->path);
     builder->path = NULL;
     builder->path_len = 0;
 
-    heap_free(builder->query);
+    free(builder->query);
     builder->query = NULL;
     builder->query_len = 0;
 
-    heap_free(builder->scheme);
+    free(builder->scheme);
     builder->scheme = NULL;
     builder->scheme_len = 0;
 
-    heap_free(builder->username);
+    free(builder->username);
     builder->username = NULL;
     builder->username_len = 0;
 
@@ -3147,10 +3172,10 @@ static HRESULT validate_scheme_name(const UriBuilder *builder, parse_data *data,
     if(parse_scheme(pptr, data, flags, ALLOW_NULL_TERM_SCHEME) &&
        data->scheme_len == expected_len) {
         if(data->scheme)
-            TRACE("(%p %p %x): Found valid scheme component %s len=%d.\n", builder, data, flags,
+            TRACE("(%p %p %lx): Found valid scheme component %s len=%ld.\n", builder, data, flags,
                debugstr_wn(data->scheme, data->scheme_len), data->scheme_len);
     } else {
-        TRACE("(%p %p %x): Invalid scheme component found %s.\n", builder, data, flags,
+        TRACE("(%p %p %lx): Invalid scheme component found %s.\n", builder, data, flags,
             debugstr_wn(component, expected_len));
         return INET_E_INVALID_URL;
    }
@@ -3183,10 +3208,10 @@ static HRESULT validate_username(const UriBuilder *builder, parse_data *data, DW
         pptr = &ptr;
         if(parse_username(pptr, data, flags, ALLOW_NULL_TERM_USER_NAME) &&
            data->username_len == expected_len)
-            TRACE("(%p %p %x): Found valid username component %s len=%d.\n", builder, data, flags,
+            TRACE("(%p %p %lx): Found valid username component %s len=%ld.\n", builder, data, flags,
                 debugstr_wn(data->username, data->username_len), data->username_len);
         else {
-            TRACE("(%p %p %x): Invalid username component found %s.\n", builder, data, flags,
+            TRACE("(%p %p %lx): Invalid username component found %s.\n", builder, data, flags,
                 debugstr_wn(component, expected_len));
             return INET_E_INVALID_URL;
         }
@@ -3218,10 +3243,10 @@ static HRESULT validate_password(const UriBuilder *builder, parse_data *data, DW
         pptr = &ptr;
         if(parse_password(pptr, data, flags, ALLOW_NULL_TERM_PASSWORD) &&
            data->password_len == expected_len)
-            TRACE("(%p %p %x): Found valid password component %s len=%d.\n", builder, data, flags,
+            TRACE("(%p %p %lx): Found valid password component %s len=%ld.\n", builder, data, flags,
                 debugstr_wn(data->password, data->password_len), data->password_len);
         else {
-            TRACE("(%p %p %x): Invalid password component found %s.\n", builder, data, flags,
+            TRACE("(%p %p %lx): Invalid password component found %s.\n", builder, data, flags,
                 debugstr_wn(component, expected_len));
             return INET_E_INVALID_URL;
         }
@@ -3264,7 +3289,7 @@ static HRESULT validate_host(const UriBuilder *builder, parse_data *data) {
         pptr = &ptr;
 
         if(parse_host(pptr, data, extras) && data->host_len == expected_len)
-            TRACE("(%p %p): Found valid host name %s len=%d type=%d.\n", builder, data,
+            TRACE("(%p %p): Found valid host name %s len=%ld type=%d.\n", builder, data,
                 debugstr_wn(data->host, data->host_len), data->host_len, data->host_type);
         else {
             TRACE("(%p %p): Invalid host name found %s.\n", builder, data,
@@ -3288,7 +3313,7 @@ static void setup_port(const UriBuilder *builder, parse_data *data, DWORD flags)
     }
 
     if(data->has_port)
-        TRACE("(%p %p %x): Using %u as port for IUri.\n", builder, data, flags, data->port_value);
+        TRACE("(%p %p %lx): Using %lu as port for IUri.\n", builder, data, flags, data->port_value);
 }
 
 static HRESULT validate_path(const UriBuilder *builder, parse_data *data, DWORD flags) {
@@ -3322,12 +3347,12 @@ static HRESULT validate_path(const UriBuilder *builder, parse_data *data, DWORD 
         parse_path_opaque(pptr, data, flags) : parse_path_hierarchical(pptr, data, flags);
 
     if(!valid || (check_len && expected_len != data->path_len)) {
-        TRACE("(%p %p %x): Invalid path component %s.\n", builder, data, flags,
+        TRACE("(%p %p %lx): Invalid path component %s.\n", builder, data, flags,
             debugstr_wn(component, expected_len) );
         return INET_E_INVALID_URL;
     }
 
-    TRACE("(%p %p %x): Valid path component %s len=%d.\n", builder, data, flags,
+    TRACE("(%p %p %lx): Valid path component %s len=%ld.\n", builder, data, flags,
         debugstr_wn(data->path, data->path_len), data->path_len);
 
     return S_OK;
@@ -3352,10 +3377,10 @@ static HRESULT validate_query(const UriBuilder *builder, parse_data *data, DWORD
         pptr = &ptr;
 
         if(parse_query(pptr, data, flags) && expected_len == data->query_len)
-            TRACE("(%p %p %x): Valid query component %s len=%d.\n", builder, data, flags,
+            TRACE("(%p %p %lx): Valid query component %s len=%ld.\n", builder, data, flags,
                 debugstr_wn(data->query, data->query_len), data->query_len);
         else {
-            TRACE("(%p %p %x): Invalid query component %s.\n", builder, data, flags,
+            TRACE("(%p %p %lx): Invalid query component %s.\n", builder, data, flags,
                 debugstr_wn(component, expected_len));
             return INET_E_INVALID_URL;
         }
@@ -3383,10 +3408,10 @@ static HRESULT validate_fragment(const UriBuilder *builder, parse_data *data, DW
         pptr = &ptr;
 
         if(parse_fragment(pptr, data, flags) && expected_len == data->fragment_len)
-            TRACE("(%p %p %x): Valid fragment component %s len=%d.\n", builder, data, flags,
+            TRACE("(%p %p %lx): Valid fragment component %s len=%ld.\n", builder, data, flags,
                 debugstr_wn(data->fragment, data->fragment_len), data->fragment_len);
         else {
-            TRACE("(%p %p %x): Invalid fragment component %s.\n", builder, data, flags,
+            TRACE("(%p %p %lx): Invalid fragment component %s.\n", builder, data, flags,
                 debugstr_wn(component, expected_len));
             return INET_E_INVALID_URL;
         }
@@ -3400,7 +3425,7 @@ static HRESULT validate_components(const UriBuilder *builder, parse_data *data, 
 
     memset(data, 0, sizeof(parse_data));
 
-    TRACE("(%p %p %x): Beginning to validate builder components.\n", builder, data, flags);
+    TRACE("(%p %p %lx): Beginning to validate builder components.\n", builder, data, flags);
 
     hr = validate_scheme_name(builder, data, flags);
     if(FAILED(hr))
@@ -3410,7 +3435,7 @@ static HRESULT validate_components(const UriBuilder *builder, parse_data *data, 
     if(data->scheme_type == URL_SCHEME_FILE) {
         if((builder->password || (builder->uri && builder->uri->userinfo_split > -1)) ||
            (builder->username || (builder->uri && builder->uri->userinfo_start > -1))) {
-            TRACE("(%p %p %x): File schemes can't contain a username or password.\n",
+            TRACE("(%p %p %lx): File schemes can't contain a username or password.\n",
                 builder, data, flags);
             return INET_E_INVALID_URL;
         }
@@ -3445,7 +3470,7 @@ static HRESULT validate_components(const UriBuilder *builder, parse_data *data, 
     if(FAILED(hr))
         return hr;
 
-    TRACE("(%p %p %x): Finished validating builder components.\n", builder, data, flags);
+    TRACE("(%p %p %lx): Finished validating builder components.\n", builder, data, flags);
 
     return S_OK;
 }
@@ -3474,12 +3499,12 @@ static HRESULT compare_file_paths(const Uri *a, const Uri *b, BOOL *ret)
     len_a = canonicalize_path_hierarchical(a->canon_uri+a->path_start, a->path_len, a->scheme_type, FALSE, 0, FALSE, NULL);
     len_b = canonicalize_path_hierarchical(b->canon_uri+b->path_start, b->path_len, b->scheme_type, FALSE, 0, FALSE, NULL);
 
-    canon_path_a = heap_alloc(len_a*sizeof(WCHAR));
+    canon_path_a = malloc(len_a * sizeof(WCHAR));
     if(!canon_path_a)
         return E_OUTOFMEMORY;
-    canon_path_b = heap_alloc(len_b*sizeof(WCHAR));
+    canon_path_b = malloc(len_b * sizeof(WCHAR));
     if(!canon_path_b) {
-        heap_free(canon_path_a);
+        free(canon_path_a);
         return E_OUTOFMEMORY;
     }
 
@@ -3488,8 +3513,8 @@ static HRESULT compare_file_paths(const Uri *a, const Uri *b, BOOL *ret)
 
     *ret = len_a == len_b && !wcsnicmp(canon_path_a, canon_path_b, len_a);
 
-    heap_free(canon_path_a);
-    heap_free(canon_path_b);
+    free(canon_path_a);
+    free(canon_path_b);
     return S_OK;
 }
 
@@ -3754,9 +3779,9 @@ static DWORD generate_raw_uri(const parse_data *data, BSTR uri, DWORD flags) {
     }
 
     if(uri)
-        TRACE("(%p %p): Generated raw uri=%s len=%d\n", data, uri, debugstr_wn(uri, length), length);
+        TRACE("(%p %p): Generated raw uri=%s len=%ld\n", data, uri, debugstr_wn(uri, length), length);
     else
-        TRACE("(%p %p): Computed raw uri len=%d\n", data, uri, length);
+        TRACE("(%p %p): Computed raw uri len=%ld\n", data, uri, length);
 
     return length;
 }
@@ -3789,8 +3814,8 @@ static inline Uri* impl_from_IUri(IUri *iface)
 static inline void destroy_uri_obj(Uri *This)
 {
     SysFreeString(This->raw_uri);
-    heap_free(This->canon_uri);
-    heap_free(This);
+    free(This->canon_uri);
+    free(This);
 }
 
 static HRESULT WINAPI Uri_QueryInterface(IUri *iface, REFIID riid, void **ppv)
@@ -3831,7 +3856,7 @@ static ULONG WINAPI Uri_AddRef(IUri *iface)
     Uri *This = impl_from_IUri(iface);
     LONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     return ref;
 }
@@ -3841,7 +3866,7 @@ static ULONG WINAPI Uri_Release(IUri *iface)
     Uri *This = impl_from_IUri(iface);
     LONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     if(!ref)
         destroy_uri_obj(This);
@@ -3853,7 +3878,7 @@ static HRESULT WINAPI Uri_GetPropertyBSTR(IUri *iface, Uri_PROPERTY uriProp, BST
 {
     Uri *This = impl_from_IUri(iface);
     HRESULT hres;
-    TRACE("(%p %s)->(%d %p %x)\n", This, debugstr_w(This->canon_uri), uriProp, pbstrProperty, dwFlags);
+    TRACE("(%p %s)->(%d %p %lx)\n", This, debugstr_w(This->canon_uri), uriProp, pbstrProperty, dwFlags);
 
     if(!This->create_flags)
         return E_UNEXPECTED;
@@ -3873,17 +3898,37 @@ static HRESULT WINAPI Uri_GetPropertyBSTR(IUri *iface, Uri_PROPERTY uriProp, BST
         return E_INVALIDARG;
     }
 
-    /* Don't have support for flags yet. */
-    if(dwFlags) {
-        FIXME("(%p)->(%d %p %x)\n", This, uriProp, pbstrProperty, dwFlags);
-        return E_NOTIMPL;
-    }
+    if(dwFlags != 0 && dwFlags != Uri_DISPLAY_NO_FRAGMENT && dwFlags != Uri_PUNYCODE_IDN_HOST
+       && dwFlags != Uri_DISPLAY_IDN_HOST)
+        return E_INVALIDARG;
+
+    if((dwFlags == Uri_DISPLAY_NO_FRAGMENT && uriProp != Uri_PROPERTY_DISPLAY_URI)
+       || (dwFlags == Uri_PUNYCODE_IDN_HOST && uriProp != Uri_PROPERTY_ABSOLUTE_URI
+           && uriProp != Uri_PROPERTY_DOMAIN && uriProp != Uri_PROPERTY_HOST)
+       || (dwFlags == Uri_DISPLAY_IDN_HOST && uriProp != Uri_PROPERTY_ABSOLUTE_URI
+           && uriProp != Uri_PROPERTY_DOMAIN && uriProp != Uri_PROPERTY_HOST))
+        return E_INVALIDARG;
 
     switch(uriProp) {
     case Uri_PROPERTY_ABSOLUTE_URI:
         if(This->display_modifiers & URI_DISPLAY_NO_ABSOLUTE_URI) {
             *pbstrProperty = SysAllocStringLen(NULL, 0);
             hres = S_FALSE;
+        }
+        /* Uri_PUNYCODE_IDN_HOST doesn't remove user info containing only "@" and ":@" */
+        else if (dwFlags == Uri_PUNYCODE_IDN_HOST && This->host_type == Uri_HOST_IDN && This->host_start > -1) {
+            unsigned int punycode_host_len;
+
+            punycode_host_len = IdnToAscii(0, This->canon_uri+This->host_start, This->host_len, NULL, 0);
+            *pbstrProperty = SysAllocStringLen(NULL, This->canon_len-This->host_len+punycode_host_len);
+            hres = S_OK;
+            if(*pbstrProperty) {
+                memcpy(*pbstrProperty, This->canon_uri, This->host_start*sizeof(WCHAR));
+                IdnToAscii(0, This->canon_uri+This->host_start, This->host_len, *pbstrProperty+This->host_start, punycode_host_len);
+                memcpy(*pbstrProperty+This->host_start+punycode_host_len,
+                       This->canon_uri+This->host_start+This->host_len,
+                       (This->canon_len-This->host_start-This->host_len)*sizeof(WCHAR));
+            }
         } else {
             if(This->scheme_type != URL_SCHEME_UNKNOWN && This->userinfo_start > -1) {
                 if(This->userinfo_len == 0) {
@@ -3944,18 +3989,32 @@ static HRESULT WINAPI Uri_GetPropertyBSTR(IUri *iface, Uri_PROPERTY uriProp, BST
          * scheme types.
          */
         if(This->scheme_type != URL_SCHEME_UNKNOWN && This->userinfo_start > -1) {
-            *pbstrProperty = SysAllocStringLen(NULL, This->canon_len-This->userinfo_len);
+            unsigned int length = This->canon_len-This->userinfo_len;
+
+            /* Skip fragment if Uri_DISPLAY_NO_FRAGMENT is specified */
+            if(dwFlags == Uri_DISPLAY_NO_FRAGMENT && This->fragment_start > -1)
+                length -= This->fragment_len;
+
+            *pbstrProperty = SysAllocStringLen(NULL, length);
 
             if(*pbstrProperty) {
                 /* Copy everything before the userinfo over. */
                 memcpy(*pbstrProperty, This->canon_uri, This->userinfo_start*sizeof(WCHAR));
+
                 /* Copy everything after the userinfo over. */
+                length -= This->userinfo_start+1;
                 memcpy(*pbstrProperty+This->userinfo_start,
-                   This->canon_uri+This->userinfo_start+This->userinfo_len+1,
-                   (This->canon_len-(This->userinfo_start+This->userinfo_len+1))*sizeof(WCHAR));
+                   This->canon_uri+This->userinfo_start+This->userinfo_len+1, length*sizeof(WCHAR));
             }
-        } else
-            *pbstrProperty = SysAllocString(This->canon_uri);
+        } else {
+            unsigned int length = This->canon_len;
+
+            /* Skip fragment if Uri_DISPLAY_NO_FRAGMENT is specified */
+            if(dwFlags == Uri_DISPLAY_NO_FRAGMENT && This->fragment_start > -1)
+                length -= This->fragment_len;
+
+            *pbstrProperty = SysAllocStringLen(This->canon_uri, length);
+        }
 
         if(!(*pbstrProperty))
             hres = E_OUTOFMEMORY;
@@ -3965,8 +4024,20 @@ static HRESULT WINAPI Uri_GetPropertyBSTR(IUri *iface, Uri_PROPERTY uriProp, BST
         break;
     case Uri_PROPERTY_DOMAIN:
         if(This->domain_offset > -1) {
-            *pbstrProperty = SysAllocStringLen(This->canon_uri+This->host_start+This->domain_offset,
-                                               This->host_len-This->domain_offset);
+            if(dwFlags == Uri_PUNYCODE_IDN_HOST && This->host_type == Uri_HOST_IDN) {
+                unsigned int punycode_length;
+
+                punycode_length = IdnToAscii(0, This->canon_uri+This->host_start+This->domain_offset,
+                                             This->host_len-This->domain_offset, NULL, 0);
+                *pbstrProperty = SysAllocStringLen(NULL, punycode_length);
+                if (*pbstrProperty)
+                    IdnToAscii(0, This->canon_uri+This->host_start+This->domain_offset,
+                               This->host_len-This->domain_offset, *pbstrProperty, punycode_length);
+            } else {
+                *pbstrProperty = SysAllocStringLen(This->canon_uri+This->host_start+This->domain_offset,
+                                                   This->host_len-This->domain_offset);
+            }
+
             hres = S_OK;
         } else {
             *pbstrProperty = SysAllocStringLen(NULL, 0);
@@ -4009,6 +4080,14 @@ static HRESULT WINAPI Uri_GetPropertyBSTR(IUri *iface, Uri_PROPERTY uriProp, BST
             /* The '[' and ']' aren't included for IPv6 addresses. */
             if(This->host_type == Uri_HOST_IPV6)
                 *pbstrProperty = SysAllocStringLen(This->canon_uri+This->host_start+1, This->host_len-2);
+            else if(dwFlags == Uri_PUNYCODE_IDN_HOST && This->host_type == Uri_HOST_IDN) {
+                unsigned int punycode_length;
+
+                punycode_length = IdnToAscii(0, This->canon_uri+This->host_start, This->host_len, NULL, 0);
+                *pbstrProperty = SysAllocStringLen(NULL, punycode_length);
+                if (*pbstrProperty)
+                    IdnToAscii(0, This->canon_uri+This->host_start, This->host_len, *pbstrProperty, punycode_length);
+            }
             else
                 *pbstrProperty = SysAllocStringLen(This->canon_uri+This->host_start, This->host_len);
 
@@ -4134,7 +4213,7 @@ static HRESULT WINAPI Uri_GetPropertyBSTR(IUri *iface, Uri_PROPERTY uriProp, BST
 
         break;
     default:
-        FIXME("(%p)->(%d %p %x)\n", This, uriProp, pbstrProperty, dwFlags);
+        FIXME("(%p)->(%d %p %lx)\n", This, uriProp, pbstrProperty, dwFlags);
         hres = E_NOTIMPL;
     }
 
@@ -4145,7 +4224,7 @@ static HRESULT WINAPI Uri_GetPropertyLength(IUri *iface, Uri_PROPERTY uriProp, D
 {
     Uri *This = impl_from_IUri(iface);
     HRESULT hres;
-    TRACE("(%p %s)->(%d %p %x)\n", This, debugstr_w(This->canon_uri), uriProp, pcchProperty, dwFlags);
+    TRACE("(%p %s)->(%d %p %lx)\n", This, debugstr_w(This->canon_uri), uriProp, pcchProperty, dwFlags);
 
     if(!This->create_flags)
         return E_UNEXPECTED;
@@ -4156,10 +4235,10 @@ static HRESULT WINAPI Uri_GetPropertyLength(IUri *iface, Uri_PROPERTY uriProp, D
     if(uriProp > Uri_PROPERTY_STRING_LAST)
         return E_INVALIDARG;
 
-    /* Don't have support for flags yet. */
-    if(dwFlags) {
-        FIXME("(%p)->(%d %p %x)\n", This, uriProp, pcchProperty, dwFlags);
-        return E_NOTIMPL;
+    if(dwFlags != 0 && dwFlags != Uri_DISPLAY_NO_FRAGMENT && dwFlags != Uri_PUNYCODE_IDN_HOST
+       && dwFlags != Uri_DISPLAY_IDN_HOST) {
+        *pcchProperty = 0;
+        return E_INVALIDARG;
     }
 
     switch(uriProp) {
@@ -4167,6 +4246,12 @@ static HRESULT WINAPI Uri_GetPropertyLength(IUri *iface, Uri_PROPERTY uriProp, D
         if(This->display_modifiers & URI_DISPLAY_NO_ABSOLUTE_URI) {
             *pcchProperty = 0;
             hres = S_FALSE;
+        }
+        /* Uri_PUNYCODE_IDN_HOST doesn't remove user info containing only "@" and ":@" */
+        else if(dwFlags == Uri_PUNYCODE_IDN_HOST && This->host_type == Uri_HOST_IDN && This->host_start > -1) {
+            unsigned int punycode_host_len = IdnToAscii(0, This->canon_uri+This->host_start, This->host_len, NULL, 0);
+            *pcchProperty = This->canon_len - This->host_len + punycode_host_len;
+            hres = S_OK;
         } else {
             if(This->scheme_type != URL_SCHEME_UNKNOWN) {
                 if(This->userinfo_start > -1 && This->userinfo_len == 0)
@@ -4201,11 +4286,18 @@ static HRESULT WINAPI Uri_GetPropertyLength(IUri *iface, Uri_PROPERTY uriProp, D
         else
             *pcchProperty = This->canon_len;
 
+        if(dwFlags == Uri_DISPLAY_NO_FRAGMENT && This->fragment_start > -1)
+            *pcchProperty -= This->fragment_len;
+
         hres = S_OK;
         break;
     case Uri_PROPERTY_DOMAIN:
-        if(This->domain_offset > -1)
-            *pcchProperty = This->host_len - This->domain_offset;
+        if(This->domain_offset > -1) {
+            if(dwFlags == Uri_PUNYCODE_IDN_HOST && This->host_type == Uri_HOST_IDN)
+                *pcchProperty = IdnToAscii(0, This->canon_uri+This->host_start+This->domain_offset, This->host_len-This->domain_offset, NULL, 0);
+            else
+                *pcchProperty = This->host_len - This->domain_offset;
+        }
         else
             *pcchProperty = 0;
 
@@ -4231,6 +4323,8 @@ static HRESULT WINAPI Uri_GetPropertyLength(IUri *iface, Uri_PROPERTY uriProp, D
         /* '[' and ']' aren't included in the length. */
         if(This->host_type == Uri_HOST_IPV6)
             *pcchProperty -= 2;
+        else if(dwFlags == Uri_PUNYCODE_IDN_HOST && This->host_type == Uri_HOST_IDN && This->host_start > -1)
+            *pcchProperty = IdnToAscii(0, This->canon_uri+This->host_start, This->host_len, NULL, 0);
 
         hres = (This->host_start > -1) ? S_OK : S_FALSE;
         break;
@@ -4270,8 +4364,18 @@ static HRESULT WINAPI Uri_GetPropertyLength(IUri *iface, Uri_PROPERTY uriProp, D
             hres = (This->userinfo_start > -1) ? S_OK : S_FALSE;
         break;
     default:
-        FIXME("(%p)->(%d %p %x)\n", This, uriProp, pcchProperty, dwFlags);
+        FIXME("(%p)->(%d %p %lx)\n", This, uriProp, pcchProperty, dwFlags);
         hres = E_NOTIMPL;
+    }
+
+    if(hres == S_OK
+       && ((dwFlags == Uri_DISPLAY_NO_FRAGMENT && uriProp != Uri_PROPERTY_DISPLAY_URI)
+            || (dwFlags == Uri_PUNYCODE_IDN_HOST && uriProp != Uri_PROPERTY_ABSOLUTE_URI
+                && uriProp != Uri_PROPERTY_DOMAIN && uriProp != Uri_PROPERTY_HOST)
+            || (dwFlags == Uri_DISPLAY_IDN_HOST && uriProp != Uri_PROPERTY_ABSOLUTE_URI
+                && uriProp != Uri_PROPERTY_DOMAIN && uriProp != Uri_PROPERTY_HOST))) {
+        *pcchProperty = 0;
+        hres = E_INVALIDARG;
     }
 
     return hres;
@@ -4282,7 +4386,7 @@ static HRESULT WINAPI Uri_GetPropertyDWORD(IUri *iface, Uri_PROPERTY uriProp, DW
     Uri *This = impl_from_IUri(iface);
     HRESULT hres;
 
-    TRACE("(%p %s)->(%d %p %x)\n", This, debugstr_w(This->canon_uri), uriProp, pcchProperty, dwFlags);
+    TRACE("(%p %s)->(%d %p %lx)\n", This, debugstr_w(This->canon_uri), uriProp, pcchProperty, dwFlags);
 
     if(!This->create_flags)
         return E_UNEXPECTED;
@@ -4324,7 +4428,7 @@ static HRESULT WINAPI Uri_GetPropertyDWORD(IUri *iface, Uri_PROPERTY uriProp, DW
         hres = S_OK;
         break;
     default:
-        FIXME("(%p)->(%d %p %x)\n", This, uriProp, pcchProperty, dwFlags);
+        FIXME("(%p)->(%d %p %lx)\n", This, uriProp, pcchProperty, dwFlags);
         hres = E_NOTIMPL;
     }
 
@@ -4662,7 +4766,7 @@ static HRESULT WINAPI UriBuilderFactory_CreateIUriBuilder(IUriBuilderFactory *if
                                                           IUriBuilder **ppIUriBuilder)
 {
     Uri *This = impl_from_IUriBuilderFactory(iface);
-    TRACE("(%p)->(%08x %08x %p)\n", This, dwFlags, (DWORD)dwReserved, ppIUriBuilder);
+    TRACE("(%p)->(%08lx %08Ix %p)\n", This, dwFlags, dwReserved, ppIUriBuilder);
 
     if(!ppIUriBuilder)
         return E_POINTER;
@@ -4681,7 +4785,7 @@ static HRESULT WINAPI UriBuilderFactory_CreateInitializedIUriBuilder(IUriBuilder
                                                                      IUriBuilder **ppIUriBuilder)
 {
     Uri *This = impl_from_IUriBuilderFactory(iface);
-    TRACE("(%p)->(%08x %08x %p)\n", This, dwFlags, (DWORD)dwReserved, ppIUriBuilder);
+    TRACE("(%p)->(%08lx %08Ix %p)\n", This, dwFlags, dwReserved, ppIUriBuilder);
 
     if(!ppIUriBuilder)
         return E_POINTER;
@@ -4771,34 +4875,34 @@ static HRESULT WINAPI PersistStream_Load(IPersistStream *iface, IStream *pStm)
     hr = IStream_Read(pStm, &size, sizeof(DWORD), NULL);
     if(FAILED(hr))
         return hr;
-    data = heap_alloc(size);
+    data = malloc(size);
     if(!data)
         return E_OUTOFMEMORY;
     hr = IStream_Read(pStm, data->unk1, size-sizeof(DWORD)-2, NULL);
     if(FAILED(hr)) {
-        heap_free(data);
+        free(data);
         return hr;
     }
 
     if(size < sizeof(struct persist_uri)) {
-        heap_free(data);
+        free(data);
         return S_OK;
     }
 
     if(*(DWORD*)data->data != Uri_PROPERTY_RAW_URI) {
-        heap_free(data);
+        free(data);
         ERR("Can't find raw_uri\n");
         return E_UNEXPECTED;
     }
 
     This->raw_uri = SysAllocString((WCHAR*)(data->data+sizeof(DWORD)*2));
     if(!This->raw_uri) {
-        heap_free(data);
+        free(data);
         return E_OUTOFMEMORY;
     }
     This->create_flags = data->create_flags;
-    heap_free(data);
-    TRACE("%x %s\n", This->create_flags, debugstr_w(This->raw_uri));
+    free(data);
+    TRACE("%lx %s\n", This->create_flags, debugstr_w(This->raw_uri));
 
     memset(&parse, 0, sizeof(parse_data));
     parse.uri = This->raw_uri;
@@ -4928,14 +5032,14 @@ static HRESULT WINAPI PersistStream_Save(IPersistStream *iface, IStream *pStm, B
     if(FAILED(hres))
         return hres;
 
-    data = heap_alloc_zero(size.u.LowPart);
+    data = calloc(1, size.u.LowPart);
     if(!data)
         return E_OUTOFMEMORY;
     data->size = size.u.LowPart;
     persist_stream_save(This, pStm, FALSE, data);
 
     hres = IStream_Write(pStm, data, data->size-2, NULL);
-    heap_free(data);
+    free(data);
     return hres;
 }
 
@@ -5022,7 +5126,7 @@ static HRESULT WINAPI Marshal_GetUnmarshalClass(IMarshal *iface, REFIID riid, vo
         DWORD dwDestContext, void *pvDestContext, DWORD mshlflags, CLSID *pCid)
 {
     Uri *This = impl_from_IMarshal(iface);
-    TRACE("(%p)->(%s %p %x %p %x %p)\n", This, debugstr_guid(riid), pv,
+    TRACE("(%p)->(%s %p %lx %p %lx %p)\n", This, debugstr_guid(riid), pv,
             dwDestContext, pvDestContext, mshlflags, pCid);
 
     if(!pCid || (dwDestContext!=MSHCTX_LOCAL && dwDestContext!=MSHCTX_NOSHAREDMEM
@@ -5046,7 +5150,7 @@ static HRESULT WINAPI Marshal_GetMarshalSizeMax(IMarshal *iface, REFIID riid, vo
     Uri *This = impl_from_IMarshal(iface);
     ULARGE_INTEGER size;
     HRESULT hres;
-    TRACE("(%p)->(%s %p %x %p %x %p)\n", This, debugstr_guid(riid), pv,
+    TRACE("(%p)->(%s %p %lx %p %lx %p)\n", This, debugstr_guid(riid), pv,
             dwDestContext, pvDestContext, mshlflags, pSize);
 
     if(!pSize || (dwDestContext!=MSHCTX_LOCAL && dwDestContext!=MSHCTX_NOSHAREDMEM
@@ -5077,7 +5181,7 @@ static HRESULT WINAPI Marshal_MarshalInterface(IMarshal *iface, IStream *pStm, R
     DWORD size;
     HRESULT hres;
 
-    TRACE("(%p)->(%p %s %p %x %p %x)\n", This, pStm, debugstr_guid(riid), pv,
+    TRACE("(%p)->(%p %s %p %lx %p %lx)\n", This, pStm, debugstr_guid(riid), pv,
             dwDestContext, pvDestContext, mshlflags);
 
     if(!pStm || mshlflags!=MSHLFLAGS_NORMAL || (dwDestContext!=MSHCTX_LOCAL
@@ -5108,7 +5212,7 @@ static HRESULT WINAPI Marshal_MarshalInterface(IMarshal *iface, IStream *pStm, R
     if(FAILED(hres))
         return hres;
 
-    data = heap_alloc_zero(size);
+    data = calloc(1, size);
     if(!data)
         return E_OUTOFMEMORY;
 
@@ -5118,7 +5222,7 @@ static HRESULT WINAPI Marshal_MarshalInterface(IMarshal *iface, IStream *pStm, R
     persist_stream_save(This, pStm, TRUE, (struct persist_uri*)(data+2));
 
     hres = IStream_Write(pStm, data, data[0]-2, NULL);
-    heap_free(data);
+    free(data);
     return hres;
 }
 
@@ -5215,7 +5319,7 @@ static HRESULT WINAPI Marshal_ReleaseMarshalData(IMarshal *iface, IStream *pStm)
 static HRESULT WINAPI Marshal_DisconnectObject(IMarshal *iface, DWORD dwReserved)
 {
     Uri *This = impl_from_IMarshal(iface);
-    TRACE("(%p)->(%x)\n", This, dwReserved);
+    TRACE("(%p)->(%lx)\n", This, dwReserved);
     return S_OK;
 }
 
@@ -5233,7 +5337,7 @@ static const IMarshalVtbl MarshalVtbl = {
 
 HRESULT Uri_Construct(IUnknown *pUnkOuter, LPVOID *ppobj)
 {
-    Uri *ret = heap_alloc_zero(sizeof(Uri));
+    Uri *ret = calloc(1, sizeof(Uri));
 
     TRACE("(%p %p)\n", pUnkOuter, ppobj);
 
@@ -5286,7 +5390,7 @@ HRESULT WINAPI CreateUri(LPCWSTR pwzURI, DWORD dwFlags, DWORD_PTR dwReserved, IU
     HRESULT hr;
     parse_data data;
 
-    TRACE("(%s %x %x %p)\n", debugstr_w(pwzURI), dwFlags, (DWORD)dwReserved, ppURI);
+    TRACE("(%s %lx %Ix %p)\n", debugstr_w(pwzURI), dwFlags, dwReserved, ppURI);
 
     if(!ppURI)
         return E_INVALIDARG;
@@ -5304,7 +5408,7 @@ HRESULT WINAPI CreateUri(LPCWSTR pwzURI, DWORD dwFlags, DWORD_PTR dwReserved, IU
 
     /* Currently unsupported. */
     if(dwFlags & ~supported_flags)
-        FIXME("Ignoring unsupported flag(s) %x\n", dwFlags & ~supported_flags);
+        FIXME("Ignoring unsupported flag(s) %lx\n", dwFlags & ~supported_flags);
 
     hr = Uri_Construct(NULL, (void**)&ret);
     if(FAILED(hr)) {
@@ -5322,7 +5426,7 @@ HRESULT WINAPI CreateUri(LPCWSTR pwzURI, DWORD dwFlags, DWORD_PTR dwReserved, IU
         ret->raw_uri = SysAllocString(pwzURI);
 
     if(!ret->raw_uri) {
-        heap_free(ret);
+        free(ret);
         return E_OUTOFMEMORY;
     }
 
@@ -5374,7 +5478,7 @@ HRESULT WINAPI CreateUriWithFragment(LPCWSTR pwzURI, LPCWSTR pwzFragment, DWORD 
                                      DWORD_PTR dwReserved, IUri **ppURI)
 {
     HRESULT hres;
-    TRACE("(%s %s %x %x %p)\n", debugstr_w(pwzURI), debugstr_w(pwzFragment), dwFlags, (DWORD)dwReserved, ppURI);
+    TRACE("(%s %s %lx %Ix %p)\n", debugstr_w(pwzURI), debugstr_w(pwzFragment), dwFlags, dwReserved, ppURI);
 
     if(!ppURI)
         return E_INVALIDARG;
@@ -5403,9 +5507,9 @@ HRESULT WINAPI CreateUriWithFragment(LPCWSTR pwzURI, LPCWSTR pwzFragment, DWORD 
         add_pound = *pwzFragment != '#';
 
         if(add_pound)
-            uriW = heap_alloc((uri_len+frag_len+2)*sizeof(WCHAR));
+            uriW = malloc((uri_len + frag_len + 2) * sizeof(WCHAR));
         else
-            uriW = heap_alloc((uri_len+frag_len+1)*sizeof(WCHAR));
+            uriW = malloc((uri_len + frag_len + 1) * sizeof(WCHAR));
 
         if(!uriW)
             return E_OUTOFMEMORY;
@@ -5417,7 +5521,7 @@ HRESULT WINAPI CreateUriWithFragment(LPCWSTR pwzURI, LPCWSTR pwzFragment, DWORD 
 
         hres = CreateUri(uriW, dwFlags, 0, ppURI);
 
-        heap_free(uriW);
+        free(uriW);
     } else
         /* A fragment string wasn't specified, so just forward the call. */
         hres = CreateUri(pwzURI, dwFlags, 0, ppURI);
@@ -5513,7 +5617,7 @@ static ULONG WINAPI UriBuilder_AddRef(IUriBuilder *iface)
     UriBuilder *This = impl_from_IUriBuilder(iface);
     LONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     return ref;
 }
@@ -5523,18 +5627,18 @@ static ULONG WINAPI UriBuilder_Release(IUriBuilder *iface)
     UriBuilder *This = impl_from_IUriBuilder(iface);
     LONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     if(!ref) {
         if(This->uri) IUri_Release(&This->uri->IUri_iface);
-        heap_free(This->fragment);
-        heap_free(This->host);
-        heap_free(This->password);
-        heap_free(This->path);
-        heap_free(This->query);
-        heap_free(This->scheme);
-        heap_free(This->username);
-        heap_free(This);
+        free(This->fragment);
+        free(This->host);
+        free(This->password);
+        free(This->path);
+        free(This->query);
+        free(This->scheme);
+        free(This->username);
+        free(This);
     }
 
     return ref;
@@ -5547,11 +5651,11 @@ static HRESULT WINAPI UriBuilder_CreateUriSimple(IUriBuilder *iface,
 {
     UriBuilder *This = impl_from_IUriBuilder(iface);
     HRESULT hr;
-    TRACE("(%p)->(%d %d %p)\n", This, dwAllowEncodingPropertyMask, (DWORD)dwReserved, ppIUri);
+    TRACE("(%p)->(%ld %Id %p)\n", This, dwAllowEncodingPropertyMask, dwReserved, ppIUri);
 
     hr = build_uri(This, ppIUri, 0, UriBuilder_USE_ORIGINAL_FLAGS, dwAllowEncodingPropertyMask);
     if(hr == E_NOTIMPL)
-        FIXME("(%p)->(%d %d %p)\n", This, dwAllowEncodingPropertyMask, (DWORD)dwReserved, ppIUri);
+        FIXME("(%p)->(%ld %Id %p)\n", This, dwAllowEncodingPropertyMask, dwReserved, ppIUri);
     return hr;
 }
 
@@ -5563,7 +5667,7 @@ static HRESULT WINAPI UriBuilder_CreateUri(IUriBuilder *iface,
 {
     UriBuilder *This = impl_from_IUriBuilder(iface);
     HRESULT hr;
-    TRACE("(%p)->(0x%08x %d %d %p)\n", This, dwCreateFlags, dwAllowEncodingPropertyMask, (DWORD)dwReserved, ppIUri);
+    TRACE("(%p)->(0x%08lx %ld %Id %p)\n", This, dwCreateFlags, dwAllowEncodingPropertyMask, dwReserved, ppIUri);
 
     if(dwCreateFlags == -1)
         hr = build_uri(This, ppIUri, 0, UriBuilder_USE_ORIGINAL_FLAGS, dwAllowEncodingPropertyMask);
@@ -5571,7 +5675,7 @@ static HRESULT WINAPI UriBuilder_CreateUri(IUriBuilder *iface,
         hr = build_uri(This, ppIUri, dwCreateFlags, 0, dwAllowEncodingPropertyMask);
 
     if(hr == E_NOTIMPL)
-        FIXME("(%p)->(0x%08x %d %d %p)\n", This, dwCreateFlags, dwAllowEncodingPropertyMask, (DWORD)dwReserved, ppIUri);
+        FIXME("(%p)->(0x%08lx %ld %Id %p)\n", This, dwCreateFlags, dwAllowEncodingPropertyMask, dwReserved, ppIUri);
     return hr;
 }
 
@@ -5584,13 +5688,13 @@ static HRESULT WINAPI UriBuilder_CreateUriWithFlags(IUriBuilder *iface,
 {
     UriBuilder *This = impl_from_IUriBuilder(iface);
     HRESULT hr;
-    TRACE("(%p)->(0x%08x 0x%08x %d %d %p)\n", This, dwCreateFlags, dwUriBuilderFlags,
-        dwAllowEncodingPropertyMask, (DWORD)dwReserved, ppIUri);
+    TRACE("(%p)->(0x%08lx 0x%08lx %ld %Id %p)\n", This, dwCreateFlags, dwUriBuilderFlags,
+        dwAllowEncodingPropertyMask, dwReserved, ppIUri);
 
     hr = build_uri(This, ppIUri, dwCreateFlags, dwUriBuilderFlags, dwAllowEncodingPropertyMask);
     if(hr == E_NOTIMPL)
-        FIXME("(%p)->(0x%08x 0x%08x %d %d %p)\n", This, dwCreateFlags, dwUriBuilderFlags,
-            dwAllowEncodingPropertyMask, (DWORD)dwReserved, ppIUri);
+        FIXME("(%p)->(0x%08lx 0x%08lx %ld %Id %p)\n", This, dwCreateFlags, dwUriBuilderFlags,
+            dwAllowEncodingPropertyMask, dwReserved, ppIUri);
     return hr;
 }
 
@@ -5807,7 +5911,7 @@ static HRESULT WINAPI UriBuilder_SetPath(IUriBuilder *iface, LPCWSTR pwzNewValue
 static HRESULT WINAPI UriBuilder_SetPort(IUriBuilder *iface, BOOL fHasPort, DWORD dwNewValue)
 {
     UriBuilder *This = impl_from_IUriBuilder(iface);
-    TRACE("(%p)->(%d %d)\n", This, fHasPort, dwNewValue);
+    TRACE("(%p)->(%d %ld)\n", This, fHasPort, dwNewValue);
 
     This->has_port = fHasPort;
     This->port = dwNewValue;
@@ -5851,7 +5955,7 @@ static HRESULT WINAPI UriBuilder_RemoveProperties(IUriBuilder *iface, DWORD dwPr
                                  Uri_HAS_USER_INFO|Uri_HAS_USER_NAME;
 
     UriBuilder *This = impl_from_IUriBuilder(iface);
-    TRACE("(%p)->(0x%08x)\n", This, dwPropertyMask);
+    TRACE("(%p)->(0x%08lx)\n", This, dwPropertyMask);
 
     if(dwPropertyMask & ~accepted_flags)
         return E_INVALIDARG;
@@ -5932,12 +6036,12 @@ HRESULT WINAPI CreateIUriBuilder(IUri *pIUri, DWORD dwFlags, DWORD_PTR dwReserve
 {
     UriBuilder *ret;
 
-    TRACE("(%p %x %x %p)\n", pIUri, dwFlags, (DWORD)dwReserved, ppIUriBuilder);
+    TRACE("(%p %lx %Ix %p)\n", pIUri, dwFlags, dwReserved, ppIUriBuilder);
 
     if(!ppIUriBuilder)
         return E_POINTER;
 
-    ret = heap_alloc_zero(sizeof(UriBuilder));
+    ret = calloc(1, sizeof(UriBuilder));
     if(!ret)
         return E_OUTOFMEMORY;
 
@@ -5949,7 +6053,7 @@ HRESULT WINAPI CreateIUriBuilder(IUri *pIUri, DWORD dwFlags, DWORD_PTR dwReserve
 
         if((uri = get_uri_obj(pIUri))) {
             if(!uri->create_flags) {
-                heap_free(ret);
+                free(ret);
                 return E_UNEXPECTED;
             }
             IUri_AddRef(pIUri);
@@ -5960,10 +6064,10 @@ HRESULT WINAPI CreateIUriBuilder(IUri *pIUri, DWORD dwFlags, DWORD_PTR dwReserve
                 ret->port = uri->port;
 
         } else {
-            heap_free(ret);
+            free(ret);
             *ppIUriBuilder = NULL;
-            FIXME("(%p %x %x %p): Unknown IUri types not supported yet.\n", pIUri, dwFlags,
-                (DWORD)dwReserved, ppIUriBuilder);
+            FIXME("(%p %lx %Ix %p): Unknown IUri types not supported yet.\n", pIUri, dwFlags,
+                  dwReserved, ppIUriBuilder);
             return E_NOTIMPL;
         }
     }
@@ -6005,7 +6109,7 @@ static HRESULT merge_paths(parse_data *data, const WCHAR *base, DWORD base_len, 
     }
 
     if (end) base_copy_len = (end+1)-base;
-    *result = heap_alloc((base_copy_len+relative_len+1)*sizeof(WCHAR));
+    *result = malloc((base_copy_len + relative_len + 1) * sizeof(WCHAR));
 
     if(!(*result)) {
         *result_len = 0;
@@ -6160,7 +6264,7 @@ static HRESULT combine_uri(Uri *base, Uri *relative, DWORD flags, IUri **result,
 
                 path_len += relative->path_len;
 
-                path = heap_alloc((path_len+1)*sizeof(WCHAR));
+                path = malloc((path_len + 1) * sizeof(WCHAR));
                 if(!path) {
                     *result = NULL;
                     return E_OUTOFMEMORY;
@@ -6203,9 +6307,9 @@ static HRESULT combine_uri(Uri *base, Uri *relative, DWORD flags, IUri **result,
                 DWORD new_len = remove_dot_segments(path+offset,path_len-offset);
 
                 if(new_len != path_len) {
-                    WCHAR *tmp = heap_realloc(path, (offset+new_len+1)*sizeof(WCHAR));
+                    WCHAR *tmp = realloc(path, (offset + new_len + 1) * sizeof(WCHAR));
                     if(!tmp) {
-                        heap_free(path);
+                        free(path);
                         *result = NULL;
                         return E_OUTOFMEMORY;
                     }
@@ -6226,7 +6330,7 @@ static HRESULT combine_uri(Uri *base, Uri *relative, DWORD flags, IUri **result,
             pptr = &ptr;
             if((data.is_opaque && !parse_path_opaque(pptr, &data, 0)) ||
                (!data.is_opaque && !parse_path_hierarchical(pptr, &data, 0))) {
-                heap_free(path);
+                free(path);
                 *result = NULL;
                 return E_INVALIDARG;
             }
@@ -6245,7 +6349,7 @@ static HRESULT combine_uri(Uri *base, Uri *relative, DWORD flags, IUri **result,
         len = generate_raw_uri(&data, data.uri, raw_flags);
         data.uri = SysAllocStringLen(NULL, len);
         if(!data.uri) {
-            heap_free(path);
+            free(path);
             *result = NULL;
             return E_OUTOFMEMORY;
         }
@@ -6255,7 +6359,7 @@ static HRESULT combine_uri(Uri *base, Uri *relative, DWORD flags, IUri **result,
         hr = Uri_Construct(NULL, (void**)&ret);
         if(FAILED(hr)) {
             SysFreeString(data.uri);
-            heap_free(path);
+            free(path);
             *result = NULL;
             return hr;
         }
@@ -6280,7 +6384,7 @@ static HRESULT combine_uri(Uri *base, Uri *relative, DWORD flags, IUri **result,
         ret->create_flags = create_flags;
         *result = &ret->IUri_iface;
 
-        heap_free(path);
+        free(path);
     }
 
     return S_OK;
@@ -6295,7 +6399,7 @@ HRESULT WINAPI CoInternetCombineIUri(IUri *pBaseUri, IUri *pRelativeUri, DWORD d
     HRESULT hr;
     IInternetProtocolInfo *info;
     Uri *relative, *base;
-    TRACE("(%p %p %x %p %x)\n", pBaseUri, pRelativeUri, dwCombineFlags, ppCombinedUri, (DWORD)dwReserved);
+    TRACE("(%p %p %lx %p %Ix)\n", pBaseUri, pRelativeUri, dwCombineFlags, ppCombinedUri, dwReserved);
 
     if(!ppCombinedUri)
         return E_INVALIDARG;
@@ -6309,8 +6413,8 @@ HRESULT WINAPI CoInternetCombineIUri(IUri *pBaseUri, IUri *pRelativeUri, DWORD d
     base = get_uri_obj(pBaseUri);
     if(!relative || !base) {
         *ppCombinedUri = NULL;
-        FIXME("(%p %p %x %p %x) Unknown IUri types not supported yet.\n",
-            pBaseUri, pRelativeUri, dwCombineFlags, ppCombinedUri, (DWORD)dwReserved);
+        FIXME("(%p %p %lx %p %Ix) Unknown IUri types not supported yet.\n",
+            pBaseUri, pRelativeUri, dwCombineFlags, ppCombinedUri, dwReserved);
         return E_NOTIMPL;
     }
 
@@ -6343,8 +6447,8 @@ HRESULT WINAPI CoInternetCombineUrlEx(IUri *pBaseUri, LPCWSTR pwzRelativeUrl, DW
     HRESULT hr;
     IInternetProtocolInfo *info;
 
-    TRACE("(%p %s %x %p %x)\n", pBaseUri, debugstr_w(pwzRelativeUrl), dwCombineFlags,
-        ppCombinedUri, (DWORD)dwReserved);
+    TRACE("(%p %s %lx %p %Ix)\n", pBaseUri, debugstr_w(pwzRelativeUrl), dwCombineFlags,
+        ppCombinedUri, dwReserved);
 
     if(!ppCombinedUri)
         return E_POINTER;
@@ -6362,8 +6466,8 @@ HRESULT WINAPI CoInternetCombineUrlEx(IUri *pBaseUri, LPCWSTR pwzRelativeUrl, DW
     base = get_uri_obj(pBaseUri);
     if(!base) {
         *ppCombinedUri = NULL;
-        FIXME("(%p %s %x %p %x) Unknown IUri's not supported yet.\n", pBaseUri, debugstr_w(pwzRelativeUrl),
-            dwCombineFlags, ppCombinedUri, (DWORD)dwReserved);
+        FIXME("(%p %s %lx %p %Ix) Unknown IUri's not supported yet.\n", pBaseUri, debugstr_w(pwzRelativeUrl),
+            dwCombineFlags, ppCombinedUri, dwReserved);
         return E_NOTIMPL;
     }
 
@@ -6828,8 +6932,8 @@ HRESULT WINAPI CoInternetParseIUri(IUri *pIUri, PARSEACTION ParseAction, DWORD d
     Uri *uri;
     IInternetProtocolInfo *info;
 
-    TRACE("(%p %d %x %p %d %p %x)\n", pIUri, ParseAction, dwFlags, pwzResult,
-        cchResult, pcchResult, (DWORD)dwReserved);
+    TRACE("(%p %d %lx %p %ld %p %Ix)\n", pIUri, ParseAction, dwFlags, pwzResult,
+        cchResult, pcchResult, dwReserved);
 
     if(!pcchResult)
         return E_POINTER;
@@ -6841,8 +6945,8 @@ HRESULT WINAPI CoInternetParseIUri(IUri *pIUri, PARSEACTION ParseAction, DWORD d
 
     if(!(uri = get_uri_obj(pIUri))) {
         *pcchResult = 0;
-        FIXME("(%p %d %x %p %d %p %x) Unknown IUri's not supported for this action.\n",
-            pIUri, ParseAction, dwFlags, pwzResult, cchResult, pcchResult, (DWORD)dwReserved);
+        FIXME("(%p %d %lx %p %ld %p %Ix) Unknown IUri's not supported for this action.\n",
+            pIUri, ParseAction, dwFlags, pwzResult, cchResult, pcchResult, dwReserved);
         return E_NOTIMPL;
     }
 
@@ -6896,8 +7000,8 @@ HRESULT WINAPI CoInternetParseIUri(IUri *pIUri, PARSEACTION ParseAction, DWORD d
     default:
         *pcchResult = 0;
         hr = E_NOTIMPL;
-        FIXME("(%p %d %x %p %d %p %x) Partial stub.\n", pIUri, ParseAction, dwFlags,
-            pwzResult, cchResult, pcchResult, (DWORD)dwReserved);
+        FIXME("(%p %d %lx %p %ld %p %Ix) Partial stub.\n", pIUri, ParseAction, dwFlags,
+            pwzResult, cchResult, pcchResult, dwReserved);
     }
 
     return hr;

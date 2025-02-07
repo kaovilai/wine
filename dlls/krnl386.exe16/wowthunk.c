@@ -142,7 +142,7 @@ static BOOL fix_selector( CONTEXT *context )
 static DWORD call16_handler( EXCEPTION_RECORD *record, EXCEPTION_REGISTRATION_RECORD *frame,
                              CONTEXT *context, EXCEPTION_REGISTRATION_RECORD **pdispatcher )
 {
-    if (record->ExceptionFlags & (EH_UNWINDING | EH_EXIT_UNWIND))
+    if (record->ExceptionFlags & (EXCEPTION_UNWINDING | EXCEPTION_EXIT_UNWIND))
     {
         /* unwinding: restore the stack pointer in the TEB, and leave the Win16 mutex */
         STACK32FRAME *frame32 = CONTAINING_RECORD(frame, STACK32FRAME, frame);
@@ -445,7 +445,7 @@ BOOL WINAPI K32WOWCallback16Ex( DWORD vpfn16, DWORD dwFlags,
             DWORD count = cbArgs / sizeof(WORD);
             WORD * wstack = (WORD *)stack;
 
-            TRACE_(relay)( "\1CallTo16(func=%04x:%04x", context->SegCs, LOWORD(context->Eip) );
+            TRACE_(relay)( "\1CallTo16(func=%04lx:%04x", context->SegCs, LOWORD(context->Eip) );
             while (count) TRACE_(relay)( ",%04x", wstack[--count] );
             TRACE_(relay)( ") ss:sp=%04x:%04x ax=%04x bx=%04x cx=%04x dx=%04x si=%04x di=%04x bp=%04x ds=%04x es=%04x\n",
                            CURRENT_SS, CURRENT_SP,
@@ -507,7 +507,7 @@ BOOL WINAPI K32WOWCallback16Ex( DWORD vpfn16, DWORD dwFlags,
 
         if (TRACE_ON(relay))
         {
-            TRACE_(relay)( "\1RetFrom16() ss:sp=%04x:%04x retval=%08x\n", CURRENT_SS, CURRENT_SP, ret );
+            TRACE_(relay)( "\1RetFrom16() ss:sp=%04x:%04x retval=%08lx\n", CURRENT_SS, CURRENT_SP, ret );
             SYSLEVEL_CheckNotLevel( 2 );
         }
     }

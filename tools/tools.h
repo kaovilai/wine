@@ -21,15 +21,24 @@
 #ifndef __WINE_TOOLS_H
 #define __WINE_TOOLS_H
 
+#ifndef __WINE_CONFIG_H
+# error You must include config.h to use this header
+#endif
+
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <time.h>
 #include <errno.h>
+#ifdef HAVE_SYS_SYSCTL_H
+# include <sys/sysctl.h>
+#endif
 
 #ifdef _WIN32
 # include <direct.h>
@@ -47,7 +56,11 @@
 #  define strncasecmp _strnicmp
 #  define strcasecmp _stricmp
 # endif
+# include <windef.h>
+# include <winbase.h>
 #else
+extern char **environ;
+# include <spawn.h>
 # include <sys/wait.h>
 # include <unistd.h>
 # ifndef O_BINARY
@@ -79,7 +92,7 @@
 
 struct target
 {
-    enum { CPU_i386, CPU_x86_64, CPU_ARM, CPU_ARM64 } cpu;
+    enum { CPU_i386, CPU_x86_64, CPU_ARM, CPU_ARM64, CPU_ARM64EC } cpu;
 
     enum
     {
@@ -274,13 +287,9 @@ static inline int strarray_spawn( struct strarray args )
     pid_t pid, wret;
     int status;
 
-    if (!(pid = fork()))
-    {
-        strarray_add( &args, NULL );
-        execvp( args.str[0], (char **)args.str );
-        _exit(1);
-    }
-    if (pid == -1) return -1;
+    strarray_add( &args, NULL );
+    if (posix_spawnp( &pid, args.str[0], NULL, NULL, (char **)args.str, environ ))
+        return -1;
 
     while (pid != (wret = waitpid( pid, &status, 0 )))
         if (wret == -1 && errno != EINTR) break;
@@ -319,34 +328,128 @@ static inline char *replace_extension( const char *name, const char *old_ext, co
     return strmake( "%.*s%s", name_len, name, new_ext );
 }
 
-
-static inline int make_temp_file( const char *prefix, const char *suffix, char **name )
+/* build a path with the relative dir from 'from' to 'dest' appended to base */
+static inline char *build_relative_path( const char *base, const char *from, const char *dest )
 {
-    static unsigned int value;
-    int fd, count;
-    const char *tmpdir = NULL;
+    const char *start;
+    char *ret;
+    unsigned int dotdots = 0;
 
-    if (!prefix) prefix = "tmp";
-    if (!suffix) suffix = "";
-    value += time(NULL) + getpid();
+    for (;;)
+    {
+        while (*from == '/') from++;
+        while (*dest == '/') dest++;
+        start = dest;  /* save start of next path element */
+        if (!*from) break;
+
+        while (*from && *from != '/' && *from == *dest) { from++; dest++; }
+        if ((!*from || *from == '/') && (!*dest || *dest == '/')) continue;
+
+        do  /* count remaining elements in 'from' */
+        {
+            dotdots++;
+            while (*from && *from != '/') from++;
+            while (*from == '/') from++;
+        }
+        while (*from);
+        break;
+    }
+
+    ret = xmalloc( strlen(base) + 3 * dotdots + strlen(start) + 2 );
+    strcpy( ret, base );
+    while (dotdots--) strcat( ret, "/.." );
+
+    if (!start[0]) return ret;
+    strcat( ret, "/" );
+    strcat( ret, start );
+    return ret;
+}
+
+/* temp files management */
+
+extern const char *temp_dir;
+extern struct strarray temp_files;
+
+static inline char *make_temp_dir(void)
+{
+    unsigned int value = time(NULL) + getpid();
+    int count;
+    char *name;
+    const char *tmpdir = NULL;
 
     for (count = 0; count < 0x8000; count++)
     {
         if (tmpdir)
-            *name = strmake( "%s/%s-%08x%s", tmpdir, prefix, value, suffix );
+            name = strmake( "%s/tmp%08x", tmpdir, value );
         else
-            *name = strmake( "%s-%08x%s", prefix, value, suffix );
-        fd = open( *name, O_RDWR | O_CREAT | O_EXCL, 0600 );
-        if (fd >= 0) return fd;
+            name = strmake( "tmp%08x", value );
+        if (!mkdir( name, 0700 )) return name;
         value += 7777;
-        if (errno == EACCES && !tmpdir && !strchr( prefix, '/' ))
+        if (errno == EACCES && !tmpdir)
         {
             if (!(tmpdir = getenv("TMPDIR"))) tmpdir = "/tmp";
         }
-        free( *name );
+        free( name );
     }
-    fprintf( stderr, "failed to create temp file for %s%s\n", prefix, suffix );
+    fprintf( stderr, "failed to create directory for temp files\n" );
     exit(1);
+}
+
+static inline char *make_temp_file( const char *prefix, const char *suffix )
+{
+    static unsigned int value;
+    int fd, count;
+    char *name;
+
+    if (!temp_dir) temp_dir = make_temp_dir();
+    if (!suffix) suffix = "";
+    if (!prefix) prefix = "tmp";
+    else prefix = get_basename_noext( prefix );
+
+    for (count = 0; count < 0x8000; count++)
+    {
+        name = strmake( "%s/%s-%08x%s", temp_dir, prefix, value++, suffix );
+        fd = open( name, O_RDWR | O_CREAT | O_EXCL, 0600 );
+        if (fd >= 0)
+        {
+#ifdef HAVE_SIGPROCMASK /* block signals while manipulating the temp files list */
+            sigset_t mask_set, old_set;
+
+            sigemptyset( &mask_set );
+            sigaddset( &mask_set, SIGHUP );
+            sigaddset( &mask_set, SIGTERM );
+            sigaddset( &mask_set, SIGINT );
+            sigprocmask( SIG_BLOCK, &mask_set, &old_set );
+            strarray_add( &temp_files, name );
+            sigprocmask( SIG_SETMASK, &old_set, NULL );
+#else
+            strarray_add( &temp_files, name );
+#endif
+            close( fd );
+            return name;
+        }
+        free( name );
+    }
+    fprintf( stderr, "failed to create temp file for %s%s in %s\n", prefix, suffix, temp_dir );
+    exit(1);
+}
+
+static inline void remove_temp_files(void)
+{
+    unsigned int i;
+
+    for (i = 0; i < temp_files.count; i++) if (temp_files.str[i]) unlink( temp_files.str[i] );
+    if (temp_dir) rmdir( temp_dir );
+}
+
+
+static inline void init_signals( void (*cleanup)(int) )
+{
+    signal( SIGTERM, cleanup );
+    signal( SIGINT, cleanup );
+#ifdef SIGHUP
+    signal( SIGHUP, cleanup );
+#endif
 }
 
 
@@ -417,6 +520,7 @@ static inline unsigned int get_target_ptr_size( struct target target )
         [CPU_x86_64]    = 8,
         [CPU_ARM]       = 4,
         [CPU_ARM64]     = 8,
+        [CPU_ARM64EC]   = 8,
     };
     return sizes[target.cpu];
 }
@@ -436,6 +540,7 @@ static inline void set_target_ptr_size( struct target *target, unsigned int size
         if (size == 8) target->cpu = CPU_ARM64;
         break;
     case CPU_ARM64:
+    case CPU_ARM64EC:
         if (size == 4) target->cpu = CPU_ARM;
         break;
     }
@@ -458,6 +563,7 @@ static inline int get_cpu_from_name( const char *name )
         { "x86_64",    CPU_x86_64 },
         { "amd64",     CPU_x86_64 },
         { "aarch64",   CPU_ARM64 },
+        { "arm64ec",   CPU_ARM64EC },
         { "arm64",     CPU_ARM64 },
         { "arm",       CPU_ARM },
     };
@@ -502,10 +608,11 @@ static inline const char *get_arch_dir( struct target target )
 {
     static const char *cpu_names[] =
     {
-        [CPU_i386]   = "i386",
-        [CPU_x86_64] = "x86_64",
-        [CPU_ARM]    = "arm",
-        [CPU_ARM64]  = "aarch64"
+        [CPU_i386]    = "i386",
+        [CPU_x86_64]  = "x86_64",
+        [CPU_ARM]     = "arm",
+        [CPU_ARM64]   = "aarch64",
+        [CPU_ARM64EC] = "aarch64",
     };
 
     if (!cpu_names[target.cpu]) return "";
@@ -580,6 +687,76 @@ static inline struct target init_argv0_target( const char *argv0 )
 
     free( name );
     return target;
+}
+
+
+static inline char *get_bindir( const char *argv0 )
+{
+#ifndef _WIN32
+    char *dir = NULL;
+
+#if defined(__linux__) || defined(__FreeBSD_kernel__) || defined(__NetBSD__) \
+        || defined(__CYGWIN__) || defined(__MSYS__)
+    dir = realpath( "/proc/self/exe", NULL );
+#elif defined (__FreeBSD__) || defined(__DragonFly__)
+    static int pathname[] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
+    size_t path_size = PATH_MAX;
+    char *path = xmalloc( path_size );
+    if (!sysctl( pathname, ARRAY_SIZE(pathname), path, &path_size, NULL, 0 ))
+        dir = realpath( path, NULL );
+    free( path );
+#endif
+    if (!dir && !(dir = realpath( argv0, NULL ))) return NULL;
+    return get_dirname( dir );
+#else
+    char path[MAX_PATH], *p;
+    GetModuleFileNameA( NULL, path, ARRAYSIZE(path) );
+    for (p = path; *p; p++) if (*p == '\\') *p = '/';
+    return get_dirname( path );
+#endif
+}
+
+#ifdef LIBDIR
+static inline const char *get_libdir( const char *bindir )
+{
+#ifdef BINDIR
+    if (bindir) return build_relative_path( bindir, BINDIR, LIBDIR );
+#endif
+    return LIBDIR;
+}
+#endif
+
+#ifdef DATADIR
+static inline const char *get_datadir( const char *bindir )
+{
+#ifdef BINDIR
+    if (bindir) return build_relative_path( bindir, BINDIR, DATADIR );
+#endif
+    return DATADIR;
+}
+#endif
+
+#ifdef INCLUDEDIR
+static inline const char *get_includedir( const char *bindir )
+{
+#ifdef BINDIR
+    if (bindir) return build_relative_path( bindir, BINDIR, INCLUDEDIR );
+#endif
+    return INCLUDEDIR;
+}
+#endif
+
+static inline const char *get_nlsdir( const char *bindir, const char *srcdir )
+{
+    if (bindir && strendswith( bindir, srcdir )) return strmake( "%s/../../nls", bindir );
+#ifdef DATADIR
+    else
+    {
+        const char *datadir = get_datadir( bindir );
+        if (datadir) return strmake( "%s/wine/nls", datadir );
+    }
+#endif
+    return NULL;
 }
 
 
@@ -682,7 +859,7 @@ static inline struct strarray parse_options( int argc, char **argv, const char *
     char *start, *end;
     int i;
 
-#define OPT_ERR(fmt) { callback( '?', strmake( fmt, argv[1] )); continue; }
+#define OPT_ERR(fmt) { callback( '?', strmake( fmt, argv[i] )); continue; }
 
     for (i = 1; i < argc; i++)
     {

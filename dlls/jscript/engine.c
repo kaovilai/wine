@@ -131,8 +131,6 @@ static HRESULT stack_pop_object(script_ctx_t *ctx, IDispatch **r)
 
     v = stack_pop(ctx);
     if(is_object_instance(v)) {
-        if(!get_object(v))
-            return JS_E_OBJECT_REQUIRED;
         *r = get_object(v);
         return S_OK;
     }
@@ -162,6 +160,23 @@ static inline unsigned local_off(call_frame_t *frame, int ref)
 static inline BSTR local_name(call_frame_t *frame, int ref)
 {
     return ref < 0 ? frame->function->params[-ref-1] : frame->function->variables[ref].name;
+}
+
+static jsval_t *get_detached_var_ref(scope_chain_t *scope, const WCHAR *name)
+{
+    struct vars_buffer *detached_vars = scope->detached_vars;
+    local_ref_t *ref;
+
+    if(!detached_vars)
+        return NULL;
+    ref = lookup_local(detached_vars->func_code, name, scope->scope_index);
+    return ref && ref->ref < 0 ? &detached_vars->var[-ref->ref - 1] : NULL;
+}
+
+static HRESULT get_detached_var_dispid(scope_chain_t *scope, const WCHAR *name, DISPID *id)
+{
+    jsval_t *var_ref = get_detached_var_ref(scope, name);
+    return var_ref ? jsdisp_get_idx_id(&scope->dispex, var_ref - scope->detached_vars->var, id) : DISP_E_UNKNOWNNAME;
 }
 
 /* Steals input reference even on failure. */
@@ -209,6 +224,7 @@ static BOOL stack_topn_exprval(script_ctx_t *ctx, unsigned n, exprval_t *r)
         unsigned off = get_number(v);
 
         if(!frame->base_scope->frame && off >= frame->arguments_off) {
+            jsdisp_t *jsobj;
             DISPID id;
             BSTR name;
             HRESULT hres = E_FAIL;
@@ -229,7 +245,19 @@ static BOOL stack_topn_exprval(script_ctx_t *ctx, unsigned n, exprval_t *r)
 
             while (1)
             {
-                if (scope->jsobj && SUCCEEDED(hres = jsdisp_get_id(scope->jsobj, name, 0, &id)))
+                hres = get_detached_var_dispid(scope, name, &id);
+                if (hres != DISP_E_UNKNOWNNAME)
+                {
+                    if (FAILED(hres))
+                    {
+                        r->type = EXPRVAL_INVALID;
+                        r->u.hres = hres;
+                        return FALSE;
+                    }
+                    jsobj = &scope->dispex;
+                    break;
+                }
+                if ((jsobj = to_jsdisp(scope->obj)) && SUCCEEDED(hres = jsdisp_get_id(jsobj, name, 0, &id)))
                     break;
                 if (scope == frame->base_scope)
                 {
@@ -240,10 +268,10 @@ static BOOL stack_topn_exprval(script_ctx_t *ctx, unsigned n, exprval_t *r)
                 scope = scope->next;
             }
 
-            *stack_top_ref(ctx, n+1) = jsval_obj(jsdisp_addref(scope->jsobj));
+            *stack_top_ref(ctx, n+1) = jsval_obj(jsdisp_addref(jsobj));
             *stack_top_ref(ctx, n) = jsval_number(id);
             r->type = EXPRVAL_IDREF;
-            r->u.idref.disp = scope->obj;
+            r->u.idref.disp = to_disp(jsobj);
             r->u.idref.id = id;
             return TRUE;
         }
@@ -316,26 +344,44 @@ static HRESULT exprval_propget(script_ctx_t *ctx, exprval_t *ref, jsval_t *r)
 
 static HRESULT exprval_call(script_ctx_t *ctx, exprval_t *ref, WORD flags, unsigned argc, jsval_t *argv, jsval_t *r)
 {
+    jsdisp_t *jsdisp;
+    HRESULT hres;
+    jsval_t v;
+
     switch(ref->type) {
     case EXPRVAL_STACK_REF: {
-        jsval_t v = ctx->stack[ref->u.off];
+        v = ctx->stack[ref->u.off];
 
         if(!is_object_instance(v)) {
             FIXME("invoke %s\n", debugstr_jsval(v));
             return E_FAIL;
         }
 
-        return disp_call_value(ctx, get_object(v), NULL, flags, argc, argv, r);
+        return disp_call_value(ctx, get_object(v), jsval_undefined(), flags, argc, argv, r);
     }
     case EXPRVAL_IDREF:
+        /* ECMA-262 3rd Edition 11.2.3.7 / ECMA-262 5.1 Edition 11.2.3.6 *
+         * Don't treat scope object props as PropertyReferences.         */
+        if((jsdisp = to_jsdisp(ref->u.idref.disp)) && jsdisp->builtin_info->class == JSCLASS_NONE) {
+            hres = disp_propget(ctx, ref->u.idref.disp, ref->u.idref.id, &v);
+            if(FAILED(hres))
+                return hres;
+            if(!is_object_instance(v)) {
+                FIXME("invoke %s\n", debugstr_jsval(v));
+                hres = E_FAIL;
+            }else {
+                hres = disp_call_value(ctx, get_object(v), jsval_undefined(), flags, argc, argv, r);
+            }
+            jsval_release(v);
+            return hres;
+        }
         return disp_call(ctx, ref->u.idref.disp, ref->u.idref.id, flags, argc, argv, r);
     case EXPRVAL_JSVAL: {
         IDispatch *obj;
-        HRESULT hres;
 
         hres = to_object(ctx, ref->u.val, &obj);
         if(SUCCEEDED(hres)) {
-            hres = disp_call_value(ctx, obj, NULL, flags, argc, argv, r);
+            hres = disp_call_value(ctx, obj, jsval_undefined(), flags, argc, argv, r);
             IDispatch_Release(obj);
         }
         return hres;
@@ -406,19 +452,123 @@ static inline void clear_acc(script_ctx_t *ctx)
     ctx->acc = jsval_undefined();
 }
 
-static HRESULT scope_push(scope_chain_t *scope, jsdisp_t *jsobj, IDispatch *obj, scope_chain_t **ret)
+static inline scope_chain_t *scope_from_dispex(jsdisp_t *dispex)
+{
+    return CONTAINING_RECORD(dispex, scope_chain_t, dispex);
+}
+
+static void scope_destructor(jsdisp_t *dispex)
+{
+    scope_chain_t *scope = scope_from_dispex(dispex);
+
+    if(scope->detached_vars) {
+        struct vars_buffer *vars = scope->detached_vars;
+        unsigned i, cnt = vars->argc;
+
+        release_bytecode(vars->func_code->bytecode);
+        for(i = 0; i < cnt; i++)
+            jsval_release(vars->var[i]);
+        free(vars);
+    }
+
+    if(scope->next)
+        scope_release(scope->next);
+
+    if(scope->obj)
+        IDispatch_Release(scope->obj);
+}
+
+static HRESULT scope_lookup_prop(jsdisp_t *jsdisp, const WCHAR *name, unsigned flags, struct property_info *desc)
+{
+    scope_chain_t *scope = scope_from_dispex(jsdisp);
+
+    return jsdisp_index_lookup(&scope->dispex, name, scope->detached_vars->argc, desc);
+}
+
+static HRESULT scope_prop_get(jsdisp_t *dispex, unsigned idx, jsval_t *r)
+{
+    scope_chain_t *scope = scope_from_dispex(dispex);
+
+    return jsval_copy(scope->detached_vars->var[idx], r);
+}
+
+static HRESULT scope_prop_put(jsdisp_t *dispex, unsigned idx, jsval_t val)
+{
+    scope_chain_t *scope = scope_from_dispex(dispex);
+    jsval_t copy, *ref;
+    HRESULT hres;
+
+    hres = jsval_copy(val, &copy);
+    if(FAILED(hres))
+        return hres;
+
+    ref = &scope->detached_vars->var[idx];
+    jsval_release(*ref);
+    *ref = copy;
+    return S_OK;
+}
+
+static HRESULT scope_gc_traverse(struct gc_ctx *gc_ctx, enum gc_traverse_op op, jsdisp_t *dispex)
+{
+    scope_chain_t *scope = scope_from_dispex(dispex);
+    jsdisp_t *jsobj;
+    HRESULT hres;
+
+    if(scope->detached_vars) {
+        struct vars_buffer *vars = scope->detached_vars;
+        unsigned i, cnt = vars->argc;
+
+        for(i = 0; i < cnt; i++) {
+            hres = gc_process_linked_val(gc_ctx, op, dispex, &vars->var[i]);
+            if(FAILED(hres))
+                return hres;
+        }
+    }
+
+    if(scope->next) {
+        hres = gc_process_linked_obj(gc_ctx, op, dispex, &scope->next->dispex, (void**)&scope->next);
+        if(FAILED(hres))
+            return hres;
+    }
+
+    if(op == GC_TRAVERSE_UNLINK) {
+        IDispatch *obj = scope->obj;
+        if(obj) {
+            scope->obj = NULL;
+            IDispatch_Release(obj);
+        }
+        return S_OK;
+    }
+
+    return scope->obj && (jsobj = to_jsdisp(scope->obj)) ? gc_process_linked_obj(gc_ctx, op, dispex, jsobj, (void**)&scope->obj) : S_OK;
+}
+
+static const builtin_info_t scope_info = {
+    JSCLASS_NONE,
+    .destructor  = scope_destructor,
+    .lookup_prop = scope_lookup_prop,
+    .prop_get    = scope_prop_get,
+    .prop_put    = scope_prop_put,
+    .gc_traverse = scope_gc_traverse
+};
+
+static HRESULT scope_push(script_ctx_t *ctx, scope_chain_t *scope, IDispatch *obj, scope_chain_t **ret)
 {
     scope_chain_t *new_scope;
+    HRESULT hres;
 
-    new_scope = heap_alloc(sizeof(scope_chain_t));
+    new_scope = calloc(1, sizeof(scope_chain_t));
     if(!new_scope)
         return E_OUTOFMEMORY;
 
-    new_scope->ref = 1;
+    hres = init_dispex(&new_scope->dispex, ctx, &scope_info, NULL);
+    if(FAILED(hres)) {
+        free(new_scope);
+        return hres;
+    }
 
     if (obj)
         IDispatch_AddRef(obj);
-    new_scope->jsobj = jsobj;
     new_scope->obj = obj;
     new_scope->frame = NULL;
     new_scope->next = scope ? scope_addref(scope) : NULL;
@@ -437,19 +587,6 @@ static void scope_pop(scope_chain_t **scope)
     scope_release(tmp);
 }
 
-void scope_release(scope_chain_t *scope)
-{
-    if(--scope->ref)
-        return;
-
-    if(scope->next)
-        scope_release(scope->next);
-
-    if (scope->obj)
-        IDispatch_Release(scope->obj);
-    heap_free(scope);
-}
-
 static HRESULT disp_get_id(script_ctx_t *ctx, IDispatch *disp, const WCHAR *name, BSTR name_bstr, DWORD flags, DISPID *id)
 {
     IDispatchEx *dispex;
@@ -457,12 +594,9 @@ static HRESULT disp_get_id(script_ctx_t *ctx, IDispatch *disp, const WCHAR *name
     BSTR bstr;
     HRESULT hres;
 
-    jsdisp = iface_to_jsdisp(disp);
-    if(jsdisp) {
-        hres = jsdisp_get_id(jsdisp, name, flags, id);
-        jsdisp_release(jsdisp);
-        return hres;
-    }
+    jsdisp = to_jsdisp(disp);
+    if(jsdisp)
+        return jsdisp_get_id(jsdisp, name, flags, id);
 
     if(name_bstr) {
         bstr = name_bstr;
@@ -503,14 +637,20 @@ static HRESULT disp_cmp(IDispatch *disp1, IDispatch *disp2, BOOL *ret)
         return S_OK;
     }
 
-    hres = IDispatch_QueryInterface(disp1, &IID_IUnknown, (void**)&unk1);
-    if(FAILED(hres))
-        return hres;
+    unk1 = (IUnknown *)get_host_dispatch(disp1);
+    if(!unk1) {
+        hres = IDispatch_QueryInterface(disp1, &IID_IUnknown, (void**)&unk1);
+        if(FAILED(hres))
+            return hres;
+    }
 
-    hres = IDispatch_QueryInterface(disp2, &IID_IUnknown, (void**)&unk2);
-    if(FAILED(hres)) {
-        IUnknown_Release(unk1);
-        return hres;
+    unk2 = (IUnknown *)get_host_dispatch(disp2);
+    if(!unk2) {
+        hres = IDispatch_QueryInterface(disp2, &IID_IUnknown, (void**)&unk2);
+        if(FAILED(hres)) {
+            IUnknown_Release(unk1);
+            return hres;
+        }
     }
 
     if(unk1 == unk2) {
@@ -539,10 +679,7 @@ HRESULT jsval_strict_equal(jsval_t lval, jsval_t rval, BOOL *ret)
     TRACE("\n");
 
     if(type != jsval_type(rval)) {
-        if(is_null_instance(lval))
-            *ret = is_null_instance(rval);
-        else
-            *ret = FALSE;
+        *ret = FALSE;
         return S_OK;
     }
 
@@ -571,10 +708,34 @@ HRESULT jsval_strict_equal(jsval_t lval, jsval_t rval, BOOL *ret)
     return S_OK;
 }
 
+static HRESULT alloc_detached_vars(script_ctx_t *ctx, call_frame_t *frame, scope_chain_t *scope)
+{
+    function_code_t *func = frame->function;
+    unsigned i, argc;
+
+    argc = (scope == frame->base_scope) ? max(frame->argc, func->param_cnt) : 0;
+    if(!argc)
+        return S_OK;
+
+    if(!(scope->detached_vars = malloc(FIELD_OFFSET(struct vars_buffer, var[argc]))))
+        return E_OUTOFMEMORY;
+    scope->detached_vars->argc = argc;
+    scope->detached_vars->func_code = func;
+    bytecode_addref(func->bytecode);
+
+    for(i = 0; i < argc; i++) {
+        scope->detached_vars->var[i] = ctx->stack[frame->arguments_off + i];
+        ctx->stack[frame->arguments_off + i] = jsval_undefined();
+    }
+
+    return S_OK;
+}
+
 static HRESULT detach_scope(script_ctx_t *ctx, call_frame_t *frame, scope_chain_t *scope)
 {
     function_code_t *func = frame->function;
     unsigned int i, index;
+    jsdisp_t *jsobj;
     HRESULT hres;
 
     if (!scope->frame)
@@ -583,17 +744,22 @@ static HRESULT detach_scope(script_ctx_t *ctx, call_frame_t *frame, scope_chain_
     assert(scope->frame == frame);
     scope->frame = NULL;
 
-    if (!scope->jsobj)
+    hres = alloc_detached_vars(ctx, frame, scope);
+    if (FAILED(hres))
+        return hres;
+
+    if (!scope->obj)
     {
-        assert(!scope->obj);
-
-        if (FAILED(hres = create_object(ctx, NULL, &scope->jsobj)))
+        if (FAILED(hres = create_dispex(ctx, NULL, NULL, &jsobj)))
             return hres;
-        scope->obj = to_disp(scope->jsobj);
+        scope->obj = to_disp(jsobj);
     }
+    else
+        jsobj = as_jsdisp(scope->obj);
 
-    if (scope == frame->base_scope && func->name && ctx->version >= SCRIPTLANGUAGEVERSION_ES5)
-        jsdisp_propput_name(scope->jsobj, func->name, jsval_obj(jsdisp_addref(frame->function_instance)));
+    if (scope == frame->base_scope && func->name && func->local_ref == INVALID_LOCAL_REF &&
+        ctx->version >= SCRIPTLANGUAGEVERSION_ES5)
+        jsdisp_propput_name(jsobj, func->name, jsval_obj(frame->function_instance));
 
     index = scope->scope_index;
     for(i = 0; i < frame->function->local_scopes[index].locals_cnt; i++)
@@ -601,9 +767,11 @@ static HRESULT detach_scope(script_ctx_t *ctx, call_frame_t *frame, scope_chain_
         WCHAR *name = frame->function->local_scopes[index].locals[i].name;
         int ref = frame->function->local_scopes[index].locals[i].ref;
 
-        if (FAILED(hres = jsdisp_propput_name(scope->jsobj, name, ctx->stack[local_off(frame, ref)])))
+        if (ref < 0)
+            continue;
+        if (FAILED(hres = jsdisp_propput_name(jsobj, name, ctx->stack[local_off(frame, ref)])))
             return hres;
-        if (frame->function->variables[ref].func_id != -1 && scope != frame->base_scope
+        if (scope != frame->base_scope && frame->function->variables[ref].func_id != -1
                 && FAILED(hres = jsdisp_propput_name(frame->variable_obj, name, ctx->stack[local_off(frame, ref)])))
             return hres;
     }
@@ -633,7 +801,7 @@ static HRESULT detach_variable_object(script_ctx_t *ctx, call_frame_t *frame, BO
     TRACE("detaching %p\n", frame);
 
     assert(frame == frame->base_scope->frame);
-    assert(frame->variable_obj == frame->base_scope->jsobj);
+    assert(to_disp(frame->variable_obj) == frame->base_scope->obj);
 
     if(!from_release && !frame->arguments_obj) {
         hres = setup_arguments_object(ctx, frame);
@@ -721,21 +889,23 @@ static HRESULT identifier_eval(script_ctx_t *ctx, BSTR identifier, exprval_t *re
                 }
 
                 /* ECMA-262 5.1 Edition    13 */
-                if(func->name && ctx->version >= SCRIPTLANGUAGEVERSION_ES5 && !wcscmp(identifier, func->name)) {
+                if(func->name && ctx->version >= SCRIPTLANGUAGEVERSION_ES5 &&
+                   func->local_ref == INVALID_LOCAL_REF && !wcscmp(identifier, func->name)) {
                     TRACE("returning a function from scope chain\n");
                     ret->type = EXPRVAL_JSVAL;
                     ret->u.val = jsval_obj(jsdisp_addref(scope->frame->function_instance));
                     return S_OK;
                 }
+            }else if((hres = get_detached_var_dispid(scope, identifier, &id)) != DISP_E_UNKNOWNNAME) {
+                if(SUCCEEDED(hres))
+                    exprval_set_disp_ref(ret, to_disp(&scope->dispex), id);
+                return hres;
             }
 
-            if (!scope->jsobj && !scope->obj)
+            if (!scope->obj)
                 continue;
 
-            if(scope->jsobj)
-                hres = jsdisp_get_id(scope->jsobj, identifier, fdexNameImplicit, &id);
-            else
-                hres = disp_get_id(ctx, scope->obj, identifier, identifier, fdexNameImplicit, &id);
+            hres = disp_get_id(ctx, scope->obj, identifier, identifier, fdexNameImplicit, &id);
             if(SUCCEEDED(hres)) {
                 exprval_set_disp_ref(ret, scope->obj, id);
                 return S_OK;
@@ -837,7 +1007,7 @@ static HRESULT interp_forin(script_ctx_t *ctx)
     id = get_number(stack_top(ctx));
 
     if(!stack_topn_exprval(ctx, 1, &prop_ref)) {
-        FIXME("invalid ref: %08x\n", prop_ref.u.hres);
+        FIXME("invalid ref: %08lx\n", prop_ref.u.hres);
         return E_FAIL;
     }
 
@@ -888,6 +1058,7 @@ static HRESULT scope_init_locals(script_ctx_t *ctx)
     unsigned int i, off, index;
     scope_chain_t *scope;
     BOOL detached_vars;
+    jsdisp_t *jsobj;
     HRESULT hres;
 
     scope = frame->scope;
@@ -899,13 +1070,14 @@ static HRESULT scope_init_locals(script_ctx_t *ctx)
         assert(frame->base_scope->frame == frame);
         frame->scope->frame = ctx->call_ctx;
     }
-    else if (!scope->jsobj)
+    else if (!scope->obj)
     {
-        assert(!scope->obj);
-        if (FAILED(hres = create_object(ctx, NULL, &scope->jsobj)))
+        if (FAILED(hres = create_dispex(ctx, NULL, NULL, &jsobj)))
             return hres;
-        scope->obj = to_disp(scope->jsobj);
+        scope->obj = to_disp(jsobj);
     }
+    else
+        jsobj = as_jsdisp(scope->obj);
 
     for(i = 0; i < frame->function->local_scopes[index].locals_cnt; i++)
     {
@@ -923,7 +1095,10 @@ static HRESULT scope_init_locals(script_ctx_t *ctx)
                 return hres;
             val = jsval_obj(func_obj);
             if (detached_vars && FAILED(hres = jsdisp_propput_name(frame->variable_obj, name, jsval_obj(func_obj))))
+            {
+                jsdisp_release(func_obj);
                 return hres;
+            }
         }
         else
         {
@@ -932,7 +1107,9 @@ static HRESULT scope_init_locals(script_ctx_t *ctx)
 
         if (detached_vars)
         {
-            if (FAILED(hres = jsdisp_propput_name(scope->jsobj, name, val)))
+            hres = jsdisp_propput_name(jsobj, name, val);
+            jsval_release(val);
+            if (FAILED(hres))
                 return hres;
         }
         else
@@ -960,7 +1137,7 @@ static HRESULT interp_push_with_scope(script_ctx_t *ctx)
     if(FAILED(hres))
         return hres;
 
-    hres = scope_push(ctx->call_ctx->scope, to_jsdisp(disp), disp, &ctx->call_ctx->scope);
+    hres = scope_push(ctx, ctx->call_ctx->scope, disp, &ctx->call_ctx->scope);
     IDispatch_Release(disp);
     return hres;
 }
@@ -974,7 +1151,7 @@ static HRESULT interp_push_block_scope(script_ctx_t *ctx)
 
     TRACE("scope_index %u.\n", scope_index);
 
-    hres = scope_push(ctx->call_ctx->scope, NULL, NULL, &frame->scope);
+    hres = scope_push(ctx, ctx->call_ctx->scope, NULL, &frame->scope);
 
     if (FAILED(hres) || !scope_index)
         return hres;
@@ -989,10 +1166,10 @@ static HRESULT interp_pop_scope(script_ctx_t *ctx)
 {
     TRACE("\n");
 
-    if(ctx->call_ctx->scope->ref > 1) {
+    if(ctx->call_ctx->scope->dispex.ref > 1) {
         HRESULT hres = detach_variable_object(ctx, ctx->call_ctx, FALSE);
         if(FAILED(hres))
-            ERR("Failed to detach variable object: %08x\n", hres);
+            ERR("Failed to detach variable object: %08lx\n", hres);
     }
 
     scope_pop(&ctx->call_ctx->scope);
@@ -1034,7 +1211,7 @@ static void set_error_value(script_ctx_t *ctx, jsval_t value)
     ei->valid_value = TRUE;
     ei->value = value;
 
-    if(is_object_instance(value) && get_object(value) && (obj = to_jsdisp(get_object(value)))) {
+    if(is_object_instance(value) && (obj = to_jsdisp(get_object(value)))) {
         UINT32 number;
         jsstr_t *str;
         jsval_t v;
@@ -1073,7 +1250,7 @@ static HRESULT interp_throw_ref(script_ctx_t *ctx)
 {
     const HRESULT arg = get_op_uint(ctx, 0);
 
-    TRACE("%08x\n", arg);
+    TRACE("%08lx\n", arg);
 
     return arg;
 }
@@ -1084,7 +1261,7 @@ static HRESULT interp_throw_type(script_ctx_t *ctx)
     jsstr_t *str = get_op_str(ctx, 1);
     const WCHAR *ptr;
 
-    TRACE("%08x %s\n", hres, debugstr_jsstr(str));
+    TRACE("%08lx %s\n", hres, debugstr_jsstr(str));
 
     ptr = jsstr_flatten(str);
     return ptr ? throw_error(ctx, hres, ptr) : E_OUTOFMEMORY;
@@ -1100,7 +1277,7 @@ static HRESULT interp_push_except(script_ctx_t *ctx)
 
     TRACE("\n");
 
-    except = heap_alloc(sizeof(*except));
+    except = malloc(sizeof(*except));
     if(!except)
         return E_OUTOFMEMORY;
 
@@ -1128,7 +1305,7 @@ static HRESULT interp_pop_except(script_ctx_t *ctx)
 
     finally_off = except->finally_off;
     frame->except_frame = except->next;
-    heap_free(except);
+    free(except);
 
     if(finally_off) {
         HRESULT hres;
@@ -1186,7 +1363,7 @@ static HRESULT interp_enter_catch(script_ctx_t *ctx)
     hres = jsdisp_propput_name(scope_obj, ident, v);
     jsval_release(v);
     if(SUCCEEDED(hres))
-        hres = scope_push(ctx->call_ctx->scope, scope_obj, to_disp(scope_obj), &ctx->call_ctx->scope);
+        hres = scope_push(ctx, ctx->call_ctx->scope, to_disp(scope_obj), &ctx->call_ctx->scope);
     jsdisp_release(scope_obj);
     return hres;
 }
@@ -1320,7 +1497,7 @@ static HRESULT interp_memberid(script_ctx_t *ctx)
             exprval_set_exception(&ref, JS_E_INVALID_PROPERTY);
             hres = S_OK;
         }else {
-            ERR("failed %08x\n", hres);
+            ERR("failed %08lx\n", hres);
             return hres;
         }
     }
@@ -1360,14 +1537,12 @@ static HRESULT interp_new(script_ctx_t *ctx)
     /* NOTE: Should use to_object here */
 
     if(is_null(constr))
-        return JS_E_OBJECT_EXPECTED;
-    else if(!is_object_instance(constr))
+        return is_null_disp(constr) ? JS_E_INVALID_PROPERTY : JS_E_OBJECT_EXPECTED;
+    if(!is_object_instance(constr))
         return JS_E_INVALID_ACTION;
-    else if(!get_object(constr))
-        return JS_E_INVALID_PROPERTY;
 
     clear_acc(ctx);
-    return disp_call_value(ctx, get_object(constr), NULL, DISPATCH_CONSTRUCT | DISPATCH_JSCRIPT_CALLEREXECSSOURCE,
+    return disp_call_value(ctx, get_object(constr), jsval_undefined(), DISPATCH_CONSTRUCT | DISPATCH_JSCRIPT_CALLEREXECSSOURCE,
                            argc, stack_args(ctx, argc), &ctx->acc);
 }
 
@@ -1385,7 +1560,7 @@ static HRESULT interp_call(script_ctx_t *ctx)
         return JS_E_INVALID_PROPERTY;
 
     clear_acc(ctx);
-    return disp_call_value(ctx, get_object(obj), NULL, DISPATCH_METHOD | DISPATCH_JSCRIPT_CALLEREXECSSOURCE,
+    return disp_call_value(ctx, get_object(obj), jsval_undefined(), DISPATCH_METHOD | DISPATCH_JSCRIPT_CALLEREXECSSOURCE,
                            argn, stack_args(ctx, argn), do_ret ? &ctx->acc : NULL);
 }
 
@@ -1404,6 +1579,40 @@ static HRESULT interp_call_member(script_ctx_t *ctx)
     clear_acc(ctx);
     return exprval_call(ctx, &ref, DISPATCH_METHOD | DISPATCH_JSCRIPT_CALLEREXECSSOURCE,
             argn, stack_args(ctx, argn), do_ret ? &ctx->acc : NULL);
+}
+
+/* ECMA-262 5th Edition 15.1.2.1.1 */
+static HRESULT interp_call_eval(script_ctx_t *ctx)
+{
+    const unsigned argn = get_op_uint(ctx, 0);
+    const int do_ret = get_op_int(ctx, 1);
+    HRESULT hres = S_OK;
+    exprval_t exprval;
+    jsdisp_t *jsdisp;
+    BSTR identifier;
+    jsval_t v;
+
+    TRACE("%d %d\n", argn, do_ret);
+
+    identifier = SysAllocString(L"eval");
+    hres = identifier_eval(ctx, identifier, &exprval);
+    SysFreeString(identifier);
+    if(FAILED(hres))
+        return hres;
+
+    clear_acc(ctx);
+    hres = exprval_propget(ctx, &exprval, &v);
+    if(SUCCEEDED(hres)) {
+        if(is_object_instance(v) && (jsdisp = to_jsdisp(get_object(v))) && jsdisp->ctx == ctx && is_builtin_eval_func(jsdisp))
+            hres = builtin_eval(ctx, ctx->call_ctx, DISPATCH_METHOD | DISPATCH_JSCRIPT_CALLEREXECSSOURCE,
+                                argn, stack_args(ctx, argn), do_ret ? &ctx->acc : NULL);
+        else
+            hres = exprval_call(ctx, &exprval, DISPATCH_METHOD | DISPATCH_JSCRIPT_CALLEREXECSSOURCE,
+                                argn, stack_args(ctx, argn), do_ret ? &ctx->acc : NULL);
+        jsval_release(v);
+    }
+    exprval_release(&exprval);
+    return hres;
 }
 
 /* ECMA-262 3rd Edition    11.1.1 */
@@ -1631,7 +1840,7 @@ static HRESULT interp_carray_set(script_ctx_t *ctx)
     array = stack_top(ctx);
     assert(is_object_instance(array));
 
-    hres = jsdisp_propput_idx(iface_to_jsdisp(get_object(array)), index, value);
+    hres = jsdisp_propput_idx(to_jsdisp(get_object(array)), index, value);
     jsval_release(value);
     return hres;
 }
@@ -1678,7 +1887,7 @@ static HRESULT interp_obj_prop(script_ctx_t *ctx)
         jsdisp_t *func;
 
         assert(is_object_instance(val));
-        func = iface_to_jsdisp(get_object(val));
+        func = to_jsdisp(get_object(val));
 
         desc.mask = desc.flags;
         if(type == PROPERTY_DEFINITION_GETTER) {
@@ -1690,7 +1899,6 @@ static HRESULT interp_obj_prop(script_ctx_t *ctx)
         }
 
         hres = jsdisp_define_property(obj, name, &desc);
-        jsdisp_release(func);
     }
 
     jsval_release(val);
@@ -1807,7 +2015,7 @@ static HRESULT interp_instanceof(script_ctx_t *ctx)
     HRESULT hres;
 
     v = stack_pop(ctx);
-    if(!is_object_instance(v) || !get_object(v)) {
+    if(!is_object_instance(v)) {
         jsval_release(v);
         return JS_E_FUNCTION_EXPECTED;
     }
@@ -1819,7 +2027,7 @@ static HRESULT interp_instanceof(script_ctx_t *ctx)
         return E_FAIL;
     }
 
-    if(is_class(obj, JSCLASS_FUNCTION)) {
+    if(obj->is_constructor) {
         hres = jsdisp_propget_name(obj, L"prototype", &prot);
     }else {
         hres = JS_E_FUNCTION_EXPECTED;
@@ -1830,17 +2038,16 @@ static HRESULT interp_instanceof(script_ctx_t *ctx)
 
     v = stack_pop(ctx);
 
-    if(is_object_instance(prot)) {
+    if(is_null_disp(v))
+        hres = JS_E_OBJECT_EXPECTED;
+    else if(is_object_instance(prot)) {
         if(is_object_instance(v))
-            tmp = iface_to_jsdisp(get_object(v));
+            tmp = to_jsdisp(get_object(v));
         for(iter = tmp; !ret && iter; iter = iter->prototype) {
             hres = disp_cmp(get_object(prot), to_disp(iter), &ret);
             if(FAILED(hres))
                 break;
         }
-
-        if(tmp)
-            jsdisp_release(tmp);
     }else {
         FIXME("prototype is not an object\n");
         hres = E_FAIL;
@@ -1867,7 +2074,7 @@ static HRESULT interp_in(script_ctx_t *ctx)
     TRACE("\n");
 
     obj = stack_pop(ctx);
-    if(!is_object_instance(obj) || !get_object(obj)) {
+    if(!is_object_instance(obj)) {
         jsval_release(obj);
         return JS_E_OBJECT_EXPECTED;
     }
@@ -2126,9 +2333,8 @@ static HRESULT typeof_string(jsval_t v, const WCHAR **ret)
     case JSV_OBJECT: {
         jsdisp_t *dispex;
 
-        if(get_object(v) && (dispex = iface_to_jsdisp(get_object(v)))) {
+        if((dispex = to_jsdisp(get_object(v)))) {
             *ret = is_class(dispex, JSCLASS_FUNCTION) ? L"function" : L"object";
-            jsdisp_release(dispex);
         }else {
             *ret = L"object";
         }
@@ -2325,12 +2531,6 @@ static HRESULT equal_values(script_ctx_t *ctx, jsval_t lval, jsval_t rval, BOOL 
 {
     if(jsval_type(lval) == jsval_type(rval) || (is_number(lval) && is_number(rval)))
        return jsval_strict_equal(lval, rval, ret);
-
-    /* FIXME: NULL disps should be handled in more general way */
-    if(is_object_instance(lval) && !get_object(lval))
-        return equal_values(ctx, jsval_null(), rval, ret);
-    if(is_object_instance(rval) && !get_object(rval))
-        return equal_values(ctx, lval, jsval_null(), ret);
 
     if((is_null(lval) && is_undefined(rval)) || (is_undefined(lval) && is_null(rval))) {
         *ret = TRUE;
@@ -2705,7 +2905,7 @@ static HRESULT interp_to_string(script_ctx_t *ctx)
     hres = to_string(ctx, v, &str);
     jsval_release(v);
     if(FAILED(hres)) {
-        WARN("failed %08x\n", hres);
+        WARN("failed %08lx\n", hres);
         return hres;
     }
 
@@ -2765,7 +2965,7 @@ static HRESULT interp_set_member(script_ctx_t *ctx)
         jsstr_release(get_string(namev));
     }
     if(FAILED(hres)) {
-        WARN("failed %08x\n", hres);
+        WARN("failed %08lx\n", hres);
         jsval_release(value);
         return hres;
     }
@@ -2910,14 +3110,14 @@ static void pop_call_frame(script_ctx_t *ctx)
     assert(frame->scope == frame->base_scope);
 
     /* If current scope will be kept alive, we need to transfer local variables to its variable object. */
-    if(frame->scope && frame->scope->ref > 1) {
+    if(frame->scope && frame->scope->dispex.ref > 1) {
         HRESULT hres = detach_variable_object(ctx, frame, TRUE);
         if(FAILED(hres))
-            ERR("Failed to detach variable object: %08x\n", hres);
+            ERR("Failed to detach variable object: %08lx\n", hres);
     }
 
     if(frame->arguments_obj)
-        detach_arguments_object(frame->arguments_obj);
+        detach_arguments_object(frame);
     if(frame->scope)
         scope_release(frame->scope);
 
@@ -2935,7 +3135,7 @@ static void pop_call_frame(script_ctx_t *ctx)
         IDispatch_Release(frame->this_obj);
     jsval_release(frame->ret);
     release_bytecode(frame->bytecode);
-    heap_free(frame);
+    free(frame);
 }
 
 static void print_backtrace(script_ctx_t *ctx)
@@ -2984,7 +3184,7 @@ static HRESULT unwind_exception(script_ctx_t *ctx, HRESULT exception_hres)
         jsdisp_t *error_obj;
         jsval_t msg;
 
-        WARN("Exception %08x %s", exception_hres, debugstr_jsval(ei->valid_value ? ei->value : jsval_undefined()));
+        WARN("Exception %08lx %s", exception_hres, debugstr_jsval(ei->valid_value ? ei->value : jsval_undefined()));
         if(ei->valid_value && jsval_type(ei->value) == JSV_OBJECT) {
             error_obj = to_jsdisp(get_object(ei->value));
             if(error_obj) {
@@ -3047,7 +3247,7 @@ static HRESULT unwind_exception(script_ctx_t *ctx, HRESULT exception_hres)
         except_frame->catch_off = 0;
     }else {
         frame->except_frame = except_frame->next;
-        heap_free(except_frame);
+        free(except_frame);
     }
 
     hres = stack_push(ctx, except_val);
@@ -3122,10 +3322,10 @@ static HRESULT bind_event_target(script_ctx_t *ctx, function_code_t *func, jsdis
     disp = get_object(v);
     hres = IDispatch_QueryInterface(disp, &IID_IBindEventHandler, (void**)&target);
     if(SUCCEEDED(hres)) {
-        hres = IBindEventHandler_BindHandler(target, func->name, (IDispatch*)&func_obj->IDispatchEx_iface);
+        hres = IBindEventHandler_BindHandler(target, func->name, to_disp(func_obj));
         IBindEventHandler_Release(target);
         if(FAILED(hres))
-            WARN("BindEvent failed: %08x\n", hres);
+            WARN("BindEvent failed: %08lx\n", hres);
     }else {
         FIXME("No IBindEventHandler, not yet supported binding\n");
     }
@@ -3182,7 +3382,7 @@ static HRESULT setup_scope(script_ctx_t *ctx, call_frame_t *frame, scope_chain_t
 
     frame->pop_variables = i;
 
-    hres = scope_push(scope_chain, variable_object, to_disp(variable_object), &scope);
+    hres = scope_push(ctx, scope_chain, to_disp(variable_object), &scope);
     if(FAILED(hres)) {
         stack_popn(ctx, ctx->stack_top - orig_stack);
         return hres;
@@ -3222,7 +3422,7 @@ HRESULT exec_source(script_ctx_t *ctx, DWORD flags, bytecode_t *bytecode, functi
     HRESULT hres;
 
     if(!ctx->stack) {
-        ctx->stack = heap_alloc(stack_size * sizeof(*ctx->stack));
+        ctx->stack = malloc(stack_size * sizeof(*ctx->stack));
         if(!ctx->stack)
             return E_OUTOFMEMORY;
     }
@@ -3261,7 +3461,7 @@ HRESULT exec_source(script_ctx_t *ctx, DWORD flags, bytecode_t *bytecode, functi
             return hres;
     }
 
-    if((flags & EXEC_EVAL) && ctx->call_ctx) {
+    if((flags & EXEC_EVAL) && scope) {
         variable_obj = jsdisp_addref(ctx->call_ctx->variable_obj);
     }else if(!(flags & (EXEC_GLOBAL | EXEC_EVAL))) {
         hres = create_dispex(ctx, NULL, NULL, &variable_obj);
@@ -3309,25 +3509,20 @@ HRESULT exec_source(script_ctx_t *ctx, DWORD flags, bytecode_t *bytecode, functi
         }
     }
 
-    /* ECMA-262 3rd Edition    11.2.3.7 */
     if(this_obj) {
-        jsdisp_t *jsthis;
+        jsdisp_t *jsthis = to_jsdisp(this_obj);
 
-        jsthis = iface_to_jsdisp(this_obj);
-        if(jsthis) {
-            if(jsthis->builtin_info->class == JSCLASS_GLOBAL || jsthis->builtin_info->class == JSCLASS_NONE)
-                this_obj = NULL;
-            jsdisp_release(jsthis);
-        }
+        if(jsthis && jsthis->builtin_info->class == JSCLASS_GLOBAL)
+            this_obj = NULL;
     }
 
-    if(ctx->call_ctx && (flags & EXEC_EVAL)) {
+    if(scope && (flags & EXEC_EVAL)) {
         hres = detach_variable_object(ctx, ctx->call_ctx, FALSE);
         if(FAILED(hres))
             goto fail;
     }
 
-    frame = heap_alloc_zero(sizeof(*frame));
+    frame = calloc(1, sizeof(*frame));
     if(!frame) {
         hres = E_OUTOFMEMORY;
         goto fail;
@@ -3342,7 +3537,7 @@ HRESULT exec_source(script_ctx_t *ctx, DWORD flags, bytecode_t *bytecode, functi
         hres = setup_scope(ctx, frame, scope, variable_obj, argc, argv);
         if(FAILED(hres)) {
             release_bytecode(frame->bytecode);
-            heap_free(frame);
+            free(frame);
             goto fail;
         }
     }else if(scope) {

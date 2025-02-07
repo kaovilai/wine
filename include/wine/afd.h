@@ -27,8 +27,8 @@
 
 struct afd_wsabuf_32
 {
-    ULONG len;
-    ULONG buf;
+    UINT len;
+    UINT buf;
 };
 
 #ifdef USE_WS_PREFIX
@@ -126,7 +126,7 @@ struct afd_poll_params
     {
         SOCKET socket;
         int flags;
-        NTSTATUS status;
+        int status;
     } sockets[1];
 };
 
@@ -140,7 +140,7 @@ struct afd_poll_params_64
     {
         ULONGLONG socket;
         int flags;
-        NTSTATUS status;
+        int status;
     } sockets[1];
 };
 
@@ -154,7 +154,7 @@ struct afd_poll_params_32
     {
         ULONG socket;
         int flags;
-        NTSTATUS status;
+        int status;
     } sockets[1];
 };
 #include <poppack.h>
@@ -180,7 +180,7 @@ struct afd_event_select_params_32
 struct afd_get_events_params
 {
     int flags;
-    NTSTATUS status[13];
+    int status[13];
 };
 C_ASSERT( sizeof(struct afd_get_events_params) == 56 );
 
@@ -283,6 +283,14 @@ C_ASSERT( sizeof(struct afd_get_events_params) == 56 );
 #define IOCTL_AFD_WINE_SET_IP_RECVTTL                   WINE_AFD_IOC(294)
 #define IOCTL_AFD_WINE_GET_IP_RECVTOS                   WINE_AFD_IOC(295)
 #define IOCTL_AFD_WINE_SET_IP_RECVTOS                   WINE_AFD_IOC(296)
+#define IOCTL_AFD_WINE_GET_SO_EXCLUSIVEADDRUSE          WINE_AFD_IOC(297)
+#define IOCTL_AFD_WINE_SET_SO_EXCLUSIVEADDRUSE          WINE_AFD_IOC(298)
+#define IOCTL_AFD_WINE_GET_TCP_KEEPALIVE                WINE_AFD_IOC(299)
+#define IOCTL_AFD_WINE_SET_TCP_KEEPALIVE                WINE_AFD_IOC(300)
+#define IOCTL_AFD_WINE_GET_TCP_KEEPCNT                  WINE_AFD_IOC(301)
+#define IOCTL_AFD_WINE_SET_TCP_KEEPCNT                  WINE_AFD_IOC(302)
+#define IOCTL_AFD_WINE_GET_TCP_KEEPINTVL                WINE_AFD_IOC(303)
+#define IOCTL_AFD_WINE_SET_TCP_KEEPINTVL                WINE_AFD_IOC(304)
 
 struct afd_iovec
 {

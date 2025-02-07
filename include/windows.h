@@ -19,7 +19,7 @@
 #ifndef __WINE_WINDOWS_H
 #define __WINE_WINDOWS_H
 
-#if defined(_MSC_VER) && (_MSC_VER >= 800) && !defined(__cplusplus)
+#if defined(_MSC_VER) && !defined(__cplusplus)
 /* TYPE_ALIGNMENT generates this - move it outside the warning push/pop scope. */
 # pragma warning(disable:4116)
 #endif
@@ -33,6 +33,7 @@
 
 /* All the basic includes */
 #include <excpt.h>
+#include <sdkddkver.h>
 #include <stdarg.h>
 #include <windef.h>
 #include <winbase.h>

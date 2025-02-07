@@ -25,7 +25,11 @@
 #include "gdiplus.h"
 #include "wine/test.h"
 
-#define expect(expected, got) ok(got == expected, "Expected %.8x, got %.8x\n", expected, got)
+#define expect(expected,got) expect_(__LINE__, expected, got)
+static inline void expect_(unsigned line, DWORD expected, DWORD got)
+{
+    ok_(__FILE__, line)(expected == got, "Expected %.8ld, got %.8ld\n", expected, got);
+}
 #define expectf(expected, got) ok(fabs(expected - got) < 0.0001, "Expected %.2f, got %.2f\n", expected, got)
 
 static HWND hwnd;
@@ -631,7 +635,6 @@ static void test_transform(void)
     }
 
     GdipDeleteMatrix(m);
-    GdipDeleteGraphics(graphics);
     ReleaseDC(0, hdc);
 }
 
@@ -1660,8 +1663,12 @@ static void test_pathgradientblend(void)
         expectf(positions[i], res_positions[i]);
     }
 
+    res_factors[5] = 123.0f;
+    res_positions[5] = 456.0f;
     status = GdipGetPathGradientBlend(brush, res_factors, res_positions, 6);
     expect(Ok, status);
+    ok(res_factors[5] == 123.0f, "Unexpected value %f.\n", res_factors[5]);
+    ok(res_positions[5] == 456.0f, "Unexpected value %f.\n", res_positions[5]);
 
     status = GdipSetPathGradientBlend(brush, factors, positions, 1);
     expect(Ok, status);

@@ -31,10 +31,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
-#ifdef HAVE_DISKARBITRATION_DISKARBITRATION_H
+#ifdef __APPLE__
 #include <DiskArbitration/DiskArbitration.h>
-#endif
-#if defined(HAVE_SYSTEMCONFIGURATION_SCDYNAMICSTORECOPYDHCPINFO_H) && defined(HAVE_SYSTEMCONFIGURATION_SCNETWORKCONFIGURATION_H)
 #include <SystemConfiguration/SCDynamicStoreCopyDHCPInfo.h>
 #include <SystemConfiguration/SCNetworkConfiguration.h>
 #endif
@@ -50,7 +48,7 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mountmgr);
 
-#ifdef HAVE_DISKARBITRATION_DISKARBITRATION_H
+#ifdef __APPLE__
 
 typedef struct
 {
@@ -67,6 +65,7 @@ static void appeared_callback( DADiskRef disk, void *context )
     CFDictionaryRef dict = DADiskCopyDescription( disk );
     const void *ref;
     char device[64];
+    CFURLRef volume_url;
     char mount_point[PATH_MAX];
     size_t model_len = 0;
     GUID guid, *guid_ptr = NULL;
@@ -89,10 +88,25 @@ static void appeared_callback( DADiskRef disk, void *context )
     strcpy( device, "/dev/r" );
     CFStringGetCString( ref, device + 6, sizeof(device) - 6, kCFStringEncodingASCII );
 
-    if ((ref = CFDictionaryGetValue( dict, CFSTR("DAVolumePath") )))
-        CFURLGetFileSystemRepresentation( ref, true, (UInt8 *)mount_point, sizeof(mount_point) );
+    if ((volume_url = CFDictionaryGetValue( dict, CFSTR("DAVolumePath") )))
+        CFURLGetFileSystemRepresentation( volume_url, true, (UInt8 *)mount_point, sizeof(mount_point) );
     else
-        mount_point[0] = 0;
+    {
+        TRACE( "ignoring volume %s, uuid %s: no macOS volume path\n", device, wine_dbgstr_guid(guid_ptr) );
+        goto done;
+    }
+
+    if (CFURLCopyResourcePropertyForKey( volume_url, kCFURLVolumeIsBrowsableKey, &ref, NULL ))
+    {
+        Boolean is_browsable = CFBooleanGetValue( ref );
+        CFRelease( ref );
+
+        if (!is_browsable)
+        {
+            TRACE( "ignoring volume %s, uuid %s: not browsable\n", device, wine_dbgstr_guid(guid_ptr) );
+            goto done;
+        }
+    }
 
     if ((ref = CFDictionaryGetValue( dict, CFSTR("DAMediaKind") )))
     {
@@ -166,9 +180,9 @@ static void appeared_callback( DADiskRef disk, void *context )
     }
 
     if (removable)
-        queue_device_op( ADD_DOS_DEVICE, device, device, mount_point, type, guid_ptr, NULL, &scsi_info );
+        queue_device_op( ADD_DOS_DEVICE, device, device, mount_point, type, guid_ptr, NULL, NULL, &scsi_info );
     else
-        if (guid_ptr) queue_device_op( ADD_VOLUME, device, device, mount_point, DEVICE_HARDDISK_VOL, guid_ptr, NULL, &scsi_info );
+        if (guid_ptr) queue_device_op( ADD_VOLUME, device, device, mount_point, DEVICE_HARDDISK_VOL, guid_ptr, NULL, NULL, &scsi_info );
 
 done:
     CFRelease( dict );
@@ -194,7 +208,7 @@ static void disappeared_callback( DADiskRef disk, void *context )
 
     TRACE( "got unmount notification for '%s'\n", device );
 
-    queue_device_op( REMOVE_DEVICE, device, NULL, NULL, 0, NULL, NULL, NULL );
+    queue_device_op( REMOVE_DEVICE, device, NULL, NULL, 0, NULL, NULL, NULL, NULL );
 
 done:
     CFRelease( dict );
@@ -218,18 +232,18 @@ void run_diskarbitration_loop(void)
     CFRelease( session );
 }
 
-#else  /*  HAVE_DISKARBITRATION_DISKARBITRATION_H */
+#else  /* __APPLE__ */
 
 void run_diskarbitration_loop(void)
 {
     TRACE( "Skipping, Disk Arbitration support not compiled in\n" );
 }
 
-#endif  /* HAVE_DISKARBITRATION_DISKARBITRATION_H */
+#endif  /* __APPLE__ */
 
-#if defined(HAVE_SYSTEMCONFIGURATION_SCDYNAMICSTORECOPYDHCPINFO_H) && defined(HAVE_SYSTEMCONFIGURATION_SCNETWORKCONFIGURATION_H)
+#if defined(__APPLE__)
 
-static UInt8 map_option( ULONG option )
+static UInt8 map_option( unsigned int option )
 {
     switch (option)
     {
@@ -293,18 +307,19 @@ NTSTATUS dhcp_request( void *args )
 
     params->req->offset = 0;
     params->req->size   = 0;
+    *params->ret_size = 0;
 
     if (!service_id) return 0;
     if (!(dict = SCDynamicStoreCopyDHCPInfo( NULL, service_id )))
     {
         CFRelease( service_id );
-        return 0;
+        return STATUS_SUCCESS;
     }
     CFRelease( service_id );
     if (!(value = DHCPInfoGetOptionData( dict, map_option(params->req->id) )))
     {
         CFRelease( dict );
-        return 0;
+        return STATUS_SUCCESS;
     }
     len = CFDataGetLength( value );
 
@@ -314,7 +329,7 @@ NTSTATUS dhcp_request( void *args )
     case OPTION_ROUTER_ADDRESS:
     case OPTION_BROADCAST_ADDRESS:
     {
-        DWORD *ptr = (DWORD *)(params->buffer + params->offset);
+        unsigned int *ptr = (unsigned int *)(params->buffer + params->offset);
         if (len == sizeof(*ptr) && params->size >= sizeof(*ptr))
         {
             CFDataGetBytes( value, CFRangeMake(0, len), (UInt8 *)ptr );
@@ -341,7 +356,7 @@ NTSTATUS dhcp_request( void *args )
         break;
     }
     default:
-        FIXME( "option %u not supported\n", params->req->id );
+        FIXME( "option %u not supported\n", (unsigned int)params->req->id );
         break;
     }
 

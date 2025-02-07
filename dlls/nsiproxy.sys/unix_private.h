@@ -18,14 +18,20 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-NTSTATUS nsi_enumerate_all_ex( struct nsi_enumerate_all_ex *params ) DECLSPEC_HIDDEN;
-NTSTATUS nsi_get_all_parameters_ex( struct nsi_get_all_parameters_ex *params ) DECLSPEC_HIDDEN;
-NTSTATUS nsi_get_parameter_ex( struct nsi_get_parameter_ex *params ) DECLSPEC_HIDDEN;
+#ifdef WORDS_BIGENDIAN
+#define IPV4_ADDR(b1, b2, b3, b4) (((unsigned int)b1 << 24) | (b2 << 16) | (b3 << 8) | b4)
+#else
+#define IPV4_ADDR(b1, b2, b3, b4) (((unsigned int)b4 << 24) | (b3 << 16) | (b2 << 8) | b1)
+#endif
 
-static inline NTSTATUS nsi_enumerate_all( DWORD unk, DWORD unk2, const NPI_MODULEID *module, DWORD table,
-                                          void *key_data, DWORD key_size, void *rw_data, DWORD rw_size,
-                                          void *dynamic_data, DWORD dynamic_size, void *static_data, DWORD static_size,
-                                          DWORD *count )
+NTSTATUS nsi_enumerate_all_ex( struct nsi_enumerate_all_ex *params );
+NTSTATUS nsi_get_all_parameters_ex( struct nsi_get_all_parameters_ex *params );
+NTSTATUS nsi_get_parameter_ex( struct nsi_get_parameter_ex *params );
+
+static inline NTSTATUS nsi_enumerate_all( UINT unk, UINT unk2, const NPI_MODULEID *module, UINT table,
+                                          void *key_data, UINT key_size, void *rw_data, UINT rw_size,
+                                          void *dynamic_data, UINT dynamic_size, void *static_data, UINT static_size,
+                                          UINT *count )
 {
     struct nsi_enumerate_all_ex params;
     NTSTATUS status;
@@ -51,10 +57,10 @@ static inline NTSTATUS nsi_enumerate_all( DWORD unk, DWORD unk2, const NPI_MODUL
     return status;
 }
 
-BOOL convert_luid_to_unix_name( const NET_LUID *luid, const char **unix_name ) DECLSPEC_HIDDEN;
-BOOL convert_unix_name_to_luid( const char *unix_name, NET_LUID *luid ) DECLSPEC_HIDDEN;
+BOOL convert_luid_to_unix_name( const NET_LUID *luid, const char **unix_name );
+BOOL convert_unix_name_to_luid( const char *unix_name, NET_LUID *luid );
 
-static inline BOOL convert_luid_to_index( const NET_LUID *luid, DWORD *index )
+static inline BOOL convert_luid_to_index( const NET_LUID *luid, UINT *index )
 {
     struct nsi_get_parameter_ex params;
     params.unknown[0] = 0;
@@ -73,7 +79,7 @@ static inline BOOL convert_luid_to_index( const NET_LUID *luid, DWORD *index )
     return !nsi_get_parameter_ex( &params );
 }
 
-static inline BOOL convert_index_to_luid( DWORD index, NET_LUID *luid )
+static inline BOOL convert_index_to_luid( UINT index, NET_LUID *luid )
 {
     struct nsi_get_parameter_ex params;
     params.unknown[0] = 0;
@@ -95,33 +101,24 @@ static inline BOOL convert_index_to_luid( DWORD index, NET_LUID *luid )
 struct ipv6_addr_scope
 {
     IN6_ADDR addr;
-    DWORD scope;
+    UINT scope;
 };
 
-struct ipv6_addr_scope *get_ipv6_addr_scope_table( unsigned int *size ) DECLSPEC_HIDDEN;
-DWORD find_ipv6_addr_scope( const IN6_ADDR *addr, const struct ipv6_addr_scope *table, unsigned int size ) DECLSPEC_HIDDEN;
-
-struct pid_map
-{
-    unsigned int pid;
-    unsigned int unix_pid;
-};
-
-struct pid_map *get_pid_map( unsigned int *num_entries ) DECLSPEC_HIDDEN;
-unsigned int find_owning_pid( struct pid_map *map, unsigned int num_entries, UINT_PTR inode ) DECLSPEC_HIDDEN;
+struct ipv6_addr_scope *get_ipv6_addr_scope_table( unsigned int *size );
+UINT find_ipv6_addr_scope( const IN6_ADDR *addr, const struct ipv6_addr_scope *table, unsigned int size );
 
 struct module_table
 {
-    DWORD table;
-    DWORD sizes[4];
-    NTSTATUS (*enumerate_all)( void *key_data, DWORD key_size, void *rw_data, DWORD rw_size,
-                               void *dynamic_data, DWORD dynamic_size,
-                               void *static_data, DWORD static_size, DWORD_PTR *count );
-    NTSTATUS (*get_all_parameters)( const void *key, DWORD key_size, void *rw_data, DWORD rw_size,
-                                    void *dynamic_data, DWORD dynamic_size,
-                                    void *static_data, DWORD static_size );
-    NTSTATUS (*get_parameter)( const void *key, DWORD key_size, DWORD param_type,
-                               void *data, DWORD data_size, DWORD data_offset );
+    UINT table;
+    UINT sizes[4];
+    NTSTATUS (*enumerate_all)( void *key_data, UINT key_size, void *rw_data, UINT rw_size,
+                               void *dynamic_data, UINT dynamic_size,
+                               void *static_data, UINT static_size, UINT_PTR *count );
+    NTSTATUS (*get_all_parameters)( const void *key, UINT key_size, void *rw_data, UINT rw_size,
+                                    void *dynamic_data, UINT dynamic_size,
+                                    void *static_data, UINT static_size );
+    NTSTATUS (*get_parameter)( const void *key, UINT key_size, UINT param_type,
+                               void *data, UINT data_size, UINT data_offset );
 };
 
 struct module
@@ -130,11 +127,11 @@ struct module
     const struct module_table *tables;
 };
 
-extern const struct module ndis_module DECLSPEC_HIDDEN;
-extern const struct module ipv4_module DECLSPEC_HIDDEN;
-extern const struct module ipv6_module DECLSPEC_HIDDEN;
-extern const struct module tcp_module DECLSPEC_HIDDEN;
-extern const struct module udp_module DECLSPEC_HIDDEN;
+extern const struct module ndis_module;
+extern const struct module ipv4_module;
+extern const struct module ipv6_module;
+extern const struct module tcp_module;
+extern const struct module udp_module;
 
 static inline int ascii_strncasecmp( const char *s1, const char *s2, size_t n )
 {
@@ -157,7 +154,7 @@ static inline int ascii_strcasecmp( const char *s1, const char *s2 )
     return ascii_strncasecmp( s1, s2, -1 );
 }
 
-NTSTATUS icmp_cancel_listen( void *args ) DECLSPEC_HIDDEN;
-NTSTATUS icmp_close( void *args ) DECLSPEC_HIDDEN;
-NTSTATUS icmp_listen( void *args ) DECLSPEC_HIDDEN;
-NTSTATUS icmp_send_echo( void *args ) DECLSPEC_HIDDEN;
+NTSTATUS icmp_cancel_listen( void *args );
+NTSTATUS icmp_close( void *args );
+NTSTATUS icmp_listen( void *args );
+NTSTATUS icmp_send_echo( void *args );

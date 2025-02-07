@@ -19,7 +19,6 @@
  */
 
 #define COBJMACROS
-#define NONAMELESSUNION
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -166,7 +165,7 @@ static HRESULT WINAPI MimeInternat_GetCodePageCharset(IMimeInternational *iface,
     HRESULT hr;
     MIMECPINFO mlang_cp_info;
 
-    TRACE("(%p)->(%d, %d, %p)\n", iface, cpiCodePage, ctCsetType, phCharset);
+    TRACE("(%p)->(%ld, %d, %p)\n", iface, cpiCodePage, ctCsetType, phCharset);
 
     *phCharset = NULL;
 
@@ -315,7 +314,7 @@ static HRESULT WINAPI MimeInternat_CanConvertCodePages(IMimeInternational *iface
     HRESULT hr;
     IMultiLanguage *ml;
 
-    TRACE("(%p)->(%d, %d)\n", iface, cpiSource, cpiDest);
+    TRACE("(%p)->(%ld, %ld)\n", iface, cpiSource, cpiDest);
 
     /* Could call mlang.IsConvertINetStringAvailable() to avoid the COM overhead if need be. */
 
@@ -354,7 +353,7 @@ static HRESULT WINAPI MimeInternat_ConvertBuffer(IMimeInternational *iface, CODE
     HRESULT hr;
     IMultiLanguage *ml;
 
-    TRACE("(%p)->(%d, %d, %p, %p, %p)\n", iface, cpiSource, cpiDest, pIn, pOut, pcbRead);
+    TRACE("(%p)->(%ld, %ld, %p, %p, %p)\n", iface, cpiSource, cpiDest, pIn, pOut, pcbRead);
 
     *pcbRead = 0;
     pOut->cbSize = 0;
@@ -404,7 +403,7 @@ static HRESULT WINAPI MimeInternat_ConvertString(IMimeInternational *iface, CODE
     int src_len;
     IMultiLanguage *ml;
 
-    TRACE("(%p)->(%d, %d, %p %p)\n", iface, cpiSource, cpiDest, pIn, pOut);
+    TRACE("(%p)->(%ld, %ld, %p %p)\n", iface, cpiSource, cpiDest, pIn, pOut);
 
     switch(pIn->vt)
     {
@@ -527,7 +526,7 @@ HRESULT MimeInternational_Construct(IMimeInternational **internat)
     global_internat = HeapAlloc(GetProcessHeap(), 0, sizeof(*global_internat));
     global_internat->IMimeInternational_iface.lpVtbl = &mime_internat_vtbl;
     global_internat->refs = 0;
-    InitializeCriticalSection(&global_internat->cs);
+    InitializeCriticalSectionEx(&global_internat->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
     global_internat->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": global_internat.cs");
 
     list_init(&global_internat->charsets);

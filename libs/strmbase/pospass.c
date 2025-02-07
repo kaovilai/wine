@@ -296,7 +296,11 @@ static HRESULT WINAPI MediaSeekingPassThru_ConvertTimeFormat(IMediaSeeking * ifa
     struct strmbase_passthrough *This = impl_from_IMediaSeeking(iface);
     IMediaSeeking *seek;
     HRESULT hr;
-    TRACE("(%p/%p)->(%p,%s,%x%08x,%s)\n", iface, This, pTarget, debugstr_guid(pTargetFormat), (DWORD)(Source>>32), (DWORD)Source, debugstr_guid(pSourceFormat));
+
+    TRACE("iface %p, target %p, target_format %s, source %s, source_format %s.\n",
+            iface, pTarget, debugstr_guid(pTargetFormat),
+            wine_dbgstr_longlong(Source), debugstr_guid(pSourceFormat));
+
     hr = get_connected(This, &IID_IMediaSeeking, (LPVOID*)&seek);
     if (SUCCEEDED(hr)) {
         hr = IMediaSeeking_ConvertTimeFormat(seek, pTarget, pTargetFormat, Source, pSourceFormat);
@@ -312,7 +316,10 @@ static HRESULT WINAPI MediaSeekingPassThru_SetPositions(IMediaSeeking * iface, L
     struct strmbase_passthrough *This = impl_from_IMediaSeeking(iface);
     IMediaSeeking *seek;
     HRESULT hr;
-    TRACE("(%p/%p)->(%p,%x,%p,%x)\n", iface, This, pCurrent, dwCurrentFlags, pStop, dwStopFlags);
+
+    TRACE("iface %p, current %p, current_flags %#lx, stop %p, stop_flags %#lx.\n",
+            iface, pCurrent, dwCurrentFlags, pStop, dwStopFlags);
+
     hr = get_connected(This, &IID_IMediaSeeking, (LPVOID*)&seek);
     if (SUCCEEDED(hr)) {
         hr = IMediaSeeking_SetPositions(seek, pCurrent, dwCurrentFlags, pStop, dwStopFlags);
@@ -457,7 +464,7 @@ static HRESULT WINAPI MediaPositionPassThru_GetTypeInfoCount(IMediaPosition *ifa
 static HRESULT WINAPI MediaPositionPassThru_GetTypeInfo(IMediaPosition *iface, UINT index,
         LCID lcid, ITypeInfo **typeinfo)
 {
-    TRACE("iface %p, index %u, lcid %#x, typeinfo %p.\n", iface, index, lcid, typeinfo);
+    TRACE("iface %p, index %u, lcid %#lx, typeinfo %p.\n", iface, index, lcid, typeinfo);
     return strmbase_get_typeinfo(IMediaPosition_tid, typeinfo);
 }
 
@@ -467,7 +474,7 @@ static HRESULT WINAPI MediaPositionPassThru_GetIDsOfNames(IMediaPosition *iface,
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE("iface %p, iid %s, names %p, count %u, lcid %#x, ids %p.\n",
+    TRACE("iface %p, iid %s, names %p, count %u, lcid %#lx, ids %p.\n",
             iface, debugstr_guid(iid), names, count, lcid, ids);
 
     if (SUCCEEDED(hr = strmbase_get_typeinfo(IMediaPosition_tid, &typeinfo)))
@@ -484,7 +491,7 @@ static HRESULT WINAPI MediaPositionPassThru_Invoke(IMediaPosition *iface, DISPID
     ITypeInfo *typeinfo;
     HRESULT hr;
 
-    TRACE("iface %p, id %d, iid %s, lcid %#x, flags %#x, params %p, result %p, excepinfo %p, error_arg %p.\n",
+    TRACE("iface %p, id %ld, iid %s, lcid %#lx, flags %#x, params %p, result %p, excepinfo %p, error_arg %p.\n",
             iface, id, debugstr_guid(iid), lcid, flags, params, result, excepinfo, error_arg);
 
     if (SUCCEEDED(hr = strmbase_get_typeinfo(IMediaPosition_tid, &typeinfo)))
@@ -723,7 +730,8 @@ void strmbase_passthrough_init(struct strmbase_passthrough *passthrough, IUnknow
     passthrough->IMediaPosition_iface.lpVtbl = &IMediaPositionPassThru_Vtbl;
     passthrough->IMediaSeeking_iface.lpVtbl = &IMediaSeekingPassThru_Vtbl;
     passthrough->ISeekingPassThru_iface.lpVtbl = &ISeekingPassThru_Vtbl;
-    InitializeCriticalSection(&passthrough->time_cs);
+    if (!InitializeCriticalSectionEx(&passthrough->time_cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO))
+        InitializeCriticalSection(&passthrough->time_cs);
     passthrough->time_cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": strmbase_passthrough.time_cs" );
 }
 

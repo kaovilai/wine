@@ -271,13 +271,19 @@ static int parse_spec_arguments( ORDDEF *odp, DLLSPEC *spec, int optional )
             error( "Unknown argument type '%s'\n", token );
             return 0;
         }
-        if (is_win32) switch (arg)
+        switch (arg)
         {
         case ARG_WORD:
         case ARG_SWORD:
         case ARG_SEGPTR:
         case ARG_SEGSTR:
+            if (!is_win32) break;
             error( "Argument type '%s' only allowed for Win16\n", token );
+            return 0;
+        case ARG_FLOAT:
+        case ARG_DOUBLE:
+            if (!(odp->flags & FLAG_SYSCALL)) break;
+            error( "Argument type '%s' not allowed for syscall function\n", token );
             return 0;
         }
         odp->u.func.args[i] = arg;
@@ -309,22 +315,15 @@ static int parse_spec_arguments( ORDDEF *odp, DLLSPEC *spec, int optional )
             error( "A fastcall function must use the stdcall convention\n" );
             return 0;
         }
-        if (!i || (odp->u.func.args[0] != ARG_PTR && odp->u.func.args[0] != ARG_LONG))
-        {
-            error( "First argument of a fastcall function must be a pointer or integer\n" );
-            return 0;
-        }
-        if (i > 1 && odp->u.func.args[1] != ARG_PTR && odp->u.func.args[1] != ARG_LONG)
-        {
-            error( "Second argument of a fastcall function must be a pointer or integer\n" );
-            return 0;
-        }
+        if ((i && odp->u.func.args[0] != ARG_PTR && odp->u.func.args[0] != ARG_LONG) ||
+            (i > 1 && odp->u.func.args[1] != ARG_PTR && odp->u.func.args[1] != ARG_LONG))
+            odp->flags |= FLAG_NORELAY;  /* no relay debug possible for non-standard fastcall args */
     }
     if (odp->flags & FLAG_SYSCALL)
     {
-        if (odp->type != TYPE_STDCALL && odp->type != TYPE_CDECL)
+        if (odp->type != TYPE_STDCALL)
         {
-            error( "A syscall function must use either the stdcall or the cdecl convention\n" );
+            error( "A syscall function must use the stdcall convention\n" );
             return 0;
         }
     }
@@ -471,14 +470,13 @@ static int parse_spec_extern( ORDDEF *odp, DLLSPEC *spec )
  *
  * Parse the optional flags for an entry point in a .spec file.
  */
-static const char *parse_spec_flags( DLLSPEC *spec, ORDDEF *odp )
+static const char *parse_spec_flags( DLLSPEC *spec, ORDDEF *odp, const char *token )
 {
     unsigned int i, cpu_mask = 0;
-    const char *token;
 
     do
     {
-        if (!(token = GetToken(0))) break;
+        token++;
         if (!strncmp( token, "arch=", 5))
         {
             char *args = xstrdup( token + 5 );
@@ -541,6 +539,10 @@ static const char *parse_spec_flags( DLLSPEC *spec, ORDDEF *odp )
         token = GetToken(0);
     } while (token && *token == '-');
 
+    /* x86-64 implies arm64ec */
+    if (odp->flags & FLAG_CPU(CPU_x86_64)) odp->flags |= FLAG_CPU(CPU_ARM64EC);
+    if (cpu_mask & FLAG_CPU(CPU_x86_64)) cpu_mask |= FLAG_CPU(CPU_ARM64EC);
+
     if (cpu_mask) odp->flags |= FLAG_CPU_MASK & ~cpu_mask;
     return token;
 }
@@ -578,7 +580,7 @@ static int parse_spec_ordinal( int ordinal, DLLSPEC *spec )
     }
 
     if (!(token = GetToken(0))) goto error;
-    if (*token == '-' && !(token = parse_spec_flags( spec, odp ))) goto error;
+    if (*token == '-' && !(token = parse_spec_flags( spec, odp, token ))) goto error;
 
     if (ordinal == -1 && spec->type != SPEC_WIN32 && !(odp->flags & FLAG_EXPORT32))
     {
@@ -621,11 +623,10 @@ static int parse_spec_ordinal( int ordinal, DLLSPEC *spec )
         assert( 0 );
     }
 
-    if ((odp->flags & FLAG_CPU_MASK) && !(odp->flags & FLAG_CPU(target.cpu)))
+    if (data_only && !(odp->flags & FLAG_FORWARD))
     {
-        /* ignore this entry point */
-        spec->nb_entry_points--;
-        return 1;
+        error( "Only forwarded entry points are allowed in data-only mode\n" );
+        goto error;
     }
 
     if (ordinal != -1)
@@ -640,8 +641,6 @@ static int parse_spec_ordinal( int ordinal, DLLSPEC *spec )
             error( "Ordinal number %d too large\n", ordinal );
             goto error;
         }
-        if (ordinal > spec->limit) spec->limit = ordinal;
-        if (ordinal < spec->base) spec->base = ordinal;
         odp->ordinal = ordinal;
     }
 
@@ -697,6 +696,132 @@ error:
 }
 
 
+static unsigned int apiset_hash_len( const char *str )
+{
+    return strrchr( str, '-' ) - str;
+}
+
+static unsigned int apiset_hash( const char *str )
+{
+    unsigned int ret = 0, len = apiset_hash_len( str );
+    while (len--) ret = ret * apiset_hash_factor + *str++;
+    return ret;
+}
+
+static unsigned int apiset_add_str( struct apiset *apiset, const char *str, unsigned int len )
+{
+    char *ret;
+
+    if (!apiset->strings || !(ret = strstr( apiset->strings, str )))
+    {
+        if (apiset->str_pos + len >= apiset->str_size)
+        {
+            apiset->str_size = max( apiset->str_size * 2, 1024 );
+            apiset->strings = xrealloc( apiset->strings, apiset->str_size );
+        }
+        ret = apiset->strings + apiset->str_pos;
+        memcpy( ret, str, len );
+        ret[len] = 0;
+        apiset->str_pos += len;
+    }
+    return ret - apiset->strings;
+}
+
+static void add_apiset( struct apiset *apiset, const char *api )
+{
+    struct apiset_entry *entry;
+
+    if (apiset->count == apiset->size)
+    {
+        apiset->size = max( apiset->size * 2, 64 );
+        apiset->entries = xrealloc( apiset->entries, apiset->size * sizeof(*apiset->entries) );
+    }
+    entry = &apiset->entries[apiset->count++];
+    entry->name_len = strlen( api );
+    entry->name_off = apiset_add_str( apiset, api, entry->name_len );
+    entry->hash = apiset_hash( api );
+    entry->hash_len = apiset_hash_len( api );
+    entry->val_count = 0;
+}
+
+static void add_apiset_value( struct apiset *apiset, const char *value )
+{
+    struct apiset_entry *entry = &apiset->entries[apiset->count - 1];
+
+    if (entry->val_count < ARRAY_SIZE(entry->values) - 1)
+    {
+        struct apiset_value *val = &entry->values[entry->val_count++];
+        char *sep = strchr( value, ':' );
+
+        if (sep)
+        {
+            val->name_len = sep - value;
+            val->name_off = apiset_add_str( apiset, value, val->name_len );
+            val->val_len = strlen( sep + 1 );
+            val->val_off = apiset_add_str( apiset, sep + 1, val->val_len );
+        }
+        else
+        {
+            val->name_len = val->name_off = 0;
+            val->val_len = strlen( value );
+            val->val_off = apiset_add_str( apiset, value, val->val_len );
+        }
+    }
+    else error( "Too many values for api '%.*s'\n", entry->name_len, apiset->strings + entry->name_off );
+}
+
+/*******************************************************************
+ *         parse_spec_apiset
+ */
+static int parse_spec_apiset( DLLSPEC *spec )
+{
+    struct apiset_entry *entry;
+    const char *token;
+    unsigned int i, hash;
+
+    if (!data_only)
+    {
+        error( "Apiset definitions are only allowed in data-only mode\n" );
+        return 0;
+    }
+
+    if (!(token = GetToken(0))) return 0;
+
+    if (!strncmp( token, "api-", 4 ) && !strncmp( token, "ext-", 4 ))
+    {
+        error( "Unrecognized API set name '%s'\n", token );
+        return 0;
+    }
+
+    hash = apiset_hash( token );
+    for (i = 0, entry = spec->apiset.entries; i < spec->apiset.count; i++, entry++)
+    {
+        if (entry->name_len == strlen( token ) &&
+            !strncmp( spec->apiset.strings + entry->name_off, token, entry->name_len ))
+        {
+            error( "Duplicate API set '%s'\n", token );
+            return 0;
+        }
+        if (entry->hash == hash)
+        {
+            error( "Duplicate hash code '%.*s' and '%s'\n",
+                   entry->name_len, spec->apiset.strings + entry->name_off, token );
+            return 0;
+        }
+    }
+    add_apiset( &spec->apiset, token );
+
+    if (!(token = GetToken(0)) || strcmp( token, "=" ))
+    {
+        error( "Syntax error near '%s'\n", token );
+        return 0;
+    }
+
+    while ((token = GetToken(1))) add_apiset_value( &spec->apiset, token );
+    return 1;
+}
+
+
 static int name_compare( const void *ptr1, const void *ptr2 )
 {
     const ORDDEF *odp1 = *(const ORDDEF * const *)ptr1;
@@ -711,24 +836,24 @@ static int name_compare( const void *ptr1, const void *ptr2 )
  *
  * Build the name array and catch duplicates.
  */
-static void assign_names( DLLSPEC *spec )
+static void assign_names( struct exports *exports )
 {
     int i, j, nb_exp_names = 0;
     ORDDEF **all_names;
 
-    spec->nb_names = 0;
-    for (i = 0; i < spec->nb_entry_points; i++)
-        if (spec->entry_points[i].name) spec->nb_names++;
-        else if (spec->entry_points[i].export_name) nb_exp_names++;
+    exports->nb_names = 0;
+    for (i = 0; i < exports->nb_entry_points; i++)
+        if (exports->entry_points[i]->name) exports->nb_names++;
+        else if (exports->entry_points[i]->export_name) nb_exp_names++;
 
-    if (!spec->nb_names && !nb_exp_names) return;
+    if (!exports->nb_names && !nb_exp_names) return;
 
     /* check for duplicates */
 
-    all_names = xmalloc( (spec->nb_names + nb_exp_names) * sizeof(all_names[0]) );
-    for (i = j = 0; i < spec->nb_entry_points; i++)
-        if (spec->entry_points[i].name || spec->entry_points[i].export_name)
-            all_names[j++] = &spec->entry_points[i];
+    all_names = xmalloc( (exports->nb_names + nb_exp_names) * sizeof(all_names[0]) );
+    for (i = j = 0; i < exports->nb_entry_points; i++)
+        if (exports->entry_points[i]->name || exports->entry_points[i]->export_name)
+            all_names[j++] = exports->entry_points[i];
 
     qsort( all_names, j, sizeof(all_names[0]), name_compare );
 
@@ -747,15 +872,15 @@ static void assign_names( DLLSPEC *spec )
     }
     free( all_names );
 
-    if (spec->nb_names)
+    if (exports->nb_names)
     {
-        spec->names = xmalloc( spec->nb_names * sizeof(spec->names[0]) );
-        for (i = j = 0; i < spec->nb_entry_points; i++)
-            if (spec->entry_points[i].name) spec->names[j++] = &spec->entry_points[i];
+        exports->names = xmalloc( exports->nb_names * sizeof(exports->names[0]) );
+        for (i = j = 0; i < exports->nb_entry_points; i++)
+            if (exports->entry_points[i]->name) exports->names[j++] = exports->entry_points[i];
 
         /* sort the list of names */
-        qsort( spec->names, spec->nb_names, sizeof(spec->names[0]), name_compare );
-        for (i = 0; i < spec->nb_names; i++) spec->names[i]->hint = i;
+        qsort( exports->names, exports->nb_names, sizeof(exports->names[0]), name_compare );
+        for (i = 0; i < exports->nb_names; i++) exports->names[i]->hint = i;
     }
 }
 
@@ -764,57 +889,75 @@ static void assign_names( DLLSPEC *spec )
  *
  * Build the ordinal array.
  */
-static void assign_ordinals( DLLSPEC *spec )
+static void assign_ordinals( struct exports *exports )
 {
     int i, count, ordinal;
 
     /* start assigning from base, or from 1 if no ordinal defined yet */
 
-    spec->base = MAX_ORDINALS;
-    spec->limit = 0;
-    for (i = 0; i < spec->nb_entry_points; i++)
+    exports->base = MAX_ORDINALS;
+    exports->limit = 0;
+    for (i = 0; i < exports->nb_entry_points; i++)
     {
-        ordinal = spec->entry_points[i].ordinal;
+        ordinal = exports->entry_points[i]->ordinal;
         if (ordinal == -1) continue;
-        if (ordinal > spec->limit) spec->limit = ordinal;
-        if (ordinal < spec->base) spec->base = ordinal;
+        if (ordinal > exports->limit) exports->limit = ordinal;
+        if (ordinal < exports->base) exports->base = ordinal;
     }
-    if (spec->base == MAX_ORDINALS) spec->base = 1;
-    if (spec->limit < spec->base) spec->limit = spec->base;
+    if (exports->base == MAX_ORDINALS) exports->base = 1;
+    if (exports->limit < exports->base) exports->limit = exports->base;
 
-    count = max( spec->limit + 1, spec->base + spec->nb_entry_points );
-    spec->ordinals = xmalloc( count * sizeof(spec->ordinals[0]) );
-    memset( spec->ordinals, 0, count * sizeof(spec->ordinals[0]) );
+    count = max( exports->limit + 1, exports->base + exports->nb_entry_points );
+    exports->ordinals = xmalloc( count * sizeof(exports->ordinals[0]) );
+    memset( exports->ordinals, 0, count * sizeof(exports->ordinals[0]) );
 
     /* fill in all explicitly specified ordinals */
-    for (i = 0; i < spec->nb_entry_points; i++)
+    for (i = 0; i < exports->nb_entry_points; i++)
     {
-        ordinal = spec->entry_points[i].ordinal;
+        ordinal = exports->entry_points[i]->ordinal;
         if (ordinal == -1) continue;
-        if (spec->ordinals[ordinal])
+        if (exports->ordinals[ordinal])
         {
-            current_line = max( spec->entry_points[i].lineno, spec->ordinals[ordinal]->lineno );
+            current_line = max( exports->entry_points[i]->lineno, exports->ordinals[ordinal]->lineno );
             error( "ordinal %d redefined\n%s:%d: First defined here\n",
                    ordinal, input_file_name,
-                   min( spec->entry_points[i].lineno, spec->ordinals[ordinal]->lineno ) );
+                   min( exports->entry_points[i]->lineno, exports->ordinals[ordinal]->lineno ) );
         }
-        else spec->ordinals[ordinal] = &spec->entry_points[i];
+        else exports->ordinals[ordinal] = exports->entry_points[i];
     }
 
     /* now assign ordinals to the rest */
-    for (i = 0, ordinal = spec->base; i < spec->nb_entry_points; i++)
+    for (i = 0, ordinal = exports->base; i < exports->nb_entry_points; i++)
     {
-        if (spec->entry_points[i].ordinal != -1) continue;
-        while (spec->ordinals[ordinal]) ordinal++;
+        if (exports->entry_points[i]->ordinal != -1) continue;
+        while (exports->ordinals[ordinal]) ordinal++;
         if (ordinal >= MAX_ORDINALS)
         {
-            current_line = spec->entry_points[i].lineno;
+            current_line = exports->entry_points[i]->lineno;
             fatal_error( "Too many functions defined (max %d)\n", MAX_ORDINALS );
         }
-        spec->entry_points[i].ordinal = ordinal;
-        spec->ordinals[ordinal] = &spec->entry_points[i];
+        exports->entry_points[i]->ordinal = ordinal;
+        exports->ordinals[ordinal] = exports->entry_points[i];
     }
-    if (ordinal > spec->limit) spec->limit = ordinal;
+    if (ordinal > exports->limit) exports->limit = ordinal;
+}
+
+
+static void assign_exports( DLLSPEC *spec, unsigned int cpu, struct exports *exports )
+{
+    unsigned int i;
+
+    exports->entry_points = xmalloc( spec->nb_entry_points * sizeof(*exports->entry_points) );
+    for (i = 0; i < spec->nb_entry_points; i++)
+    {
+        ORDDEF *entry = &spec->entry_points[i];
+        if ((entry->flags & FLAG_CPU_MASK) && !(entry->flags & FLAG_CPU(cpu)))
+            continue;
+        exports->entry_points[exports->nb_entry_points++] = entry;
+    }
+
+    assign_names( exports );
+    assign_ordinals( exports );
 }
 
 
@@ -855,9 +998,9 @@ void add_16bit_exports( DLLSPEC *spec32, DLLSPEC *spec16 )
 
     /* add the explicit win32 exports */
 
-    for (i = 1; i <= spec16->limit; i++)
+    for (i = 1; i <= spec16->exports.limit; i++)
     {
-        ORDDEF *odp16 = spec16->ordinals[i];
+        ORDDEF *odp16 = spec16->exports.ordinals[i];
 
         if (!odp16 || !odp16->name) continue;
         if (!(odp16->flags & FLAG_EXPORT32)) continue;
@@ -874,8 +1017,7 @@ void add_16bit_exports( DLLSPEC *spec32, DLLSPEC *spec16 )
                                              odp->u.func.nb_args * sizeof(odp->u.func.args[0]) );
     }
 
-    assign_names( spec32 );
-    assign_ordinals( spec32 );
+    assign_exports( spec32, target.cpu, &spec32->exports );
 }
 
 
@@ -892,7 +1034,7 @@ int parse_spec_file( FILE *file, DLLSPEC *spec )
     current_line = 0;
 
     comment_chars = "#;";
-    separator_chars = "()-";
+    separator_chars = "()";
 
     while (get_next_line())
     {
@@ -905,6 +1047,10 @@ int parse_spec_file( FILE *file, DLLSPEC *spec )
         {
             if (!parse_spec_ordinal( atoi(token), spec )) continue;
         }
+        else if (strcmp(token, "apiset") == 0)
+        {
+            if (!parse_spec_apiset( spec )) continue;
+        }
         else
         {
             error( "Expected ordinal declaration, got '%s'\n", token );
@@ -914,8 +1060,8 @@ int parse_spec_file( FILE *file, DLLSPEC *spec )
     }
 
     current_line = 0;  /* no longer parsing the input file */
-    assign_names( spec );
-    assign_ordinals( spec );
+    assign_exports( spec, target.cpu, &spec->exports );
+    if (native_arch != -1) assign_exports( spec, native_arch, &spec->native_exports );
     return !nb_errors;
 }
 
@@ -1157,7 +1303,6 @@ int parse_def_file( FILE *file, DLLSPEC *spec )
     }
 
     current_line = 0;  /* no longer parsing the input file */
-    assign_names( spec );
-    assign_ordinals( spec );
+    assign_exports( spec, target.cpu, &spec->exports );
     return !nb_errors;
 }

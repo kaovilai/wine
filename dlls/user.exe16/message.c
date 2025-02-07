@@ -22,6 +22,8 @@
 #include <stdarg.h>
 #include <string.h>
 
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
 #include "wine/winuser16.h"
 #include "wownt32.h"
 #include "winerror.h"
@@ -248,7 +250,7 @@ static LRESULT call_window_proc16( HWND16 hwnd, UINT16 msg, WPARAM16 wParam, LPA
 
     memset(&context, 0, sizeof(context));
     context.SegDs = context.SegEs = CURRENT_SS;
-    if (!(context.Eax = GetWindowWord( HWND_32(hwnd), GWLP_HINSTANCE ))) context.Eax = context.SegDs;
+    if (!(context.Eax = (WORD)GetWindowLongA( HWND_32(hwnd), GWLP_HINSTANCE ))) context.Eax = context.SegDs;
     context.SegCs = SELECTOROF(func);
     context.Eip   = OFFSETOF(func);
     context.Ebp   = CURRENT_SP + FIELD_OFFSET(STACK16FRAME, bp);
@@ -895,7 +897,7 @@ LRESULT WINPROC_CallProc16To32A( winproc_callback_t callback, HWND16 hwnd, UINT1
             case 1:
                 break; /* atom, nothing to do */
             case 3:
-                WARN("DDE_ACK: %lx both atom and handle... choosing handle\n", hi);
+                WARN("DDE_ACK: %Ix both atom and handle... choosing handle\n", hi);
                 /* fall through */
             case 2:
                 hi = convert_handle_16_to_32(hi, GMEM_DDESHARE);
@@ -945,15 +947,15 @@ LRESULT WINPROC_CallProc32ATo16( winproc_callback16_t callback, HWND hwnd, UINT 
             BOOL mdi_child = (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_MDICHILD);
 
             CREATESTRUCT32Ato16( cs32, &cs );
-            cs.lpszName  = MapLS( cs32->lpszName );
-            cs.lpszClass = MapLS( cs32->lpszClass );
+            cs.lpszName  = MapLS( (void *)cs32->lpszName );
+            cs.lpszClass = MapLS( (void *)cs32->lpszClass );
 
             if (mdi_child)
             {
                 MDICREATESTRUCTA *mdi_cs = cs32->lpCreateParams;
                 MDICREATESTRUCT32Ato16( mdi_cs, &mdi_cs16 );
-                mdi_cs16.szTitle = MapLS( mdi_cs->szTitle );
-                mdi_cs16.szClass = MapLS( mdi_cs->szClass );
+                mdi_cs16.szTitle = MapLS( (void *)mdi_cs->szTitle );
+                mdi_cs16.szClass = MapLS( (void *)mdi_cs->szClass );
                 cs.lpCreateParams = MapLS( &mdi_cs16 );
             }
             lParam = MapLS( &cs );
@@ -975,8 +977,8 @@ LRESULT WINPROC_CallProc32ATo16( winproc_callback16_t callback, HWND hwnd, UINT 
             MDICREATESTRUCT16 cs;
 
             MDICREATESTRUCT32Ato16( cs32, &cs );
-            cs.szTitle = MapLS( cs32->szTitle );
-            cs.szClass = MapLS( cs32->szClass );
+            cs.szTitle = MapLS( (void *)cs32->szTitle );
+            cs.szClass = MapLS( (void *)cs32->szClass );
             lParam = MapLS( &cs );
             ret = callback( HWND_16(hwnd), msg, wParam, lParam, result, arg );
             UnMapLS( lParam );
@@ -1278,7 +1280,7 @@ LRESULT WINPROC_CallProc32ATo16( winproc_callback16_t callback, HWND hwnd, UINT 
             case 1:
                 break; /* atom, nothing to do */
             case 3:
-                WARN("DDE_ACK: %lx both atom and handle... choosing handle\n", hi);
+                WARN("DDE_ACK: %Ix both atom and handle... choosing handle\n", hi);
                 /* fall through */
             case 2:
                 hi = convert_handle_32_to_16(hi, GMEM_DDESHARE);
@@ -1292,6 +1294,11 @@ LRESULT WINPROC_CallProc32ATo16( winproc_callback16_t callback, HWND hwnd, UINT 
         lParam = MAKELPARAM( 0, convert_handle_32_to_16( lParam, GMEM_DDESHARE ));
         ret = callback( HWND_16(hwnd), msg, wParam, lParam, result, arg );
         break; /* FIXME don't know how to free allocated memory (handle) !! */
+    case WM_TIMER:
+        if (wParam & SYSTEM_TIMER_FLAG)
+            msg = WM_SYSTIMER;
+        ret = callback( HWND_16(hwnd), msg, wParam, lParam, result, arg );
+        break;
     case SBM_SETRANGE:
         ret = callback( HWND_16(hwnd), SBM_SETRANGE16, 0, MAKELPARAM(wParam, lParam), result, arg );
         break;
@@ -1498,9 +1505,9 @@ LRESULT WINAPI SendMessage16( HWND16 hwnd16, UINT16 msg, WPARAM16 wparam, LPARAM
 
         if (!(winproc = (WNDPROC16)GetWindowLong16( hwnd16, GWLP_WNDPROC ))) return 0;
 
-        TRACE_(message)("(0x%04x) [%04x] wp=%04x lp=%08lx\n", hwnd16, msg, wparam, lparam );
+        TRACE_(message)("(0x%04x) [%04x] wp=%04x lp=%08Ix\n", hwnd16, msg, wparam, lparam );
         result = CallWindowProc16( winproc, hwnd16, msg, wparam, lparam );
-        TRACE_(message)("(0x%04x) [%04x] wp=%04x lp=%08lx returned %08lx\n",
+        TRACE_(message)("(0x%04x) [%04x] wp=%04x lp=%08Ix returned %08Ix\n",
                         hwnd16, msg, wparam, lparam, result );
     }
     else  /* map to 32-bit unicode for inter-thread/process message */
@@ -1725,9 +1732,9 @@ LONG WINAPI DispatchMessage16( const MSG16* msg )
         SetLastError( ERROR_INVALID_WINDOW_HANDLE );
         return 0;
     }
-    TRACE_(message)("(0x%04x) [%04x] wp=%04x lp=%08lx\n", msg->hwnd, msg->message, msg->wParam, msg->lParam );
+    TRACE_(message)("(0x%04x) [%04x] wp=%04x lp=%08Ix\n", msg->hwnd, msg->message, msg->wParam, msg->lParam );
     retval = CallWindowProc16( winproc, msg->hwnd, msg->message, msg->wParam, msg->lParam );
-    TRACE_(message)("(0x%04x) [%04x] wp=%04x lp=%08lx returned %08lx\n",
+    TRACE_(message)("(0x%04x) [%04x] wp=%04x lp=%08Ix returned %08Ix\n",
                     msg->hwnd, msg->message, msg->wParam, msg->lParam, retval );
     return retval;
 }
@@ -2564,20 +2571,6 @@ static LRESULT static_proc16( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
 
 
 /***********************************************************************
- *           wait_message16
- */
-static DWORD wait_message16( DWORD count, const HANDLE *handles, DWORD timeout, DWORD mask, DWORD flags )
-{
-    DWORD lock, ret;
-
-    ReleaseThunkLock( &lock );
-    ret = wow_handlers32.wait_message( count, handles, timeout, mask, flags );
-    RestoreThunkLock( lock );
-    return ret;
-}
-
-
-/***********************************************************************
  *           create_window16
  */
 HWND create_window16( CREATESTRUCTW *cs, LPCWSTR className, HINSTANCE instance, BOOL unicode )
@@ -2590,12 +2583,13 @@ HWND create_window16( CREATESTRUCTW *cs, LPCWSTR className, HINSTANCE instance, 
 }
 
 
-/***********************************************************************
- *           free_icon_param
- */
-static void free_icon_param( ULONG_PTR param )
+static NTSTATUS WINAPI thunk_lock_callback( void *args, ULONG size )
 {
-    GlobalFree16( LOWORD(param) );
+    const struct thunk_lock_params *params = args;
+    DWORD locks = params->locks;
+    if (params->restore) RestoreThunkLock( locks );
+    else ReleaseThunkLock( &locks );
+    return NtCallbackReturn( &locks, sizeof(locks), STATUS_SUCCESS );
 }
 
 
@@ -2610,12 +2604,12 @@ void register_wow_handlers(void)
         mdiclient_proc16,
         scrollbar_proc16,
         static_proc16,
-        wait_message16,
         create_window16,
         call_window_proc_Ato16,
         call_dialog_proc_Ato16,
-        free_icon_param
     };
+
+    NtUserEnableThunkLock( thunk_lock_callback );
 
     UserRegisterWowHandlers( &handlers16, &wow_handlers32 );
 }

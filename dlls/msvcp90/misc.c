@@ -22,15 +22,15 @@
 
 #include "msvcp90.h"
 
-#include "windef.h"
-#include "winbase.h"
-#include "winternl.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msvcp);
 
 #if _MSVCP_VER >= 110
 /* error strings generated with glibc strerror */
+#if _MSVCP_VER >= 140
+static const char str_SUCC[]            = "success";
+#endif
 static const char str_EPERM[]           = "operation not permitted";
 static const char str_ENOENT[]          = "no such file or directory";
 static const char str_ESRCH[]           = "no such process";
@@ -115,6 +115,9 @@ static const struct {
     const char *str;
 } syserror_map[] =
 {
+#if _MSVCP_VER >= 140
+    {0, str_SUCC},
+#endif
     {EPERM, str_EPERM},
     {ENOENT, str_ENOENT},
     {ESRCH, str_ESRCH},
@@ -194,9 +197,7 @@ static const struct {
     {ETXTBSY, str_ETXTBSY},
     {EWOULDBLOCK, str_EWOULDBLOCK},
 };
-#endif
 
-#if _MSVCP_VER >= 140
 static const struct {
     int winerr;
     int doserr;
@@ -263,7 +264,7 @@ DEFINE_THISCALL_WRAPPER(mutex_ctor, 4)
 mutex* __thiscall mutex_ctor(mutex *this)
 {
     CRITICAL_SECTION *cs = operator_new(sizeof(*cs));
-    InitializeCriticalSection(cs);
+    InitializeCriticalSectionEx(cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
     cs->DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": _Mutex critical section");
     this->mutex = cs;
     return this;
@@ -346,7 +347,7 @@ void __cdecl _Init_locks__Init_locks_ctor(_Init_locks *this)
     {
         for(i=0; i<_MAX_LOCK; i++)
         {
-            InitializeCriticalSection(&lockit_cs[i]);
+            InitializeCriticalSectionEx(&lockit_cs[i], 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
             lockit_cs[i].DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": _Lockit critical section");
         }
     }
@@ -706,24 +707,6 @@ unsigned int __cdecl _Random_device(void)
 #endif
 
 #if _MSVCP_VER >= 110
-#ifdef __ASM_USE_THISCALL_WRAPPER
-
-extern void *call_thiscall_func;
-__ASM_GLOBAL_FUNC(call_thiscall_func,
-        "popl %eax\n\t"
-        "popl %edx\n\t"
-        "popl %ecx\n\t"
-        "pushl %eax\n\t"
-        "jmp *%edx\n\t")
-
-#define call_func1(func,this) ((void* (WINAPI*)(void*,void*))&call_thiscall_func)(func,this)
-
-#else /* __i386__ */
-
-#define call_func1(func,this) func(this)
-
-#endif /* __i386__ */
-
 #define MTX_PLAIN 0x1
 #define MTX_TRY 0x2
 #define MTX_TIMED 0x4
@@ -732,7 +715,10 @@ __ASM_GLOBAL_FUNC(call_thiscall_func,
 typedef struct
 {
     DWORD flags;
-    critical_section cs;
+#if _MSVCP_VER >= 140
+    ULONG_PTR unknown;
+#endif
+    cs cs;
     DWORD thread_id;
     DWORD count;
 } *_Mtx_t;
@@ -753,7 +739,10 @@ void __cdecl _Mtx_init_in_situ(_Mtx_t mtx, int flags)
         FIXME("unknown flags ignored: %x\n", flags);
 
     mtx->flags = flags;
-    call_func1(critical_section_ctor, &mtx->cs);
+#if _MSVCP_VER >= 140
+    mtx->unknown = 0;
+#endif
+    cs_init(&mtx->cs);
     mtx->thread_id = -1;
     mtx->count = 0;
 }
@@ -767,12 +756,12 @@ int __cdecl _Mtx_init(_Mtx_t *mtx, int flags)
 
 void __cdecl _Mtx_destroy_in_situ(_Mtx_t mtx)
 {
-    call_func1(critical_section_dtor, &mtx->cs);
+    cs_destroy(&mtx->cs);
 }
 
 void __cdecl _Mtx_destroy(_Mtx_arg_t mtx)
 {
-    call_func1(critical_section_dtor, &MTX_T_FROM_ARG(mtx)->cs);
+    cs_destroy(&MTX_T_FROM_ARG(mtx)->cs);
     operator_delete(MTX_T_FROM_ARG(mtx));
 }
 
@@ -784,7 +773,7 @@ int __cdecl _Mtx_current_owns(_Mtx_arg_t mtx)
 int __cdecl _Mtx_lock(_Mtx_arg_t mtx)
 {
     if(MTX_T_FROM_ARG(mtx)->thread_id != GetCurrentThreadId()) {
-        call_func1(critical_section_lock, &MTX_T_FROM_ARG(mtx)->cs);
+        cs_lock(&MTX_T_FROM_ARG(mtx)->cs);
         MTX_T_FROM_ARG(mtx)->thread_id = GetCurrentThreadId();
     }else if(!(MTX_T_FROM_ARG(mtx)->flags & MTX_RECURSIVE)
             && MTX_T_FROM_ARG(mtx)->flags != MTX_PLAIN) {
@@ -801,14 +790,14 @@ int __cdecl _Mtx_unlock(_Mtx_arg_t mtx)
         return 0;
 
     MTX_T_FROM_ARG(mtx)->thread_id = -1;
-    call_func1(critical_section_unlock, &MTX_T_FROM_ARG(mtx)->cs);
+    cs_unlock(&MTX_T_FROM_ARG(mtx)->cs);
     return 0;
 }
 
 int __cdecl _Mtx_trylock(_Mtx_arg_t mtx)
 {
     if(MTX_T_FROM_ARG(mtx)->thread_id != GetCurrentThreadId()) {
-        if(!call_func1(critical_section_trylock, &MTX_T_FROM_ARG(mtx)->cs))
+        if(!cs_trylock(&MTX_T_FROM_ARG(mtx)->cs))
             return MTX_LOCKED;
         MTX_T_FROM_ARG(mtx)->thread_id = GetCurrentThreadId();
     }else if(!(MTX_T_FROM_ARG(mtx)->flags & MTX_RECURSIVE)
@@ -820,27 +809,33 @@ int __cdecl _Mtx_trylock(_Mtx_arg_t mtx)
     return 0;
 }
 
-critical_section* __cdecl _Mtx_getconcrtcs(_Mtx_arg_t mtx)
+void* __cdecl _Mtx_getconcrtcs(_Mtx_arg_t mtx)
 {
     return &MTX_T_FROM_ARG(mtx)->cs;
 }
 
-static inline LONG interlocked_dec_if_nonzero( LONG *dest )
+void __cdecl _Mtx_clear_owner(_Mtx_arg_t mtx)
 {
-    LONG val, tmp;
-    for (val = *dest;; val = tmp)
-    {
-        if (!val || (tmp = InterlockedCompareExchange( dest, val - 1, val )) == val)
-            break;
-    }
-    return val;
+    _Mtx_t m = MTX_T_FROM_ARG(mtx);
+    m->thread_id = -1;
+    m->count--;
+}
+
+void __cdecl _Mtx_reset_owner(_Mtx_arg_t mtx)
+{
+    _Mtx_t m = MTX_T_FROM_ARG(mtx);
+    m->thread_id = GetCurrentThreadId();
+    m->count++;
 }
 
 #define CND_TIMEDOUT 2
 
 typedef struct
 {
-    CONDITION_VARIABLE cv;
+#if _MSVCP_VER >= 140
+    ULONG_PTR unknown;
+#endif
+    cv cv;
 } *_Cnd_t;
 
 #if _MSVCP_VER >= 140
@@ -853,19 +848,12 @@ typedef _Cnd_t *_Cnd_arg_t;
 #define CND_T_TO_ARG(c)     (&(c))
 #endif
 
-static HANDLE keyed_event;
-
 void __cdecl _Cnd_init_in_situ(_Cnd_t cnd)
 {
-    InitializeConditionVariable(&cnd->cv);
-
-    if(!keyed_event) {
-        HANDLE event;
-
-        NtCreateKeyedEvent(&event, GENERIC_READ|GENERIC_WRITE, NULL, 0);
-        if(InterlockedCompareExchangePointer(&keyed_event, event, NULL) != NULL)
-            NtClose(event);
-    }
+#if _MSVCP_VER >= 140
+    cnd->unknown = 0;
+#endif
+    cv_init(&cnd->cv);
 }
 
 int __cdecl _Cnd_init(_Cnd_t *cnd)
@@ -877,64 +865,50 @@ int __cdecl _Cnd_init(_Cnd_t *cnd)
 
 int __cdecl _Cnd_wait(_Cnd_arg_t cnd, _Mtx_arg_t mtx)
 {
-    CONDITION_VARIABLE *cv = &CND_T_FROM_ARG(cnd)->cv;
+    cv *cv = &CND_T_FROM_ARG(cnd)->cv;
+    _Mtx_t m = MTX_T_FROM_ARG(mtx);
 
-    InterlockedExchangeAdd( (LONG *)&cv->Ptr, 1 );
-    _Mtx_unlock(mtx);
-
-    NtWaitForKeyedEvent(keyed_event, &cv->Ptr, FALSE, NULL);
-
-    _Mtx_lock(mtx);
+    _Mtx_clear_owner(mtx);
+    cv_wait(cv, &m->cs);
+    _Mtx_reset_owner(mtx);
     return 0;
 }
 
 int __cdecl _Cnd_timedwait(_Cnd_arg_t cnd, _Mtx_arg_t mtx, const xtime *xt)
 {
-    CONDITION_VARIABLE *cv = &CND_T_FROM_ARG(cnd)->cv;
-    LARGE_INTEGER timeout;
-    NTSTATUS status;
+    cv *cv = &CND_T_FROM_ARG(cnd)->cv;
+    _Mtx_t m = MTX_T_FROM_ARG(mtx);
+    bool r;
 
-    InterlockedExchangeAdd( (LONG *)&cv->Ptr, 1 );
-    _Mtx_unlock(mtx);
-
-    timeout.QuadPart = (ULONGLONG)(ULONG)_Xtime_diff_to_millis(xt) * -10000;
-    status = NtWaitForKeyedEvent(keyed_event, &cv->Ptr, FALSE, &timeout);
-    if (status)
-    {
-        if (!interlocked_dec_if_nonzero( (LONG *)&cv->Ptr ))
-            status = NtWaitForKeyedEvent( keyed_event, &cv->Ptr, FALSE, NULL );
-    }
-
-    _Mtx_lock(mtx);
-    return status ? CND_TIMEDOUT : 0;
+    _Mtx_clear_owner(mtx);
+    r = cv_wait_for(cv, &m->cs, _Xtime_diff_to_millis(xt));
+    _Mtx_reset_owner(mtx);
+    return r ? 0 : CND_TIMEDOUT;
 }
 
 int __cdecl _Cnd_broadcast(_Cnd_arg_t cnd)
 {
-    CONDITION_VARIABLE *cv = &CND_T_FROM_ARG(cnd)->cv;
-    LONG val = InterlockedExchange( (LONG *)&cv->Ptr, 0 );
-    while (val-- > 0)
-        NtReleaseKeyedEvent( keyed_event, &cv->Ptr, FALSE, NULL );
+    cv_notify_all(&CND_T_FROM_ARG(cnd)->cv);
     return 0;
 }
 
 int __cdecl _Cnd_signal(_Cnd_arg_t cnd)
 {
-    CONDITION_VARIABLE *cv = &CND_T_FROM_ARG(cnd)->cv;
-    if (interlocked_dec_if_nonzero( (LONG *)&cv->Ptr ))
-        NtReleaseKeyedEvent( keyed_event, &cv->Ptr, FALSE, NULL );
+    cv_notify_one(&CND_T_FROM_ARG(cnd)->cv);
     return 0;
 }
 
 void __cdecl _Cnd_destroy_in_situ(_Cnd_t cnd)
 {
     _Cnd_broadcast(CND_T_TO_ARG(cnd));
+    cv_destroy(&cnd->cv);
 }
 
 void __cdecl _Cnd_destroy(_Cnd_arg_t cnd)
 {
     if(cnd) {
         _Cnd_broadcast(cnd);
+        cv_destroy(&CND_T_FROM_ARG(cnd)->cv);
         operator_delete(CND_T_FROM_ARG(cnd));
     }
 }
@@ -1039,11 +1013,7 @@ void __cdecl _Cnd_do_broadcast_at_thread_exit(void)
 
 #endif
 
-#if _MSVCP_VER == 100
-typedef struct {
-    const vtable_ptr *vtable;
-} error_category;
-
+#if _MSVCP_VER >= 100
 typedef struct {
     error_category base;
     const char *type;
@@ -1051,14 +1021,22 @@ typedef struct {
 static custom_category iostream_category;
 
 DEFINE_RTTI_DATA0(error_category, 0, ".?AVerror_category@std@@")
+DEFINE_RTTI_DATA1(generic_category, 0, &error_category_rtti_base_descriptor, ".?AV_Generic_error_category@std@@")
+#if _MSVCP_VER == 100
 DEFINE_RTTI_DATA1(iostream_category, 0, &error_category_rtti_base_descriptor, ".?AV_Iostream_error_category@std@@")
+#else
+DEFINE_RTTI_DATA2(iostream_category, 0, &generic_category_rtti_base_descriptor,
+        &error_category_rtti_base_descriptor, ".?AV_Iostream_error_category@std@@")
+#endif
 
 extern const vtable_ptr iostream_category_vtable;
 
 static void iostream_category_ctor(custom_category *this)
 {
     this->base.vtable = &iostream_category_vtable;
+#if _MSVCP_VER == 100
     this->type = "iostream";
+#endif
 }
 
 DEFINE_THISCALL_WRAPPER(custom_category_vector_dtor, 8)
@@ -1079,19 +1057,6 @@ custom_category* __thiscall custom_category_vector_dtor(custom_category *this, u
     return this;
 }
 
-DEFINE_THISCALL_WRAPPER(custom_category_name, 4)
-const char* __thiscall custom_category_name(const custom_category *this)
-{
-    return this->type;
-}
-
-DEFINE_THISCALL_WRAPPER(custom_category_message, 12)
-basic_string_char* __thiscall custom_category_message(const custom_category *this,
-        basic_string_char *ret, int err)
-{
-    return MSVCP_basic_string_char_ctor_cstr(ret, strerror(err));
-}
-
 DEFINE_THISCALL_WRAPPER(custom_category_default_error_condition, 12)
 /*error_condition*/void* __thiscall custom_category_default_error_condition(
         custom_category *this, /*error_condition*/void *ret, int code)
@@ -1110,10 +1075,27 @@ bool __thiscall custom_category_equivalent(const custom_category *this,
 
 DEFINE_THISCALL_WRAPPER(custom_category_equivalent_code, 12)
 bool __thiscall custom_category_equivalent_code(custom_category *this,
-        const /*error_code*/void *code, int condition)
+        const error_code *code, int condition)
 {
     FIXME("(%p %p %x) stub\n", this, code, condition);
     return FALSE;
+}
+
+DEFINE_THISCALL_WRAPPER(custom_category_message, 12)
+basic_string_char* __thiscall custom_category_message(const custom_category *this,
+        basic_string_char *ret, int err)
+{
+    return MSVCP_basic_string_char_ctor_cstr(ret, strerror(err));
+}
+
+DEFINE_THISCALL_WRAPPER(iostream_category_name, 4)
+const char* __thiscall iostream_category_name(const custom_category *this)
+{
+#if _MSVCP_VER == 100
+    return this->type;
+#else
+    return "iostream";
+#endif
 }
 
 DEFINE_THISCALL_WRAPPER(iostream_category_message, 12)
@@ -1131,7 +1113,9 @@ const error_category* __cdecl std_iostream_category(void)
     TRACE("()\n");
     return &iostream_category.base;
 }
+#endif
 
+#if _MSVCP_VER == 100 || _MSVCP_VER >= 140
 static custom_category system_category;
 DEFINE_RTTI_DATA1(system_category, 0, &error_category_rtti_base_descriptor, ".?AV_System_error_category@std@@")
 
@@ -1140,7 +1124,32 @@ extern const vtable_ptr system_category_vtable;
 static void system_category_ctor(custom_category *this)
 {
     this->base.vtable = &system_category_vtable;
+#if _MSVCP_VER == 100
     this->type = "system";
+#endif
+}
+
+DEFINE_THISCALL_WRAPPER(system_category_name, 4)
+const char* __thiscall system_category_name(const custom_category *this)
+{
+#if _MSVCP_VER == 100
+    return this->type;
+#else
+    return "system";
+#endif
+}
+
+DEFINE_THISCALL_WRAPPER(system_category_message, 12)
+basic_string_char* __thiscall system_category_message(const custom_category *this,
+        basic_string_char *ret, int err)
+{
+#if _MSVCP_VER > 100
+    const char *msg = _Winerror_map_str(err);
+    if (!msg) return MSVCP_basic_string_char_ctor_cstr(ret, "unknown error");
+    return MSVCP_basic_string_char_ctor_cstr(ret, msg);
+#else
+    return custom_category_message(this, ret, err);
+#endif
 }
 
 /* ?system_category@std@@YAABVerror_category@1@XZ */
@@ -1150,16 +1159,29 @@ const error_category* __cdecl std_system_category(void)
     TRACE("()\n");
     return &system_category.base;
 }
+#endif
 
+#if _MSVCP_VER >= 100
 static custom_category generic_category;
-DEFINE_RTTI_DATA1(generic_category, 0, &error_category_rtti_base_descriptor, ".?AV_Generic_error_category@std@@")
 
 extern const vtable_ptr generic_category_vtable;
 
 static void generic_category_ctor(custom_category *this)
 {
     this->base.vtable = &generic_category_vtable;
+#if _MSVCP_VER == 100
     this->type = "generic";
+#endif
+}
+
+DEFINE_THISCALL_WRAPPER(generic_category_name, 4)
+const char* __thiscall generic_category_name(const custom_category *this)
+{
+#if _MSVCP_VER == 100
+    return this->type;
+#else
+    return "generic";
+#endif
 }
 
 /* ?generic_category@std@@YAABVerror_category@1@XZ */
@@ -1224,13 +1246,13 @@ typedef int (__cdecl *_Thrd_start_t)(void*);
 
 int __cdecl _Thrd_equal(_Thrd_t a, _Thrd_t b)
 {
-    TRACE("(%p %u %p %u)\n", a.hnd, a.id, b.hnd, b.id);
+    TRACE("(%p %lu %p %lu)\n", a.hnd, a.id, b.hnd, b.id);
     return a.id == b.id;
 }
 
 int __cdecl _Thrd_lt(_Thrd_t a, _Thrd_t b)
 {
-    TRACE("(%p %u %p %u)\n", a.hnd, a.id, b.hnd, b.id);
+    TRACE("(%p %lu %p %lu)\n", a.hnd, a.id, b.hnd, b.id);
     return a.id < b.id;
 }
 
@@ -1258,7 +1280,7 @@ static _Thrd_t thread_current(void)
     }
     ret.id  = GetCurrentThreadId();
 
-    TRACE("(%p %u)\n", ret.hnd, ret.id);
+    TRACE("(%p %lu)\n", ret.hnd, ret.id);
     return ret;
 }
 
@@ -1284,7 +1306,7 @@ ULONGLONG __cdecl _Thrd_current(void)
 
 int __cdecl _Thrd_join(_Thrd_t thr, int *code)
 {
-    TRACE("(%p %u %p)\n", thr.hnd, thr.id, code);
+    TRACE("(%p %lu %p)\n", thr.hnd, thr.id, code);
     if (WaitForSingleObject(thr.hnd, INFINITE))
         return _THRD_ERROR;
 
@@ -1469,7 +1491,7 @@ void __thiscall _Pad__Release(_Pad *this)
 BOOL CDECL MSVCP__crtInitializeCriticalSectionEx(
         CRITICAL_SECTION *cs, DWORD spin_count, DWORD flags)
 {
-    TRACE("(%p %x %x)\n", cs, spin_count, flags);
+    TRACE("(%p %lx %lx)\n", cs, spin_count, flags);
     return InitializeCriticalSectionEx(cs, spin_count, flags);
 }
 
@@ -1479,7 +1501,7 @@ BOOL CDECL MSVCP__crtInitializeCriticalSectionEx(
 HANDLE CDECL MSVCP__crtCreateEventExW(
         SECURITY_ATTRIBUTES *attribs, LPCWSTR name, DWORD flags, DWORD access)
 {
-    TRACE("(%p %s 0x%08x 0x%08x)\n", attribs, debugstr_w(name), flags, access);
+    TRACE("(%p %s %#lx %#lx)\n", attribs, debugstr_w(name), flags, access);
     return CreateEventExW(attribs, name, flags, access);
 }
 
@@ -1514,7 +1536,7 @@ HANDLE CDECL MSVCP__crtCreateSemaphoreExW(
         SECURITY_ATTRIBUTES *attribs, LONG initial_count, LONG max_count, LPCWSTR name,
         DWORD flags, DWORD access)
 {
-    TRACE("(%p %d %d %s 0x%08x 0x%08x)\n", attribs, initial_count, max_count, debugstr_w(name),
+    TRACE("(%p %ld %ld %s %#lx %#lx)\n", attribs, initial_count, max_count, debugstr_w(name),
             flags, access);
     return CreateSemaphoreExW(attribs, initial_count, max_count, name, flags, access);
 }
@@ -1544,7 +1566,7 @@ VOID CDECL MSVCP__crtCloseThreadpoolTimer(TP_TIMER *timer)
 VOID CDECL MSVCP__crtSetThreadpoolTimer(TP_TIMER *timer,
         FILETIME *due_time, DWORD period, DWORD window_length)
 {
-    TRACE("(%p %p 0x%08x 0x%08x)\n", timer, due_time, period, window_length);
+    TRACE("(%p %p %#lx %#lx)\n", timer, due_time, period, window_length);
     return SetThreadpoolTimer(timer, due_time, period, window_length);
 }
 
@@ -1699,12 +1721,14 @@ const char* __cdecl _Syserror_map(int err)
 /* ?_Winerror_message@std@@YAKKPEADK@Z */
 ULONG __cdecl _Winerror_message(ULONG err, char *buf, ULONG size)
 {
-    TRACE("(%u %p %u)\n", err, buf, size);
+    TRACE("(%lu %p %lu)\n", err, buf, size);
 
     return FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
             NULL, err, 0, buf, size, NULL);
 }
+#endif
 
+#if _MSVCP_VER >= 110
 /* ?_Winerror_map@std@@YAHH@Z */
 int __cdecl _Winerror_map(int err)
 {
@@ -1724,33 +1748,40 @@ int __cdecl _Winerror_map(int err)
 
     return 0;
 }
+
+/* ?_Winerror_map@std@@YAPBDH@Z */
+/* ?_Winerror_map@std@@YAPEBDH@Z */
+const char *_Winerror_map_str(int err)
+{
+    return _Syserror_map(_Winerror_map(err));
+}
 #endif
 
 #if _MSVCP_VER >= 100
 __ASM_BLOCK_BEGIN(misc_vtables)
-#if _MSVCP_VER == 100
     __ASM_VTABLE(iostream_category,
             VTABLE_ADD_FUNC(custom_category_vector_dtor)
-            VTABLE_ADD_FUNC(custom_category_name)
+            VTABLE_ADD_FUNC(iostream_category_name)
             VTABLE_ADD_FUNC(iostream_category_message)
             VTABLE_ADD_FUNC(custom_category_default_error_condition)
             VTABLE_ADD_FUNC(custom_category_equivalent)
             VTABLE_ADD_FUNC(custom_category_equivalent_code));
+#if _MSVCP_VER == 100 || _MSVCP_VER >= 140
     __ASM_VTABLE(system_category,
             VTABLE_ADD_FUNC(custom_category_vector_dtor)
-            VTABLE_ADD_FUNC(custom_category_name)
-            VTABLE_ADD_FUNC(custom_category_message)
-            VTABLE_ADD_FUNC(custom_category_default_error_condition)
-            VTABLE_ADD_FUNC(custom_category_equivalent)
-            VTABLE_ADD_FUNC(custom_category_equivalent_code));
-    __ASM_VTABLE(generic_category,
-            VTABLE_ADD_FUNC(custom_category_vector_dtor)
-            VTABLE_ADD_FUNC(custom_category_name)
-            VTABLE_ADD_FUNC(custom_category_message)
+            VTABLE_ADD_FUNC(system_category_name)
+            VTABLE_ADD_FUNC(system_category_message)
             VTABLE_ADD_FUNC(custom_category_default_error_condition)
             VTABLE_ADD_FUNC(custom_category_equivalent)
             VTABLE_ADD_FUNC(custom_category_equivalent_code));
 #endif
+    __ASM_VTABLE(generic_category,
+            VTABLE_ADD_FUNC(custom_category_vector_dtor)
+            VTABLE_ADD_FUNC(generic_category_name)
+            VTABLE_ADD_FUNC(custom_category_message)
+            VTABLE_ADD_FUNC(custom_category_default_error_condition)
+            VTABLE_ADD_FUNC(custom_category_equivalent)
+            VTABLE_ADD_FUNC(custom_category_equivalent_code));
 #if _MSVCP_VER >= 110
     __ASM_VTABLE(_Pad,
             VTABLE_ADD_FUNC(_Pad__Go));
@@ -1759,30 +1790,33 @@ __ASM_BLOCK_END
 
 void init_misc(void *base)
 {
-#ifdef __x86_64__
-#if _MSVCP_VER == 100
+#ifdef RTTI_USE_RVA
+#if _MSVCP_VER >= 100
     init_error_category_rtti(base);
-    init_iostream_category_rtti(base);
-    init_system_category_rtti(base);
     init_generic_category_rtti(base);
+    init_iostream_category_rtti(base);
+#endif
+#if _MSVCP_VER == 100 || _MSVCP_VER >= 140
+    init_system_category_rtti(base);
 #endif
 #if _MSVCP_VER >= 110
     init__Pad_rtti(base);
 #endif
 #endif
 
-#if _MSVCP_VER == 100
+#if _MSVCP_VER >= 100
     iostream_category_ctor(&iostream_category);
-    system_category_ctor(&system_category);
     generic_category_ctor(&generic_category);
+#endif
+
+#if _MSVCP_VER == 100 || _MSVCP_VER >= 140
+    system_category_ctor(&system_category);
 #endif
 }
 
 void free_misc(void)
 {
 #if _MSVCP_VER >= 110
-    if(keyed_event)
-        NtClose(keyed_event);
     HeapFree(GetProcessHeap(), 0, broadcast_at_thread_exit.to_broadcast);
 #endif
 }

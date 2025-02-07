@@ -66,7 +66,7 @@ static ULONG WINAPI d3d_vertex_buffer7_AddRef(IDirect3DVertexBuffer7 *iface)
     struct d3d_vertex_buffer *buffer = impl_from_IDirect3DVertexBuffer7(iface);
     ULONG ref = InterlockedIncrement(&buffer->ref);
 
-    TRACE("%p increasing refcount to %u.\n", buffer, ref);
+    TRACE("%p increasing refcount to %lu.\n", buffer, ref);
 
     return ref;
 }
@@ -75,8 +75,9 @@ static ULONG WINAPI d3d_vertex_buffer7_Release(IDirect3DVertexBuffer7 *iface)
 {
     struct d3d_vertex_buffer *buffer = impl_from_IDirect3DVertexBuffer7(iface);
     ULONG ref = InterlockedDecrement(&buffer->ref);
+    struct d3d_device *device;
 
-    TRACE("%p decreasing refcount to %u.\n", buffer, ref);
+    TRACE("%p decreasing refcount to %lu.\n", buffer, ref);
 
     if (!ref)
     {
@@ -85,8 +86,12 @@ static ULONG WINAPI d3d_vertex_buffer7_Release(IDirect3DVertexBuffer7 *iface)
          * stream source in wined3d and they should get unset there before
          * they are destroyed. */
         wined3d_mutex_lock();
-        if (buffer->ddraw->stateblock_state->streams[0].buffer == buffer->wined3d_buffer)
-            wined3d_stateblock_set_stream_source(buffer->ddraw->state, 0, NULL, 0, 0);
+
+        LIST_FOR_EACH_ENTRY(device, &buffer->ddraw->d3ddevice_list, struct d3d_device, ddraw_entry)
+        {
+            if (device->stateblock_state->streams[0].buffer == buffer->wined3d_buffer)
+                wined3d_stateblock_set_stream_source(device->state, 0, NULL, 0, 0);
+        }
 
         wined3d_vertex_declaration_decref(buffer->wined3d_declaration);
         wined3d_buffer_decref(buffer->wined3d_buffer);
@@ -95,7 +100,7 @@ static ULONG WINAPI d3d_vertex_buffer7_Release(IDirect3DVertexBuffer7 *iface)
         if (buffer->version == 7)
             IDirectDraw7_Release(&buffer->ddraw->IDirectDraw7_iface);
 
-        heap_free(buffer);
+        free(buffer);
     }
 
     return ref;
@@ -111,11 +116,11 @@ static HRESULT d3d_vertex_buffer_create_wined3d_buffer(struct d3d_vertex_buffer 
     struct wined3d_buffer_desc desc;
 
     desc.byte_width = buffer->size;
-    desc.usage = WINED3DUSAGE_STATICDECL;
+    desc.usage = WINED3DUSAGE_STATICDECL | WINED3DUSAGE_VIDMEM_ACCOUNTING;
     if (dynamic)
         desc.usage |= WINED3DUSAGE_DYNAMIC;
     desc.bind_flags = WINED3D_BIND_VERTEX_BUFFER;
-    if (buffer->Caps & D3DVBCAPS_SYSTEMMEMORY)
+    if (buffer->sysmem)
         desc.access = WINED3D_RESOURCE_ACCESS_CPU | WINED3D_RESOURCE_ACCESS_MAP_R | WINED3D_RESOURCE_ACCESS_MAP_W;
     else
         desc.access = WINED3D_RESOURCE_ACCESS_GPU | WINED3D_RESOURCE_ACCESS_MAP_R | WINED3D_RESOURCE_ACCESS_MAP_W;
@@ -154,15 +159,19 @@ static HRESULT WINAPI d3d_vertex_buffer7_Lock(IDirect3DVertexBuffer7 *iface,
     struct wined3d_map_desc wined3d_map_desc;
     HRESULT hr;
 
-    TRACE("iface %p, flags %#x, data %p, data_size %p.\n", iface, flags, data, data_size);
+    TRACE("iface %p, flags %#lx, data %p, data_size %p.\n", iface, flags, data, data_size);
 
     if (buffer->version != 7)
         flags &= ~(DDLOCK_NOOVERWRITE | DDLOCK_DISCARDCONTENTS);
+
+    if (buffer->discarded)
+        flags &= ~DDLOCK_DISCARDCONTENTS;
 
     if (!(flags & DDLOCK_WAIT))
         flags |= DDLOCK_DONOTWAIT;
     if (flags & DDLOCK_DISCARDCONTENTS)
     {
+        buffer->discarded = true;
         if (!buffer->dynamic)
         {
             struct wined3d_buffer *new_buffer;
@@ -253,7 +262,7 @@ static HRESULT WINAPI d3d_vertex_buffer7_ProcessVertices(IDirect3DVertexBuffer7 
     const struct wined3d_stateblock_state *state;
     HRESULT hr;
 
-    TRACE("iface %p, vertex_op %#x, dst_idx %u, count %u, src_buffer %p, src_idx %u, device %p, flags %#x.\n",
+    TRACE("iface %p, vertex_op %#lx, dst_idx %lu, count %lu, src_buffer %p, src_idx %lu, device %p, flags %#lx.\n",
             iface, vertex_op, dst_idx, count, src_buffer, src_idx, device, flags);
 
     /* Vertex operations:
@@ -295,8 +304,7 @@ static HRESULT WINAPI d3d_vertex_buffer7_ProcessVertices(IDirect3DVertexBuffer7 
     wined3d_stateblock_set_stream_source(device_impl->state,
             0, src_buffer_impl->wined3d_buffer, 0, get_flexible_vertex_size(src_buffer_impl->fvf));
     wined3d_stateblock_set_vertex_declaration(device_impl->state, src_buffer_impl->wined3d_declaration);
-    wined3d_device_apply_stateblock(device_impl->wined3d_device, device_impl->state);
-    hr = wined3d_device_process_vertices(device_impl->wined3d_device, src_idx, dst_idx,
+    hr = wined3d_device_process_vertices(device_impl->wined3d_device, device_impl->state, src_idx, dst_idx,
             count, dst_buffer_impl->wined3d_buffer, NULL, flags, dst_buffer_impl->fvf);
 
     /* Restore the states if needed */
@@ -365,11 +373,11 @@ static HRESULT WINAPI d3d_vertex_buffer7_Optimize(IDirect3DVertexBuffer7 *iface,
     struct d3d_vertex_buffer *buffer = impl_from_IDirect3DVertexBuffer7(iface);
     static BOOL hide = FALSE;
 
-    TRACE("iface %p, device %p, flags %#x.\n", iface, device, flags);
+    TRACE("iface %p, device %p, flags %#lx.\n", iface, device, flags);
 
     if (!hide)
     {
-        FIXME("iface %p, device %p, flags %#x stub!\n", iface, device, flags);
+        FIXME("iface %p, device %p, flags %#lx stub!\n", iface, device, flags);
         hide = TRUE;
     }
 
@@ -409,7 +417,7 @@ static HRESULT WINAPI d3d_vertex_buffer7_ProcessVerticesStrided(IDirect3DVertexB
         DWORD vertex_op, DWORD dst_idx, DWORD count, D3DDRAWPRIMITIVESTRIDEDDATA *data,
         DWORD fvf, IDirect3DDevice7 *device, DWORD flags)
 {
-    FIXME("iface %p, vertex_op %#x, dst_idx %u, count %u, data %p, fvf %#x, device %p, flags %#x stub!\n",
+    FIXME("iface %p, vertex_op %#lx, dst_idx %lu, count %lu, data %p, fvf %#lx, device %p, flags %#lx stub!\n",
             iface, vertex_op, dst_idx, count, data, fvf, device, flags);
 
     return DD_OK;
@@ -439,12 +447,12 @@ HRESULT d3d_vertex_buffer_create(struct d3d_vertex_buffer **vertex_buf,
     HRESULT hr = D3D_OK;
 
     TRACE("Vertex buffer description:\n");
-    TRACE("    dwSize %u\n", desc->dwSize);
-    TRACE("    dwCaps %#x\n", desc->dwCaps);
-    TRACE("    FVF %#x\n", desc->dwFVF);
-    TRACE("    dwNumVertices %u\n", desc->dwNumVertices);
+    TRACE("    dwSize %lu\n", desc->dwSize);
+    TRACE("    dwCaps %#lx\n", desc->dwCaps);
+    TRACE("    FVF %#lx\n", desc->dwFVF);
+    TRACE("    dwNumVertices %lu\n", desc->dwNumVertices);
 
-    if (!(buffer = heap_alloc_zero(sizeof(*buffer))))
+    if (!(buffer = calloc(1, sizeof(*buffer))))
         return DDERR_OUTOFMEMORY;
 
     buffer->IDirect3DVertexBuffer7_iface.lpVtbl = &d3d_vertex_buffer7_vtbl;
@@ -457,11 +465,24 @@ HRESULT d3d_vertex_buffer_create(struct d3d_vertex_buffer **vertex_buf,
     buffer->fvf = desc->dwFVF;
     buffer->size = get_flexible_vertex_size(desc->dwFVF) * desc->dwNumVertices;
 
+    /* ddraw4 vertex buffers ignore DISCARD and NOOVERWRITE, even on
+     * pretransformed geometry, which means that a GPU-based buffer cannot
+     * perform well.
+     *
+     * While at least one contemporaneous card (Geforce 4) does seem to show a
+     * difference in its performance characteristics based on whether
+     * D3DVBCAPS_SYSTEMMEMORY is set, it also doesn't *improve* performance to
+     * use a non-SYSTEMMEMORY buffer with ddraw4. For wined3d it should always
+     * be better to use sysmem.
+     *
+     * This improves performance in Prince of Persia 3D. */
+    buffer->sysmem = ((buffer->Caps & D3DVBCAPS_SYSTEMMEMORY) || buffer->version < 7);
+
     wined3d_mutex_lock();
 
     if (FAILED(hr = d3d_vertex_buffer_create_wined3d_buffer(buffer, FALSE, &buffer->wined3d_buffer)))
     {
-        WARN("Failed to create wined3d vertex buffer, hr %#x.\n", hr);
+        WARN("Failed to create wined3d vertex buffer, hr %#lx.\n", hr);
         if (hr == WINED3DERR_INVALIDCALL)
             hr = DDERR_INVALIDPARAMS;
         goto end;
@@ -469,7 +490,7 @@ HRESULT d3d_vertex_buffer_create(struct d3d_vertex_buffer **vertex_buf,
 
     if (!(buffer->wined3d_declaration = ddraw_find_decl(ddraw, desc->dwFVF)))
     {
-        ERR("Failed to find vertex declaration for fvf %#x.\n", desc->dwFVF);
+        ERR("Failed to find vertex declaration for fvf %#lx.\n", desc->dwFVF);
         wined3d_buffer_decref(buffer->wined3d_buffer);
         hr = DDERR_INVALIDPARAMS;
         goto end;
@@ -481,7 +502,7 @@ end:
     if (hr == D3D_OK)
         *vertex_buf = buffer;
     else
-        heap_free(buffer);
+        free(buffer);
 
     return hr;
 }

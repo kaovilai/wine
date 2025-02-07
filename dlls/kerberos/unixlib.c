@@ -155,7 +155,7 @@ struct ticket_list
 {
     ULONG count;
     ULONG allocated;
-    KERB_TICKET_CACHE_INFO *tickets;
+    KERB_TICKET_CACHE_INFO_EX *tickets;
 };
 
 static void utf8_to_wstr( UNICODE_STRING *strW, const char *src )
@@ -168,6 +168,25 @@ static void utf8_to_wstr( UNICODE_STRING *strW, const char *src )
     strW->Length = dstlen - sizeof(WCHAR);
 }
 
+static void principal_to_name_and_realm(char *name_with_realm, char **name, char **realm)
+{
+    char* separator;
+
+    separator = strchr( name_with_realm, '@' );
+    if (!separator)
+    {
+        ERR( "got a name without a @\n" );
+        *name = name_with_realm;
+        *realm = *name + strlen(*name); /* point it to a null byte */
+        return;
+    }
+
+    *separator = '\0';
+    *name = name_with_realm;
+    *realm = separator + 1; /* character after a @ */
+    TRACE( "name: %s, realm: %s\n", debugstr_a(*name), debugstr_a(*realm) );
+}
+
 static NTSTATUS copy_tickets_from_cache( krb5_context ctx, krb5_ccache cache, struct ticket_list *list )
 {
     NTSTATUS status;
@@ -175,7 +194,8 @@ static NTSTATUS copy_tickets_from_cache( krb5_context ctx, krb5_ccache cache, st
     krb5_error_code err;
     krb5_creds creds;
     krb5_ticket *ticket;
-    char *name_with_realm, *name_without_realm, *realm_name;
+    char *server_name_with_realm, *server_name, *server_realm;
+    char *client_name_with_realm, *client_name, *client_realm;
 
     if ((err = p_krb5_cc_start_seq_get( ctx, cache, &cursor ))) return krb5_error_to_status( err );
     for (;;)
@@ -198,7 +218,7 @@ static NTSTATUS copy_tickets_from_cache( krb5_context ctx, krb5_ccache cache, st
         if (list->count == list->allocated)
         {
             ULONG new_allocated = max( 16, list->allocated * 2 );
-            KERB_TICKET_CACHE_INFO *new_tickets = realloc( list->tickets, sizeof(*new_tickets) * new_allocated );
+            KERB_TICKET_CACHE_INFO_EX *new_tickets = realloc( list->tickets, sizeof(*new_tickets) * new_allocated );
             if (!new_tickets)
             {
                 p_krb5_free_cred_contents( ctx, &creds );
@@ -209,35 +229,31 @@ static NTSTATUS copy_tickets_from_cache( krb5_context ctx, krb5_ccache cache, st
             list->allocated = new_allocated;
         }
 
-        if ((err = p_krb5_unparse_name_flags( ctx, creds.server, 0, &name_with_realm )))
+        if ((err = p_krb5_unparse_name_flags( ctx, creds.server, 0, &server_name_with_realm )))
         {
             p_krb5_free_cred_contents( ctx, &creds );
             status = krb5_error_to_status( err );
             break;
         }
-        TRACE( "name_with_realm: %s\n", debugstr_a(name_with_realm) );
+        TRACE( "server_name_with_realm: %s\n", debugstr_a(server_name_with_realm) );
 
-        if ((err = p_krb5_unparse_name_flags( ctx, creds.server, KRB5_PRINCIPAL_UNPARSE_NO_REALM,
-                                              &name_without_realm )))
+        principal_to_name_and_realm( server_name_with_realm, &server_name, &server_realm );
+
+        utf8_to_wstr( &list->tickets[list->count].ServerName, server_name );
+        utf8_to_wstr( &list->tickets[list->count].ServerRealm, server_realm );
+
+        if ((err = p_krb5_unparse_name_flags( ctx, creds.client, 0, &client_name_with_realm )))
         {
-            p_krb5_free_unparsed_name( ctx, name_with_realm );
             p_krb5_free_cred_contents( ctx, &creds );
             status = krb5_error_to_status( err );
             break;
         }
-        TRACE( "name_without_realm: %s\n", debugstr_a(name_without_realm) );
+        TRACE( "client_name_with_realm: %s\n", debugstr_a(client_name_with_realm) );
 
-        utf8_to_wstr( &list->tickets[list->count].ServerName, name_without_realm );
+        principal_to_name_and_realm( client_name_with_realm, &client_name, &client_realm );
 
-        if (!(realm_name = strchr( name_with_realm, '@' )))
-        {
-            ERR( "wrong name with realm %s\n", debugstr_a(name_with_realm) );
-            realm_name = name_with_realm;
-        }
-        else realm_name++;
-
-        /* realm_name - now contains only realm! */
-        utf8_to_wstr( &list->tickets[list->count].RealmName, realm_name );
+        utf8_to_wstr( &list->tickets[list->count].ClientName, client_name );
+        utf8_to_wstr( &list->tickets[list->count].ClientRealm, client_realm );
 
         if (!creds.times.starttime) creds.times.starttime = creds.times.authtime;
 
@@ -250,8 +266,8 @@ static NTSTATUS copy_tickets_from_cache( krb5_context ctx, krb5_ccache cache, st
         list->tickets[list->count].TicketFlags        = creds.ticket_flags;
 
         err = p_krb5_decode_ticket( &creds.ticket, &ticket );
-        p_krb5_free_unparsed_name( ctx, name_with_realm );
-        p_krb5_free_unparsed_name( ctx, name_without_realm );
+        p_krb5_free_unparsed_name( ctx, server_name_with_realm );
+        p_krb5_free_unparsed_name( ctx, client_name_with_realm );
         p_krb5_free_cred_contents( ctx, &creds );
         if (err)
         {
@@ -268,15 +284,17 @@ static NTSTATUS copy_tickets_from_cache( krb5_context ctx, krb5_ccache cache, st
     return status;
 }
 
-static NTSTATUS copy_tickets_to_client( struct ticket_list *list, KERB_QUERY_TKT_CACHE_RESPONSE *resp,
+static NTSTATUS copy_tickets_to_client( struct ticket_list *list, KERB_QUERY_TKT_CACHE_EX_RESPONSE *resp,
                                         ULONG *out_size )
 {
     char *client_str;
-    ULONG i, size = offsetof( KERB_QUERY_TKT_CACHE_RESPONSE, Tickets[list->count] );
+    ULONG i, size = offsetof( KERB_QUERY_TKT_CACHE_EX_RESPONSE, Tickets[list->count] );
 
     for (i = 0; i < list->count; i++)
     {
-        size += list->tickets[i].RealmName.MaximumLength;
+        size += list->tickets[i].ClientRealm.MaximumLength;
+        size += list->tickets[i].ClientName.MaximumLength;
+        size += list->tickets[i].ServerRealm.MaximumLength;
         size += list->tickets[i].ServerName.MaximumLength;
     }
     if (!resp || size > *out_size)
@@ -293,9 +311,15 @@ static NTSTATUS copy_tickets_to_client( struct ticket_list *list, KERB_QUERY_TKT
 
     for (i = 0; i < list->count; i++)
     {
-        resp->Tickets[i].RealmName.Buffer = (WCHAR *)client_str;
-        memcpy( client_str, list->tickets[i].RealmName.Buffer, list->tickets[i].RealmName.MaximumLength );
-        client_str += list->tickets[i].RealmName.MaximumLength;
+        resp->Tickets[i].ClientRealm.Buffer = (WCHAR *)client_str;
+        memcpy( client_str, list->tickets[i].ClientRealm.Buffer, list->tickets[i].ClientRealm.MaximumLength );
+        client_str += list->tickets[i].ClientRealm.MaximumLength;
+        resp->Tickets[i].ClientName.Buffer = (WCHAR *)client_str;
+        memcpy( client_str, list->tickets[i].ClientName.Buffer, list->tickets[i].ClientName.MaximumLength );
+        client_str += list->tickets[i].ClientName.MaximumLength;
+        resp->Tickets[i].ServerRealm.Buffer = (WCHAR *)client_str;
+        memcpy( client_str, list->tickets[i].ServerRealm.Buffer, list->tickets[i].ServerRealm.MaximumLength );
+        client_str += list->tickets[i].ServerRealm.MaximumLength;
         resp->Tickets[i].ServerName.Buffer = (WCHAR *)client_str;
         memcpy( client_str, list->tickets[i].ServerName.Buffer, list->tickets[i].ServerName.MaximumLength );
         client_str += list->tickets[i].ServerName.MaximumLength;
@@ -303,16 +327,13 @@ static NTSTATUS copy_tickets_to_client( struct ticket_list *list, KERB_QUERY_TKT
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS query_ticket_cache( void *args )
+static NTSTATUS kerberos_fill_ticket_list( struct ticket_list *list )
 {
-    struct query_ticket_cache_params *params = args;
-    NTSTATUS status;
+    NTSTATUS status = STATUS_SUCCESS;
     krb5_error_code err;
     krb5_context ctx;
     krb5_cccol_cursor cursor = NULL;
     krb5_ccache cache;
-    ULONG i;
-    struct ticket_list list = { 0 };
 
     if ((err = p_krb5_init_context( &ctx ))) return krb5_error_to_status( err );
     if ((err = p_krb5_cccol_cursor_new( ctx, &cursor )))
@@ -330,7 +351,7 @@ static NTSTATUS query_ticket_cache( void *args )
         }
         if (!cache) break;
 
-        status = copy_tickets_from_cache( ctx, cache, &list );
+        status = copy_tickets_from_cache( ctx, cache, list );
         p_krb5_cc_close( ctx, cache );
         if (status != STATUS_SUCCESS) goto done;
     }
@@ -339,13 +360,35 @@ done:
     if (cursor) p_krb5_cccol_cursor_free( ctx, &cursor );
     if (ctx) p_krb5_free_context( ctx );
 
+    return status;
+}
+
+static void free_tickets_in_list( struct ticket_list *list )
+{
+    ULONG i;
+
+    for (i = 0; i < list->count; i++)
+    {
+        free( list->tickets[i].ClientRealm.Buffer );
+        free( list->tickets[i].ClientName.Buffer );
+        free( list->tickets[i].ServerRealm.Buffer );
+        free( list->tickets[i].ServerName.Buffer );
+    }
+
+    free( list->tickets );
+}
+
+static NTSTATUS query_ticket_cache( void *args )
+{
+    struct query_ticket_cache_params *params = args;
+    struct ticket_list list = { 0 };
+    NTSTATUS status;
+
+    status = kerberos_fill_ticket_list( &list );
+
     if (status == STATUS_SUCCESS) status = copy_tickets_to_client( &list, params->resp, params->out_size );
 
-    for (i = 0; i < list.count; i++)
-    {
-        free( list.tickets[i].RealmName.Buffer );
-        free( list.tickets[i].ServerName.Buffer );
-    }
+    free_tickets_in_list( &list );
     return status;
 }
 
@@ -360,7 +403,9 @@ MAKE_FUNCPTR( gss_get_mic );
 MAKE_FUNCPTR( gss_import_name );
 MAKE_FUNCPTR( gss_init_sec_context );
 MAKE_FUNCPTR( gss_inquire_context );
+MAKE_FUNCPTR( gss_inquire_sec_context_by_oid );
 MAKE_FUNCPTR( gss_release_buffer );
+MAKE_FUNCPTR( gss_release_buffer_set );
 MAKE_FUNCPTR( gss_release_cred );
 MAKE_FUNCPTR( gss_release_iov_buffer );
 MAKE_FUNCPTR( gss_release_name );
@@ -386,21 +431,23 @@ static BOOL load_gssapi_krb5(void)
         goto fail; \
     }
 
-    LOAD_FUNCPTR( gss_accept_sec_context)
-    LOAD_FUNCPTR( gss_acquire_cred)
-    LOAD_FUNCPTR( gss_delete_sec_context)
-    LOAD_FUNCPTR( gss_display_status)
-    LOAD_FUNCPTR( gss_get_mic)
-    LOAD_FUNCPTR( gss_import_name)
-    LOAD_FUNCPTR( gss_init_sec_context)
-    LOAD_FUNCPTR( gss_inquire_context)
-    LOAD_FUNCPTR( gss_release_buffer)
-    LOAD_FUNCPTR( gss_release_cred)
-    LOAD_FUNCPTR( gss_release_iov_buffer)
-    LOAD_FUNCPTR( gss_release_name)
-    LOAD_FUNCPTR( gss_unwrap)
-    LOAD_FUNCPTR( gss_unwrap_iov)
-    LOAD_FUNCPTR( gss_verify_mic)
+    LOAD_FUNCPTR( gss_accept_sec_context )
+    LOAD_FUNCPTR( gss_acquire_cred )
+    LOAD_FUNCPTR( gss_delete_sec_context )
+    LOAD_FUNCPTR( gss_display_status )
+    LOAD_FUNCPTR( gss_get_mic )
+    LOAD_FUNCPTR( gss_import_name )
+    LOAD_FUNCPTR( gss_init_sec_context )
+    LOAD_FUNCPTR( gss_inquire_context )
+    LOAD_FUNCPTR( gss_inquire_sec_context_by_oid )
+    LOAD_FUNCPTR( gss_release_buffer )
+    LOAD_FUNCPTR( gss_release_buffer_set )
+    LOAD_FUNCPTR( gss_release_cred )
+    LOAD_FUNCPTR( gss_release_iov_buffer )
+    LOAD_FUNCPTR( gss_release_name )
+    LOAD_FUNCPTR( gss_unwrap )
+    LOAD_FUNCPTR( gss_unwrap_iov )
+    LOAD_FUNCPTR( gss_verify_mic )
     LOAD_FUNCPTR( gss_wrap )
     LOAD_FUNCPTR( gss_wrap_iov )
 #undef LOAD_FUNCPTR
@@ -417,17 +464,6 @@ static BOOL is_dce_style_context( gss_ctx_id_t ctx )
     OM_uint32 ret, minor_status, flags;
     ret = pgss_inquire_context( &minor_status, ctx, NULL, NULL, NULL, NULL, &flags, NULL, NULL );
     return (ret == GSS_S_COMPLETE && (flags & GSS_C_DCE_STYLE));
-}
-
-static int get_buffer_index( SecBufferDesc *desc, DWORD type )
-{
-    UINT i;
-    if (!desc) return -1;
-    for (i = 0; i < desc->cBuffers; i++)
-    {
-        if (desc->pBuffers[i].BufferType == type) return i;
-    }
-    return -1;
 }
 
 static NTSTATUS status_gss_to_sspi( OM_uint32 status )
@@ -486,24 +522,24 @@ static void trace_gss_status( OM_uint32 major_status, OM_uint32 minor_status )
     }
 }
 
-static inline gss_ctx_id_t ctxhandle_sspi_to_gss( LSA_SEC_HANDLE handle )
+static inline gss_ctx_id_t ctxhandle_sspi_to_gss( UINT64 handle )
 {
-    return (gss_ctx_id_t)handle;
+    return (gss_ctx_id_t)(ULONG_PTR)handle;
 }
 
-static inline gss_cred_id_t credhandle_sspi_to_gss( LSA_SEC_HANDLE handle )
+static inline gss_cred_id_t credhandle_sspi_to_gss( UINT64 handle )
 {
-    return (gss_cred_id_t)handle;
+    return (gss_cred_id_t)(ULONG_PTR)handle;
 }
 
-static inline void ctxhandle_gss_to_sspi( gss_ctx_id_t handle, LSA_SEC_HANDLE *ctx )
+static inline void ctxhandle_gss_to_sspi( gss_ctx_id_t handle, UINT64 *ctx )
 {
-    *ctx = (LSA_SEC_HANDLE)handle;
+    *ctx = (ULONG_PTR)handle;
 }
 
-static inline void credhandle_gss_to_sspi( gss_cred_id_t handle, LSA_SEC_HANDLE *cred )
+static inline void credhandle_gss_to_sspi( gss_cred_id_t handle, UINT64 *cred )
 {
-    *cred = (LSA_SEC_HANDLE)handle;
+    *cred = (ULONG_PTR)handle;
 }
 
 static ULONG flags_gss_to_asc_ret( ULONG flags )
@@ -528,17 +564,9 @@ static NTSTATUS accept_context( void *args )
     gss_cred_id_t cred_handle = credhandle_sspi_to_gss( params->credential );
     gss_ctx_id_t ctx_handle = ctxhandle_sspi_to_gss( params->context );
     gss_buffer_desc input_token, output_token;
-    int idx;
 
-    if (!params->input) input_token.length = 0;
-    else
-    {
-        if ((idx = get_buffer_index( params->input, SECBUFFER_TOKEN )) == -1) return SEC_E_INVALID_TOKEN;
-        input_token.length = params->input->pBuffers[idx].cbBuffer;
-        input_token.value  = params->input->pBuffers[idx].pvBuffer;
-    }
-
-    if ((idx = get_buffer_index( params->output, SECBUFFER_TOKEN )) == -1) return SEC_E_INVALID_TOKEN;
+    input_token.length  = params->input_token_length;
+    input_token.value   = params->input_token;
     output_token.length = 0;
     output_token.value  = NULL;
 
@@ -548,16 +576,16 @@ static NTSTATUS accept_context( void *args )
     if (GSS_ERROR( ret )) trace_gss_status( ret, minor_status );
     if (ret == GSS_S_COMPLETE || ret == GSS_S_CONTINUE_NEEDED)
     {
-        if (output_token.length > params->output->pBuffers[idx].cbBuffer) /* FIXME: check if larger buffer exists */
+        if (output_token.length > *params->output_token_length) /* FIXME: check if larger buffer exists */
         {
             TRACE( "buffer too small %lu > %u\n",
-                   (SIZE_T)output_token.length, (unsigned int)params->output->pBuffers[idx].cbBuffer );
+                   (SIZE_T)output_token.length, (unsigned int)*params->output_token_length );
             pgss_release_buffer( &minor_status, &output_token );
             pgss_delete_sec_context( &minor_status, &ctx_handle, GSS_C_NO_BUFFER );
             return SEC_E_BUFFER_TOO_SMALL;
         }
-        params->output->pBuffers[idx].cbBuffer = output_token.length;
-        memcpy( params->output->pBuffers[idx].pvBuffer, output_token.value, output_token.length );
+        *params->output_token_length = output_token.length;
+        memcpy( params->output_token, output_token.value, output_token.length );
         pgss_release_buffer( &minor_status, &output_token );
 
         ctxhandle_gss_to_sspi( ctx_handle, params->new_context );
@@ -626,13 +654,13 @@ static NTSTATUS acquire_credentials_handle( void *args )
         cred_usage = GSS_C_ACCEPT;
         break;
 
+    case SECPKG_CRED_BOTH:
     case SECPKG_CRED_OUTBOUND:
         if ((status = init_creds( params->username, params->password )) != STATUS_SUCCESS) return status;
-        cred_usage = GSS_C_INITIATE;
+        cred_usage = params->credential_use == SECPKG_CRED_OUTBOUND ? GSS_C_INITIATE : GSS_C_BOTH;
         break;
 
     default:
-        FIXME( "SECPKG_CRED_BOTH not supported\n" );
         return SEC_E_UNKNOWN_CREDENTIALS;
     }
 
@@ -654,8 +682,9 @@ static NTSTATUS acquire_credentials_handle( void *args )
 
 static NTSTATUS delete_context( void *args )
 {
+    const struct delete_context_params *params = args;
     OM_uint32 ret, minor_status;
-    gss_ctx_id_t ctx_handle = ctxhandle_sspi_to_gss( (LSA_SEC_HANDLE)args );
+    gss_ctx_id_t ctx_handle = ctxhandle_sspi_to_gss( params->context );
 
     ret = pgss_delete_sec_context( &minor_status, &ctx_handle, GSS_C_NO_BUFFER );
     TRACE( "gss_delete_sec_context returned %#x minor status %#x\n", ret, minor_status );
@@ -665,8 +694,9 @@ static NTSTATUS delete_context( void *args )
 
 static NTSTATUS free_credentials_handle( void *args )
 {
+    const struct free_credentials_handle_params *params = args;
     OM_uint32 ret, minor_status;
-    gss_cred_id_t cred = credhandle_sspi_to_gss( (LSA_SEC_HANDLE)args );
+    gss_cred_id_t cred = credhandle_sspi_to_gss( params->credential );
 
     ret = pgss_release_cred( &minor_status, &cred );
     TRACE( "gss_release_cred returned %#x minor status %#x\n", ret, minor_status );
@@ -713,16 +743,9 @@ static NTSTATUS initialize_context( void *args )
     gss_buffer_desc input_token, output_token;
     gss_name_t target = GSS_C_NO_NAME;
     NTSTATUS status;
-    int idx;
 
-    if ((idx = get_buffer_index( params->input, SECBUFFER_TOKEN )) == -1) input_token.length = 0;
-    else
-    {
-        input_token.length = params->input->pBuffers[idx].cbBuffer;
-        input_token.value  = params->input->pBuffers[idx].pvBuffer;
-    }
-
-    if ((idx = get_buffer_index( params->output, SECBUFFER_TOKEN )) == -1) return SEC_E_INVALID_TOKEN;
+    input_token.length = params->input_token_length;
+    input_token.value  = params->input_token;
     output_token.length = 0;
     output_token.value  = NULL;
 
@@ -735,16 +758,15 @@ static NTSTATUS initialize_context( void *args )
     if (GSS_ERROR( ret )) trace_gss_status( ret, minor_status );
     if (ret == GSS_S_COMPLETE || ret == GSS_S_CONTINUE_NEEDED)
     {
-        if (output_token.length > params->output->pBuffers[idx].cbBuffer) /* FIXME: check if larger buffer exists */
+        if (output_token.length > *params->output_token_length) /* FIXME: check if larger buffer exists */
         {
-            TRACE( "buffer too small %lu > %u\n",
-                   (SIZE_T)output_token.length, (unsigned int)params->output->pBuffers[idx].cbBuffer );
+            TRACE( "buffer too small %lu > %u\n", (SIZE_T)output_token.length, (unsigned int)*params->output_token_length);
             pgss_release_buffer( &minor_status, &output_token );
             pgss_delete_sec_context( &minor_status, &ctx_handle, GSS_C_NO_BUFFER );
             return SEC_E_INCOMPLETE_MESSAGE;
         }
-        params->output->pBuffers[idx].cbBuffer = output_token.length;
-        memcpy( params->output->pBuffers[idx].pvBuffer, output_token.value, output_token.length );
+        *params->output_token_length = output_token.length;
+        memcpy( params->output_token, output_token.value, output_token.length );
         pgss_release_buffer( &minor_status, &output_token );
 
         ctxhandle_gss_to_sspi( ctx_handle, params->new_context );
@@ -759,18 +781,12 @@ static NTSTATUS initialize_context( void *args )
 static NTSTATUS make_signature( void *args )
 {
     struct make_signature_params *params = args;
-    SecBufferDesc *msg = params->msg;
     OM_uint32 ret, minor_status;
     gss_buffer_desc data_buffer, token_buffer;
     gss_ctx_id_t ctx_handle = ctxhandle_sspi_to_gss( params->context );
-    int data_idx, token_idx;
 
-    /* FIXME: multiple data buffers, read-only buffers */
-    if ((data_idx = get_buffer_index( msg, SECBUFFER_DATA )) == -1) return SEC_E_INVALID_TOKEN;
-    data_buffer.length = msg->pBuffers[data_idx].cbBuffer;
-    data_buffer.value  = msg->pBuffers[data_idx].pvBuffer;
-
-    if ((token_idx = get_buffer_index( msg, SECBUFFER_TOKEN )) == -1) return SEC_E_INVALID_TOKEN;
+    data_buffer.length  = params->data_length;
+    data_buffer.value   = params->data;
     token_buffer.length = 0;
     token_buffer.value  = NULL;
 
@@ -779,24 +795,62 @@ static NTSTATUS make_signature( void *args )
     if (GSS_ERROR( ret )) trace_gss_status( ret, minor_status );
     if (ret == GSS_S_COMPLETE)
     {
-        memcpy( msg->pBuffers[token_idx].pvBuffer, token_buffer.value, token_buffer.length );
-        msg->pBuffers[token_idx].cbBuffer = token_buffer.length;
+        memcpy( params->token, token_buffer.value, token_buffer.length );
+        *params->token_length = token_buffer.length;
         pgss_release_buffer( &minor_status, &token_buffer );
     }
 
     return status_gss_to_sspi( ret );
 }
 
-#define KERBEROS_MAX_SIGNATURE        37
-#define KERBEROS_SECURITY_TRAILER     49
+#define KERBEROS_MAX_SIGNATURE        64
+#define KERBEROS_SECURITY_TRAILER     64
 #define KERBEROS_MAX_SIGNATURE_DCE    28
 #define KERBEROS_SECURITY_TRAILER_DCE 76
+
+static NTSTATUS get_session_key( gss_ctx_id_t ctx, SecPkgContext_SessionKey *key )
+{
+    gss_OID_desc GSS_C_INQ_SSPI_SESSION_KEY =
+        { 11, (void *)"\x2a\x86\x48\x86\xf7\x12\x01\x02\x02\x05\x05" }; /* 1.2.840.113554.1.2.2.5.5 */
+    OM_uint32 ret, minor_status;
+    gss_buffer_set_t buffer_set = GSS_C_NO_BUFFER_SET;
+
+    ret = pgss_inquire_sec_context_by_oid( &minor_status, ctx, &GSS_C_INQ_SSPI_SESSION_KEY, &buffer_set );
+    if (GSS_ERROR( ret )) trace_gss_status( ret, minor_status );
+    if (ret != GSS_S_COMPLETE) return STATUS_INTERNAL_ERROR;
+
+    if (buffer_set == GSS_C_NO_BUFFER_SET || buffer_set->count != 2)
+    {
+        pgss_release_buffer_set( &minor_status, &buffer_set );
+        return STATUS_INTERNAL_ERROR;
+    }
+
+    if (key->SessionKeyLength < buffer_set->elements[0].length )
+    {
+        key->SessionKeyLength = buffer_set->elements[0].length;
+        pgss_release_buffer_set( &minor_status, &buffer_set );
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    memcpy( key->SessionKey, buffer_set->elements[0].value, buffer_set->elements[0].length );
+    key->SessionKeyLength = buffer_set->elements[0].length;
+
+    pgss_release_buffer_set( &minor_status, &buffer_set );
+    return STATUS_SUCCESS;
+}
 
 static NTSTATUS query_context_attributes( void *args )
 {
     struct query_context_attributes_params *params = args;
     switch (params->attr)
     {
+    case SECPKG_ATTR_SESSION_KEY:
+    {
+        SecPkgContext_SessionKey *key = (SecPkgContext_SessionKey *)params->buf;
+        gss_ctx_id_t ctx  = ctxhandle_sspi_to_gss( params->context );
+
+        return get_session_key( ctx, key );
+    }
     case SECPKG_ATTR_SIZES:
     {
         SecPkgContext_Sizes *sizes = (SecPkgContext_Sizes *)params->buf;
@@ -815,7 +869,7 @@ static NTSTATUS query_context_attributes( void *args )
         }
         sizes->cbMaxToken        = KERBEROS_MAX_BUF;
         sizes->cbMaxSignature    = size_max_signature;
-        sizes->cbBlockSize       = 1;
+        sizes->cbBlockSize       = 8;
         sizes->cbSecurityTrailer = size_security_trailer;
         return SEC_E_OK;
     }
@@ -827,33 +881,29 @@ static NTSTATUS query_context_attributes( void *args )
     return SEC_E_UNSUPPORTED_FUNCTION;
 }
 
-static NTSTATUS seal_message_vector( gss_ctx_id_t ctx, SecBufferDesc *msg, unsigned qop )
+static NTSTATUS seal_message_vector( gss_ctx_id_t ctx, const struct seal_message_params *params )
 {
     gss_iov_buffer_desc iov[4];
     OM_uint32 ret, minor_status;
-    int token_idx, data_idx, conf_flag, conf_state;
+    int conf_flag, conf_state;
 
-    if (!qop)
+    if (!params->qop)
         conf_flag = 1; /* confidentiality + integrity */
-    else if (qop == SECQOP_WRAP_NO_ENCRYPT)
+    else if (params->qop == SECQOP_WRAP_NO_ENCRYPT)
         conf_flag = 0; /* only integrity */
     else
     {
-        FIXME( "QOP %#x not supported\n", qop );
+        FIXME( "QOP %#x not supported\n", params->qop );
         return SEC_E_UNSUPPORTED_FUNCTION;
     }
-
-    /* FIXME: multiple data buffers, read-only buffers */
-    if ((data_idx = get_buffer_index( msg, SECBUFFER_DATA )) == -1) return SEC_E_INVALID_TOKEN;
-    if ((token_idx = get_buffer_index( msg, SECBUFFER_TOKEN )) == -1) return SEC_E_INVALID_TOKEN;
 
     iov[0].type          = GSS_IOV_BUFFER_TYPE_SIGN_ONLY | GSS_IOV_BUFFER_FLAG_ALLOCATE;
     iov[0].buffer.length = 0;
     iov[0].buffer.value  = NULL;
 
     iov[1].type          = GSS_IOV_BUFFER_TYPE_DATA;
-    iov[1].buffer.length = msg->pBuffers[data_idx].cbBuffer;
-    iov[1].buffer.value  = msg->pBuffers[data_idx].pvBuffer;
+    iov[1].buffer.length = params->data_length;
+    iov[1].buffer.value  = params->data;
 
     iov[2].type          = GSS_IOV_BUFFER_TYPE_SIGN_ONLY | GSS_IOV_BUFFER_FLAG_ALLOCATE;
     iov[2].buffer.length = 0;
@@ -868,52 +918,48 @@ static NTSTATUS seal_message_vector( gss_ctx_id_t ctx, SecBufferDesc *msg, unsig
     if (GSS_ERROR( ret )) trace_gss_status( ret, minor_status );
     if (ret == GSS_S_COMPLETE)
     {
-        memcpy( msg->pBuffers[token_idx].pvBuffer, iov[3].buffer.value, iov[3].buffer.length );
-        msg->pBuffers[token_idx].cbBuffer = iov[3].buffer.length;
+        memcpy( params->token, iov[3].buffer.value, iov[3].buffer.length );
+        *params->token_length = iov[3].buffer.length;
         pgss_release_iov_buffer( &minor_status, iov, 4 );
     }
 
     return status_gss_to_sspi( ret );
 }
 
-static NTSTATUS seal_message_no_vector( gss_ctx_id_t ctx, SecBufferDesc *msg, unsigned qop )
+static NTSTATUS seal_message_no_vector( gss_ctx_id_t ctx, const struct seal_message_params *params )
 {
     gss_buffer_desc input, output;
     OM_uint32 ret, minor_status;
-    int token_idx, data_idx, conf_flag, conf_state;
+    int conf_flag, conf_state;
 
-    if (!qop)
+    if (!params->qop)
         conf_flag = 1; /* confidentiality + integrity */
-    else if (qop == SECQOP_WRAP_NO_ENCRYPT)
+    else if (params->qop == SECQOP_WRAP_NO_ENCRYPT)
         conf_flag = 0; /* only integrity */
     else
     {
-        FIXME( "QOP %#x not supported\n", qop );
+        FIXME( "QOP %#x not supported\n", params->qop );
         return SEC_E_UNSUPPORTED_FUNCTION;
     }
 
-    /* FIXME: multiple data buffers, read-only buffers */
-    if ((data_idx = get_buffer_index( msg, SECBUFFER_DATA )) == -1) return SEC_E_INVALID_TOKEN;
-    if ((token_idx = get_buffer_index( msg, SECBUFFER_TOKEN )) == -1) return SEC_E_INVALID_TOKEN;
-
-    input.length = msg->pBuffers[data_idx].cbBuffer;
-    input.value  = msg->pBuffers[data_idx].pvBuffer;
+    input.length = params->data_length;
+    input.value  = params->data;
 
     ret = pgss_wrap( &minor_status, ctx, conf_flag, GSS_C_QOP_DEFAULT, &input, &conf_state, &output );
     TRACE( "gss_wrap returned %#x minor status %#x\n", ret, minor_status );
     if (GSS_ERROR( ret )) trace_gss_status( ret, minor_status );
     if (ret == GSS_S_COMPLETE)
     {
-        unsigned len_data = msg->pBuffers[data_idx].cbBuffer, len_token = msg->pBuffers[token_idx].cbBuffer;
+        unsigned len_data = params->data_length, len_token = *params->token_length;
         if (len_token < output.length - len_data)
         {
             TRACE( "buffer too small %lu > %u\n", (SIZE_T)output.length - len_data, len_token );
             pgss_release_buffer( &minor_status, &output );
             return SEC_E_BUFFER_TOO_SMALL;
         }
-        memcpy( msg->pBuffers[data_idx].pvBuffer, output.value, len_data );
-        memcpy( msg->pBuffers[token_idx].pvBuffer, (char *)output.value + len_data, output.length - len_data );
-        msg->pBuffers[token_idx].cbBuffer = output.length - len_data;
+        memcpy( params->data, output.value, len_data );
+        memcpy( params->token, (char *)output.value + len_data, output.length - len_data );
+        *params->token_length = output.length - len_data;
         pgss_release_buffer( &minor_status, &output );
     }
 
@@ -925,62 +971,56 @@ static NTSTATUS seal_message( void *args )
     struct seal_message_params *params = args;
     gss_ctx_id_t ctx = ctxhandle_sspi_to_gss( params->context );
 
-    if (is_dce_style_context( ctx )) return seal_message_vector( ctx, params->msg, params->qop );
-    return seal_message_no_vector( ctx, params->msg, params->qop );
+    if (is_dce_style_context( ctx )) return seal_message_vector( ctx, params );
+    return seal_message_no_vector( ctx, params );
 }
 
-static NTSTATUS unseal_message_vector( gss_ctx_id_t ctx, SecBufferDesc *msg, ULONG *qop )
+static NTSTATUS unseal_message_vector( gss_ctx_id_t ctx, const struct unseal_message_params *params )
 {
     gss_iov_buffer_desc iov[4];
     OM_uint32 ret, minor_status;
-    int token_idx, data_idx, conf_state;
-
-    if ((data_idx = get_buffer_index( msg, SECBUFFER_DATA )) == -1) return SEC_E_INVALID_TOKEN;
-    if ((token_idx = get_buffer_index( msg, SECBUFFER_TOKEN )) == -1) return SEC_E_INVALID_TOKEN;
+    int conf_state;
 
     iov[0].type          = GSS_IOV_BUFFER_TYPE_SIGN_ONLY;
     iov[0].buffer.length = 0;
     iov[0].buffer.value  = NULL;
 
     iov[1].type          = GSS_IOV_BUFFER_TYPE_DATA;
-    iov[1].buffer.length = msg->pBuffers[data_idx].cbBuffer;
-    iov[1].buffer.value  = msg->pBuffers[data_idx].pvBuffer;
+    iov[1].buffer.length = params->data_length;
+    iov[1].buffer.value  = params->data;
 
     iov[2].type          = GSS_IOV_BUFFER_TYPE_SIGN_ONLY;
     iov[2].buffer.length = 0;
     iov[2].buffer.value  = NULL;
 
     iov[3].type          = GSS_IOV_BUFFER_TYPE_HEADER;
-    iov[3].buffer.length = msg->pBuffers[token_idx].cbBuffer;
-    iov[3].buffer.value  = msg->pBuffers[token_idx].pvBuffer;
+    iov[3].buffer.length = params->token_length;
+    iov[3].buffer.value  = params->token;
 
     ret = pgss_unwrap_iov( &minor_status, ctx, &conf_state, NULL, iov, 4 );
     TRACE( "gss_unwrap_iov returned %#x minor status %#x\n", ret, minor_status );
     if (GSS_ERROR( ret )) trace_gss_status( ret, minor_status );
-    if (ret == GSS_S_COMPLETE && qop)
+    if (ret == GSS_S_COMPLETE && params->qop)
     {
-        *qop = (conf_state ? 0 : SECQOP_WRAP_NO_ENCRYPT);
+        *params->qop = (conf_state ? 0 : SECQOP_WRAP_NO_ENCRYPT);
     }
     return status_gss_to_sspi( ret );
 }
 
-static NTSTATUS unseal_message_no_vector( gss_ctx_id_t ctx, SecBufferDesc *msg, ULONG *qop )
+static NTSTATUS unseal_message_no_vector( gss_ctx_id_t ctx, const struct unseal_message_params *params )
 {
     gss_buffer_desc input, output;
     OM_uint32 ret, minor_status;
-    int token_idx, data_idx, conf_state;
     DWORD len_data, len_token;
+    int conf_state;
 
-    if ((data_idx = get_buffer_index( msg, SECBUFFER_DATA )) == -1) return SEC_E_INVALID_TOKEN;
-    if ((token_idx = get_buffer_index( msg, SECBUFFER_TOKEN )) == -1) return SEC_E_INVALID_TOKEN;
-
-    len_data = msg->pBuffers[data_idx].cbBuffer;
-    len_token = msg->pBuffers[token_idx].cbBuffer;
+    len_data = params->data_length;
+    len_token = params->token_length;
 
     input.length = len_data + len_token;
     if (!(input.value = malloc( input.length ))) return SEC_E_INSUFFICIENT_MEMORY;
-    memcpy( input.value, msg->pBuffers[data_idx].pvBuffer, len_data );
-    memcpy( (char *)input.value + len_data, msg->pBuffers[token_idx].pvBuffer, len_token );
+    memcpy( input.value, params->data, len_data );
+    memcpy( (char *)input.value + len_data, params->token, len_token );
 
     ret = pgss_unwrap( &minor_status, ctx, &input, &output, &conf_state, NULL );
     free( input.value );
@@ -988,8 +1028,8 @@ static NTSTATUS unseal_message_no_vector( gss_ctx_id_t ctx, SecBufferDesc *msg, 
     if (GSS_ERROR( ret )) trace_gss_status( ret, minor_status );
     if (ret == GSS_S_COMPLETE)
     {
-        if (qop) *qop = (conf_state ? 0 : SECQOP_WRAP_NO_ENCRYPT);
-        memcpy( msg->pBuffers[data_idx].pvBuffer, output.value, len_data );
+        if (params->qop) *params->qop = (conf_state ? 0 : SECQOP_WRAP_NO_ENCRYPT);
+        memcpy( params->data, output.value, len_data );
         pgss_release_buffer( &minor_status, &output );
     }
 
@@ -1001,26 +1041,21 @@ static NTSTATUS unseal_message( void *args )
     struct unseal_message_params *params = args;
     gss_ctx_id_t ctx = ctxhandle_sspi_to_gss( params->context );
 
-    if (is_dce_style_context( ctx )) return unseal_message_vector( ctx, params->msg, params->qop );
-    return unseal_message_no_vector( ctx, params->msg, params->qop );
+    if (is_dce_style_context( ctx )) return unseal_message_vector( ctx, params );
+    return unseal_message_no_vector( ctx, params );
 }
 
 static NTSTATUS verify_signature( void *args )
 {
     struct verify_signature_params *params = args;
-    SecBufferDesc *msg = params->msg;
     OM_uint32 ret, minor_status;
     gss_buffer_desc data_buffer, token_buffer;
     gss_ctx_id_t ctx_handle = ctxhandle_sspi_to_gss( params->context );
-    int data_idx, token_idx;
 
-    if ((data_idx = get_buffer_index( msg, SECBUFFER_DATA )) == -1) return SEC_E_INVALID_TOKEN;
-    data_buffer.length = msg->pBuffers[data_idx].cbBuffer;
-    data_buffer.value  = msg->pBuffers[data_idx].pvBuffer;
-
-    if ((token_idx = get_buffer_index( msg, SECBUFFER_TOKEN )) == -1) return SEC_E_INVALID_TOKEN;
-    token_buffer.length = msg->pBuffers[token_idx].cbBuffer;
-    token_buffer.value  = msg->pBuffers[token_idx].pvBuffer;
+    data_buffer.length  = params->data_length;
+    data_buffer.value   = params->data;
+    token_buffer.length = params->token_length;
+    token_buffer.value  = params->token;
 
     ret = pgss_verify_mic( &minor_status, ctx_handle, &data_buffer, &token_buffer, NULL );
     TRACE( "gss_verify_mic returned %#x minor status %#x\n", ret, minor_status );
@@ -1037,7 +1072,7 @@ static NTSTATUS process_attach( void *args )
     return STATUS_DLL_NOT_FOUND;
 }
 
-unixlib_entry_t __wine_unix_call_funcs[] =
+const unixlib_entry_t __wine_unix_call_funcs[] =
 {
     process_attach,
     accept_context,
@@ -1052,5 +1087,331 @@ unixlib_entry_t __wine_unix_call_funcs[] =
     unseal_message,
     verify_signature,
 };
+
+C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
+
+#ifdef _WIN64
+
+typedef ULONG PTR32;
+
+static NTSTATUS wow64_accept_context( void *args )
+{
+    struct
+    {
+        UINT64 credential;
+        UINT64 context;
+        PTR32 input_token;
+        ULONG input_token_length;
+        PTR32 new_context;
+        PTR32 output_token;
+        PTR32 output_token_length;
+        PTR32 context_attr;
+        PTR32 expiry;
+    } const *params32 = args;
+    struct accept_context_params params =
+    {
+        params32->credential,
+        params32->context,
+        ULongToPtr(params32->input_token),
+        params32->input_token_length,
+        ULongToPtr(params32->new_context),
+        ULongToPtr(params32->output_token),
+        ULongToPtr(params32->output_token_length),
+        ULongToPtr(params32->context_attr),
+        ULongToPtr(params32->expiry),
+    };
+    return accept_context( &params );
+}
+
+static NTSTATUS wow64_acquire_credentials_handle( void *args )
+{
+    struct
+    {
+        PTR32 principal;
+        ULONG credential_use;
+        PTR32 username;
+        PTR32 password;
+        PTR32 credential;
+        PTR32 expiry;
+    } const *params32 = args;
+    struct acquire_credentials_handle_params params =
+    {
+        ULongToPtr(params32->principal),
+        params32->credential_use,
+        ULongToPtr(params32->username),
+        ULongToPtr(params32->password),
+        ULongToPtr(params32->credential),
+        ULongToPtr(params32->expiry),
+    };
+    return acquire_credentials_handle( &params );
+}
+
+static NTSTATUS wow64_delete_context( void *args )
+{
+    struct
+    {
+        UINT64 context;
+    } const *params32 = args;
+    struct delete_context_params params =
+    {
+        params32->context,
+    };
+    return delete_context( &params );
+}
+
+static NTSTATUS wow64_free_credentials_handle( void *args )
+{
+    struct
+    {
+        UINT64 credential;
+    } const *params32 = args;
+    struct free_credentials_handle_params params =
+    {
+        params32->credential,
+    };
+    return free_credentials_handle( &params );
+}
+
+static NTSTATUS wow64_initialize_context( void *args )
+{
+    struct
+    {
+        UINT64 credential;
+        UINT64 context;
+        PTR32 target_name;
+        ULONG context_req;
+        PTR32 input_token;
+        ULONG input_token_length;
+        PTR32 output_token;
+        PTR32 output_token_length;
+        PTR32 new_context;
+        PTR32 context_attr;
+        PTR32 expiry;
+    } const *params32 = args;
+    struct initialize_context_params params =
+    {
+        params32->credential,
+        params32->context,
+        ULongToPtr(params32->target_name),
+        params32->context_req,
+        ULongToPtr(params32->input_token),
+        params32->input_token_length,
+        ULongToPtr(params32->output_token),
+        ULongToPtr(params32->output_token_length),
+        ULongToPtr(params32->new_context),
+        ULongToPtr(params32->context_attr),
+        ULongToPtr(params32->expiry),
+    };
+    return initialize_context( &params );
+}
+
+static NTSTATUS wow64_make_signature( void *args )
+{
+    struct
+    {
+        UINT64 context;
+        PTR32 data;
+        ULONG data_length;
+        PTR32 token;
+        PTR32 token_length;
+    } const *params32 = args;
+    struct make_signature_params params =
+    {
+        params32->context,
+        ULongToPtr(params32->data),
+        params32->data_length,
+        ULongToPtr(params32->token),
+        ULongToPtr(params32->token_length),
+    };
+    return make_signature( &params );
+}
+
+static NTSTATUS wow64_query_context_attributes( void *args )
+{
+    struct
+    {
+        UINT64 context;
+        ULONG attr;
+        PTR32 buf;
+    } const *params32 = args;
+    struct query_context_attributes_params params =
+    {
+        params32->context,
+        params32->attr,
+        ULongToPtr(params32->buf),
+    };
+    return query_context_attributes( &params );
+}
+
+struct KERB_TICKET_CACHE_INFO_EX32
+{
+    UNICODE_STRING32 ClientName;
+    UNICODE_STRING32 ClientRealm;
+    UNICODE_STRING32 ServerName;
+    UNICODE_STRING32 ServerRealm;
+    LARGE_INTEGER StartTime;
+    LARGE_INTEGER EndTime;
+    LARGE_INTEGER RenewTime;
+    LONG EncryptionType;
+    ULONG TicketFlags;
+};
+
+struct KERB_QUERY_TKT_CACHE_EX_RESPONSE32
+{
+    KERB_PROTOCOL_MESSAGE_TYPE MessageType;
+    ULONG CountOfTickets;
+    struct KERB_TICKET_CACHE_INFO_EX32 Tickets[ANYSIZE_ARRAY];
+};
+
+static void copy_ticket_ustr_64to32( const UNICODE_STRING *str, UNICODE_STRING32 *str32, ULONG *client_str )
+{
+    str32->Length = str->Length;
+    str32->MaximumLength = str->MaximumLength;
+    str32->Buffer = *client_str;
+    memcpy( ULongToPtr(str32->Buffer), str->Buffer, str->MaximumLength );
+    *client_str += str->MaximumLength;
+}
+
+static NTSTATUS copy_tickets_to_client32( struct ticket_list *list, struct KERB_QUERY_TKT_CACHE_EX_RESPONSE32 *resp,
+        ULONG *out_size )
+{
+    ULONG i, size, size_fixed;
+    ULONG client_str;
+
+    size = size_fixed = offsetof( struct KERB_QUERY_TKT_CACHE_EX_RESPONSE32, Tickets[list->count] );
+    for (i = 0; i < list->count; i++)
+    {
+        size += list->tickets[i].ServerRealm.MaximumLength;
+        size += list->tickets[i].ServerName.MaximumLength;
+    }
+    if (!resp || size > *out_size)
+    {
+        *out_size = size;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    *out_size = size;
+
+    resp->MessageType = KerbQueryTicketCacheMessage;
+    resp->CountOfTickets = list->count;
+    client_str = PtrToUlong(resp) + size_fixed;
+
+    for (i = 0; i < list->count; i++)
+    {
+        copy_ticket_ustr_64to32( &list->tickets[i].ServerName, &resp->Tickets[i].ServerName, &client_str );
+        copy_ticket_ustr_64to32( &list->tickets[i].ServerRealm, &resp->Tickets[i].ServerRealm, &client_str );
+        resp->Tickets[i].StartTime = list->tickets[i].StartTime;
+        resp->Tickets[i].EndTime = list->tickets[i].EndTime;
+        resp->Tickets[i].RenewTime = list->tickets[i].RenewTime;
+        resp->Tickets[i].EncryptionType = list->tickets[i].EncryptionType;
+        resp->Tickets[i].TicketFlags = list->tickets[i].TicketFlags;
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS wow64_query_ticket_cache( void *args )
+{
+    struct
+    {
+        PTR32 resp;
+        PTR32 out_size;
+    } const *params32 = args;
+    struct ticket_list list = { 0 };
+    NTSTATUS status;
+
+    status = kerberos_fill_ticket_list( &list );
+    if (status == STATUS_SUCCESS)
+        status = copy_tickets_to_client32( &list, ULongToPtr(params32->resp), ULongToPtr(params32->out_size) );
+
+    free_tickets_in_list( &list );
+    return status;
+
+}
+
+static NTSTATUS wow64_seal_message( void *args )
+{
+    struct
+    {
+        UINT64 context;
+        PTR32 data;
+        ULONG data_length;
+        PTR32 token;
+        PTR32 token_length;
+    } const *params32 = args;
+    struct seal_message_params params =
+    {
+        params32->context,
+        ULongToPtr(params32->data),
+        params32->data_length,
+        ULongToPtr(params32->token),
+        ULongToPtr(params32->token_length),
+    };
+    return seal_message( &params );
+}
+
+static NTSTATUS wow64_unseal_message( void *args )
+{
+    struct
+    {
+        UINT64 context;
+        PTR32 data;
+        ULONG data_length;
+        PTR32 token;
+        ULONG token_length;
+        PTR32 qop;
+    } const *params32 = args;
+    struct unseal_message_params params =
+    {
+        params32->context,
+        ULongToPtr(params32->data),
+        params32->data_length,
+        ULongToPtr(params32->token),
+        params32->token_length,
+        ULongToPtr(params32->qop),
+    };
+    return unseal_message( &params );
+}
+
+static NTSTATUS wow64_verify_signature( void *args )
+{
+    struct
+    {
+        UINT64 context;
+        PTR32 data;
+        ULONG data_length;
+        PTR32 token;
+        ULONG token_length;
+        PTR32 qop;
+    } const *params32 = args;
+    struct verify_signature_params params =
+    {
+        params32->context,
+        ULongToPtr(params32->data),
+        params32->data_length,
+        ULongToPtr(params32->token),
+        params32->token_length,
+        ULongToPtr(params32->qop),
+    };
+    return verify_signature( &params );
+}
+
+const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+{
+    process_attach,
+    wow64_accept_context,
+    wow64_acquire_credentials_handle,
+    wow64_delete_context,
+    wow64_free_credentials_handle,
+    wow64_initialize_context,
+    wow64_make_signature,
+    wow64_query_context_attributes,
+    wow64_query_ticket_cache,
+    wow64_seal_message,
+    wow64_unseal_message,
+    wow64_verify_signature,
+};
+
+C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count );
+
+#endif /* _WIN64 */
 
 #endif /* defined(SONAME_LIBKRB5) && defined(SONAME_LIBGSSAPI_KRB5) */

@@ -107,7 +107,7 @@ static LPFMINFO FM_GetMenuInfo(HMENU hmenu)
 
 	if ((menudata == 0) || (MenuInfo.cbSize != sizeof(MENUINFO)))
 	{
-	  ERR("menudata corrupt: %p %u\n", menudata, MenuInfo.cbSize);
+	  ERR("menudata corrupt: %p %lu\n", menudata, MenuInfo.cbSize);
 	  return 0;
 	}
 
@@ -170,7 +170,7 @@ static int FM_InitMenuPopup(HMENU hmenu, LPCITEMIDLIST pAlternatePidl)
 
 	if ((menudata == 0) || (MenuInfo.cbSize != sizeof(MENUINFO)))
 	{
-	  ERR("menudata corrupt: %p %u\n", menudata, MenuInfo.cbSize);
+	  ERR("menudata corrupt: %p %lu\n", menudata, MenuInfo.cbSize);
 	  return 0;
 	}
 
@@ -213,7 +213,7 @@ static int FM_InitMenuPopup(HMENU hmenu, LPCITEMIDLIST pAlternatePidl)
 		    MENUINFO MenuInfo;
 		    HMENU hMenuPopup = CreatePopupMenu();
 
-		    lpFmMi = heap_alloc_zero(sizeof(*lpFmMi));
+		    lpFmMi = calloc(1, sizeof(*lpFmMi));
 
 		    lpFmMi->pidl = ILCombine(pidl, pidlTemp);
 		    lpFmMi->uEnumFlags = SHCONTF_FOLDERS | SHCONTF_NONFOLDERS;
@@ -280,10 +280,10 @@ HMENU WINAPI FileMenu_Create (
 
 	HMENU hMenu = CreatePopupMenu();
 
-	TRACE("0x%08x 0x%08x %p 0x%08x 0x%08x  hMenu=%p\n",
+	TRACE("0x%08lx 0x%08x %p 0x%08x 0x%08x  hMenu=%p\n",
 	crBorderColor, nBorderWidth, hBorderBmp, nSelHeight, uFlags, hMenu);
 
-	menudata = heap_alloc_zero(sizeof(*menudata));
+	menudata = calloc(1, sizeof(*menudata));
 	menudata->crBorderColor = crBorderColor;
 	menudata->nBorderWidth = nBorderWidth;
 	menudata->hBorderBmp = hBorderBmp;
@@ -313,7 +313,7 @@ void WINAPI FileMenu_Destroy (HMENU hmenu)
 	menudata = FM_GetMenuInfo(hmenu);
 
 	SHFree( menudata->pidl);
-	heap_free(menudata);
+	free(menudata);
 
 	DestroyMenu (hmenu);
 }
@@ -386,7 +386,7 @@ static BOOL FileMenu_AppendItemW(
 	menudata = (LPFMINFO)MenuInfo.dwMenuData;
 	if ((menudata == 0) || (MenuInfo.cbSize != sizeof(MENUINFO)))
 	{
-	  ERR("menudata corrupt: %p %u\n", menudata, MenuInfo.cbSize);
+	  ERR("menudata corrupt: %p %lu\n", menudata, MenuInfo.cbSize);
 	  return FALSE;
 	}
 
@@ -416,11 +416,11 @@ BOOL WINAPI FileMenu_AppendItemAW(
         else
 	{
 	  DWORD len = MultiByteToWideChar( CP_ACP, 0, lpText, -1, NULL, 0 );
-	  LPWSTR lpszText = heap_alloc( len*sizeof(WCHAR) );
+	  WCHAR *lpszText = malloc(len * sizeof(WCHAR));
 	  if (!lpszText) return FALSE;
 	  MultiByteToWideChar( CP_ACP, 0, lpText, -1, lpszText, len );
 	  ret = FileMenu_AppendItemW(hMenu, lpszText, uID, icon, hMenuPopup, nItemHeight);
-	  heap_free( lpszText );
+	  free(lpszText);
 	}
 
 	return ret;
@@ -677,7 +677,7 @@ LRESULT WINAPI FileMenu_HandleMenuChar(
 	HMENU	hMenu,
 	WPARAM	wParam)
 {
-	FIXME("%p 0x%08lx\n",hMenu,wParam);
+	FIXME("%p 0x%08Ix\n",hMenu,wParam);
 	return 0;
 }
 
@@ -843,7 +843,7 @@ void WINAPI FileMenu_AbortInitMenu (void)
  */
 LPVOID WINAPI SHFind_InitMenuPopup (HMENU hMenu, HWND hWndParent, DWORD w, DWORD x)
 {
-	FIXME("hmenu=%p hwnd=%p 0x%08x 0x%08x stub\n",
+	FIXME("hmenu=%p hwnd=%p 0x%08lx 0x%08lx stub\n",
 		hMenu,hWndParent,w,x);
 	return NULL; /* this is supposed to be a pointer */
 }
@@ -882,7 +882,7 @@ UINT WINAPI Shell_MergeMenus (HMENU hmDst, HMENU hmSrc, UINT uInsert, UINT uIDAd
 	WCHAR		szName[256];
 	UINT		uTemp, uIDMax = uIDAdjust;
 
-	TRACE("hmenu1=%p hmenu2=%p 0x%04x 0x%04x 0x%04x  0x%04x\n",
+	TRACE("hmenu1=%p hmenu2=%p 0x%04x 0x%04x 0x%04x  0x%04lx\n",
 		 hmDst, hmSrc, uInsert, uIDAdjust, uIDAdjustMax, uFlags);
 
 	if (!hmDst || !hmSrc)
@@ -1040,22 +1040,22 @@ static HRESULT CompositeCMenu_Constructor(IContextMenu **menus,UINT menu_count, 
 
     TRACE("(%p,%u,%s,%p)\n",menus,menu_count,shdebugstr_guid(riid),ppv);
 
-    ret = heap_alloc(sizeof(*ret));
+    ret = malloc(sizeof(*ret));
     if(!ret)
         return E_OUTOFMEMORY;
     ret->IContextMenu3_iface.lpVtbl = &CompositeCMenuVtbl;
     ret->menu_count = menu_count;
-    ret->menus = heap_alloc(menu_count*sizeof(IContextMenu*));
+    ret->menus = malloc(menu_count * sizeof(IContextMenu*));
     if(!ret->menus)
     {
-        heap_free(ret);
+        free(ret);
         return E_OUTOFMEMORY;
     }
-    ret->offsets = heap_alloc_zero(menu_count*sizeof(UINT));
+    ret->offsets = calloc(menu_count, sizeof(UINT));
     if(!ret->offsets)
     {
-        heap_free(ret->menus);
-        heap_free(ret);
+        free(ret->menus);
+        free(ret);
         return E_OUTOFMEMORY;
     }
     ret->refCount=0;
@@ -1070,9 +1070,9 @@ static void CompositeCMenu_Destroy(CompositeCMenu *This)
     UINT i;
     for(i=0;i<This->menu_count;i++)
         IContextMenu_Release(This->menus[i]);
-    heap_free(This->menus);
-    heap_free(This->offsets);
-    heap_free(This);
+    free(This->menus);
+    free(This->offsets);
+    free(This);
 }
 
 static HRESULT WINAPI CompositeCMenu_QueryInterface(IContextMenu3 *iface, REFIID riid, void **ppv)
@@ -1125,7 +1125,7 @@ static HRESULT WINAPI CompositeCMenu_GetCommandString(IContextMenu3* iface, UINT
 {
     CompositeCMenu *This = impl_from_IContextMenu3(iface);
     UINT index = CompositeCMenu_GetIndexForCommandId(This,idCmd);
-    TRACE("(%p)->(%lx,%x,%p,%s,%u)\n",iface,idCmd,uFlags,pwReserved,pszName,cchMax);
+    TRACE("(%p)->(%Ix,%x,%p,%s,%u)\n",iface,idCmd,uFlags,pwReserved,pszName,cchMax);
     return IContextMenu_GetCommandString(This->menus[index],idCmd,uFlags,pwReserved,pszName,cchMax);
 }
 
@@ -1181,7 +1181,7 @@ static HRESULT WINAPI CompositeCMenu_HandleMenuMsg(IContextMenu3 *iface, UINT uM
     UINT index;
     IContextMenu2 *handler;
     HRESULT hres;
-    TRACE("(%p)->(%x,%lx,%lx)\n",iface,uMsg,wParam,lParam);
+    TRACE("(%p)->(%x,%Ix,%Ix)\n",iface,uMsg,wParam,lParam);
     switch(uMsg)
     {
     case WM_INITMENUPOPUP:
@@ -1215,7 +1215,7 @@ static HRESULT WINAPI CompositeCMenu_HandleMenuMsg2(IContextMenu3 *iface, UINT u
     IContextMenu3 *handler;
     HRESULT hres;
     LRESULT lres;
-    TRACE("(%p)->(%x,%lx,%lx,%p)\n",iface,uMsg,wParam,lParam,plResult);
+    TRACE("(%p)->(%x,%Ix,%Ix,%p)\n",iface,uMsg,wParam,lParam,plResult);
     if(!plResult)
         plResult=&lres;
     switch(uMsg)

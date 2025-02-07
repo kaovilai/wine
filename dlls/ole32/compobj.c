@@ -40,8 +40,6 @@
 #include <assert.h>
 
 #define COBJMACROS
-#define NONAMELESSUNION
-
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "windef.h"
@@ -207,40 +205,39 @@ BOOL actctx_get_miscstatus(const CLSID *clsid, DWORD aspect, DWORD *status)
 }
 
 /* wrapper for NtCreateKey that creates the key recursively if necessary */
-static NTSTATUS create_key( HKEY *retkey, ACCESS_MASK access, OBJECT_ATTRIBUTES *attr )
+static NTSTATUS create_key( HKEY *retkey, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr )
 {
     NTSTATUS status = NtCreateKey( (HANDLE *)retkey, access, attr, 0, NULL, 0, NULL );
 
     if (status == STATUS_OBJECT_NAME_NOT_FOUND)
     {
-        HANDLE subkey, root = attr->RootDirectory;
+        HANDLE subkey;
         WCHAR *buffer = attr->ObjectName->Buffer;
-        DWORD attrs, pos = 0, i = 0, len = attr->ObjectName->Length / sizeof(WCHAR);
+        DWORD pos = 0, i = 0, len = attr->ObjectName->Length / sizeof(WCHAR);
         UNICODE_STRING str;
+        OBJECT_ATTRIBUTES attr2 = *attr;
 
         while (i < len && buffer[i] != '\\') i++;
         if (i == len) return status;
 
-        attrs = attr->Attributes;
-        attr->ObjectName = &str;
+        attr2.ObjectName = &str;
 
         while (i < len)
         {
             str.Buffer = buffer + pos;
             str.Length = (i - pos) * sizeof(WCHAR);
-            status = NtCreateKey( &subkey, access, attr, 0, NULL, 0, NULL );
-            if (attr->RootDirectory != root) NtClose( attr->RootDirectory );
+            status = NtCreateKey( &subkey, access, &attr2, 0, NULL, 0, NULL );
+            if (attr2.RootDirectory != attr->RootDirectory) NtClose( attr2.RootDirectory );
             if (status) return status;
-            attr->RootDirectory = subkey;
+            attr2.RootDirectory = subkey;
             while (i < len && buffer[i] == '\\') i++;
             pos = i;
             while (i < len && buffer[i] != '\\') i++;
         }
         str.Buffer = buffer + pos;
         str.Length = (i - pos) * sizeof(WCHAR);
-        attr->Attributes = attrs;
-        status = NtCreateKey( (PHANDLE)retkey, access, attr, 0, NULL, 0, NULL );
-        if (attr->RootDirectory != root) NtClose( attr->RootDirectory );
+        status = NtCreateKey( (PHANDLE)retkey, access, &attr2, 0, NULL, 0, NULL );
+        if (attr2.RootDirectory != attr->RootDirectory) NtClose( attr2.RootDirectory );
     }
     return status;
 }
@@ -252,7 +249,7 @@ static HKEY create_classes_root_hkey(DWORD access)
 {
     HKEY hkey, ret = 0;
     OBJECT_ATTRIBUTES attr;
-    UNICODE_STRING name;
+    UNICODE_STRING name = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\Software\\Classes");
 
     attr.Length = sizeof(attr);
     attr.RootDirectory = 0;
@@ -260,7 +257,6 @@ static HKEY create_classes_root_hkey(DWORD access)
     attr.Attributes = 0;
     attr.SecurityDescriptor = NULL;
     attr.SecurityQualityOfService = NULL;
-    RtlInitUnicodeString( &name, L"\\Registry\\Machine\\Software\\Classes" );
     if (create_key( &hkey, access, &attr )) return 0;
     TRACE( "%s -> %p\n", debugstr_w(attr.ObjectName->Buffer), hkey );
 
@@ -373,7 +369,7 @@ static ULONG WINAPI ISynchronize_fnAddRef(ISynchronize *iface)
 {
     MREImpl *This = impl_from_ISynchronize(iface);
     LONG ref = InterlockedIncrement(&This->ref);
-    TRACE("%p - ref %d\n", This, ref);
+    TRACE("%p, refcount %ld.\n", iface, ref);
 
     return ref;
 }
@@ -382,7 +378,7 @@ static ULONG WINAPI ISynchronize_fnRelease(ISynchronize *iface)
 {
     MREImpl *This = impl_from_ISynchronize(iface);
     LONG ref = InterlockedDecrement(&This->ref);
-    TRACE("%p - ref %d\n", This, ref);
+    TRACE("%p, refcount %ld.\n", iface, ref);
 
     if(!ref)
     {
@@ -397,7 +393,7 @@ static HRESULT WINAPI ISynchronize_fnWait(ISynchronize *iface, DWORD dwFlags, DW
 {
     MREImpl *This = impl_from_ISynchronize(iface);
     DWORD index;
-    TRACE("%p (%08x, %08x)\n", This, dwFlags, dwMilliseconds);
+    TRACE("%p, %#lx, %#lx.\n", iface, dwFlags, dwMilliseconds);
     return CoWaitForMultipleHandles(dwFlags, dwMilliseconds, 1, &This->event, &index);
 }
 
@@ -929,7 +925,7 @@ HRESULT Handler_DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
  */
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID reserved)
 {
-    TRACE("%p 0x%x %p\n", hinstDLL, fdwReason, reserved);
+    TRACE("%p, %#lx, %p.\n", hinstDLL, fdwReason, reserved);
 
     switch(fdwReason) {
     case DLL_PROCESS_ATTACH:

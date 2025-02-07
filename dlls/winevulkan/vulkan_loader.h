@@ -23,13 +23,17 @@
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include <stdarg.h>
+#include <stdlib.h>
+#include <assert.h>
 #include "windef.h"
 #include "winbase.h"
 #include "winternl.h"
+#include "ntuser.h"
 #include "wine/debug.h"
 #include "wine/vulkan.h"
 #include "wine/vulkan_driver.h"
 #include "wine/unixlib.h"
+#include "wine/list.h"
 
 #include "loader_thunks.h"
 
@@ -37,26 +41,46 @@
 #define VULKAN_ICD_MAGIC_VALUE 0x01CDC0DE
 
 #define WINEVULKAN_QUIRK_GET_DEVICE_PROC_ADDR 0x00000001
-#define WINEVULKAN_QUIRK_ADJUST_MAX_IMAGE_COUNT 0x00000002
-#define WINEVULKAN_QUIRK_IGNORE_EXPLICIT_LAYERS 0x00000004
 
-/* Base 'class' for our Vulkan dispatchable objects such as VkDevice and VkInstance.
- * This structure MUST be the first element of a dispatchable object as the ICD
- * loader depends on it. For now only contains loader_magic, but over time more common
- * functionality is expected.
- */
-struct wine_vk_base
+struct VkPhysicalDevice_T
 {
-    /* Special section in each dispatchable object for use by the ICD loader for
-     * storing dispatch tables. The start contains a magical value '0x01CDC0DE'.
-     */
-    UINT_PTR loader_magic;
+    struct vulkan_client_object obj;
 };
 
-struct wine_vk_device_base
+struct VkInstance_T
 {
-    struct wine_vk_base base;
+    struct vulkan_client_object obj;
+    uint32_t phys_dev_count;
+    struct VkPhysicalDevice_T phys_devs[1];
+};
+
+struct VkQueue_T
+{
+    struct vulkan_client_object obj;
+};
+
+struct VkDevice_T
+{
+    struct vulkan_client_object obj;
     unsigned int quirks;
+    struct VkQueue_T queues[1];
+};
+
+struct vk_command_pool
+{
+    struct vulkan_client_object obj;
+    struct list command_buffers;
+};
+
+static inline struct vk_command_pool *command_pool_from_handle(VkCommandPool handle)
+{
+    return (struct vk_command_pool *)(uintptr_t)handle;
+}
+
+struct VkCommandBuffer_T
+{
+    struct vulkan_client_object obj;
+    struct list pool_link;
 };
 
 struct vulkan_func
@@ -65,49 +89,87 @@ struct vulkan_func
     void *func;
 };
 
-void *wine_vk_get_device_proc_addr(const char *name) DECLSPEC_HIDDEN;
-void *wine_vk_get_phys_dev_proc_addr(const char *name) DECLSPEC_HIDDEN;
-void *wine_vk_get_instance_proc_addr(const char *name) DECLSPEC_HIDDEN;
+void *wine_vk_get_device_proc_addr(const char *name);
+void *wine_vk_get_phys_dev_proc_addr(const char *name);
+void *wine_vk_get_instance_proc_addr(const char *name);
+
+struct vk_callback_funcs
+{
+    UINT64 call_vulkan_debug_report_callback;
+    UINT64 call_vulkan_debug_utils_callback;
+};
 
 /* debug callbacks params */
 
+struct debug_utils_label
+{
+    UINT32 label_name_len;
+    float color[4];
+};
+
+struct debug_utils_object
+{
+    UINT32 object_type;
+    UINT64 object_handle;
+    UINT32 object_name_len;
+};
+
+struct debug_device_address_binding
+{
+    UINT32 flags;
+    UINT64 base_address;
+    UINT64 size;
+    UINT32 binding_type;
+};
+
 struct wine_vk_debug_utils_params
 {
-    PFN_vkDebugUtilsMessengerCallbackEXT user_callback;
-    void *user_data;
+    struct dispatch_callback_params dispatch;
+    UINT64 user_callback; /* client pointer */
+    UINT64 user_data; /* client pointer */
 
-    VkDebugUtilsMessageSeverityFlagBitsEXT severity;
-    VkDebugUtilsMessageTypeFlagsEXT message_types;
-    VkDebugUtilsMessengerCallbackDataEXT data;
+    UINT32 severity;
+    UINT32 message_types;
+    UINT32 flags;
+    UINT32 message_id_number;
+
+    UINT32 message_id_name_len;
+    UINT32 message_len;
+    UINT32 queue_label_count;
+    UINT32 cmd_buf_label_count;
+    UINT32 object_count;
+
+    UINT8 has_address_binding;
+    struct debug_device_address_binding address_binding;
 };
 
 struct wine_vk_debug_report_params
 {
-    PFN_vkDebugReportCallbackEXT user_callback;
-    void *user_data;
+    struct dispatch_callback_params dispatch;
+    UINT64 user_callback; /* client pointer */
+    UINT64 user_data; /* client pointer */
 
-    VkDebugReportFlagsEXT flags;
-    VkDebugReportObjectTypeEXT object_type;
-    uint64_t object_handle;
-    size_t location;
-    int32_t code;
-    const char *layer_prefix;
-    const char *message;
+    UINT32 flags;
+    UINT32 object_type;
+    UINT64 object_handle;
+    UINT64 location;
+    UINT32 code;
+    UINT32 layer_len;
+    UINT32 message_len;
 };
 
-extern const struct unix_funcs *unix_funcs;
-extern unixlib_handle_t unix_handle DECLSPEC_HIDDEN;
-
-static inline NTSTATUS vk_unix_call(enum unix_call code, void *params)
+struct is_available_instance_function_params
 {
-    return __wine_unix_call(unix_handle, code, params);
-}
-
-struct unix_funcs
-{
-    NTSTATUS (WINAPI *p_vk_call)(enum unix_call, void *);
-    BOOL (WINAPI *p_is_available_instance_function)(VkInstance, const char *);
-    BOOL (WINAPI *p_is_available_device_function)(VkDevice, const char *);
+    VkInstance instance;
+    const char *name;
 };
+
+struct is_available_device_function_params
+{
+    VkDevice device;
+    const char *name;
+};
+
+#define UNIX_CALL(code, params) WINE_UNIX_CALL(unix_ ## code, params)
 
 #endif /* __WINE_VULKAN_LOADER_H */

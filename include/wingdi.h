@@ -24,16 +24,20 @@
 extern "C" {
 #endif
 
-#ifdef _GDI32_
-#define WINGDIAPI
+#ifndef WINGDIAPI
+#if defined(_GDI32_) || defined(WINE_UNIX_LIB)
+#define WINGDIAPI DECLSPEC_EXPORT
 #else
-#define WINGDIAPI DECLSPEC_HIDDEN
+#define WINGDIAPI DECLSPEC_IMPORT
+#endif
 #endif
 
+#ifndef WGLAPI
 #ifdef _OPENGL32_
 #define WGLAPI
 #else
-#define WGLAPI DECLSPEC_HIDDEN
+#define WGLAPI DECLSPEC_IMPORT
+#endif
 #endif
 
 typedef struct _ABCFLOAT {
@@ -1564,6 +1568,17 @@ typedef struct tagEXTLOGPEN
     DWORD elpStyleEntry[1];
 } EXTLOGPEN, *PEXTLOGPEN, *NPEXTLOGPEN, *LPEXTLOGPEN;
 
+typedef struct tagEXTLOGPEN32
+{
+    DWORD    elpPenStyle;
+    DWORD    elpWidth;
+    UINT     elpBrushStyle;
+    COLORREF elpColor;
+    ULONG    elpHatch;
+    DWORD    elpNumEntries;
+    DWORD    elpStyleEntry[1];
+} EXTLOGPEN32, *PEXTLOGPEN32, *NPEXTLOGPEN32, *LPEXTLOGPEN32;
+
 #define PS_SOLID         0x00000000
 #define PS_DASH          0x00000001
 #define PS_DOT           0x00000002
@@ -2334,8 +2349,16 @@ typedef struct {
     DWORD     cbBmi;
     DWORD     offBits;
     DWORD     cbBits;
-    EXTLOGPEN elp;
+    EXTLOGPEN32 elp;
 } EMREXTCREATEPEN, *PEMREXTCREATEPEN;
+
+typedef struct tagEMREXTESCAPE
+{
+    EMR  emr;
+    INT  iEscape;
+    INT  cbEscData;
+    BYTE EscData[1];
+} EMREXTESCAPE, *PEMREXTESCAPE, EMRDRAWESCAPE, *PEMRDRAWESCAPE;
 
 typedef struct {
     EMR      emr;
@@ -2712,6 +2735,27 @@ typedef struct {
     LONG     cxSrc;
     LONG     cySrc;
 } EMRALPHABLEND, *PEMRALPHABLEND;
+
+typedef struct {
+    EMR      emr;
+    RECTL    rclBounds;
+    LONG     xDest;
+    LONG     yDest;
+    LONG     cxDest;
+    LONG     cyDest;
+    DWORD    dwRop;
+    LONG     xSrc;
+    LONG     ySrc;
+    XFORM    xformSrc;
+    COLORREF crBkColorSrc;
+    DWORD    iUsageSrc;
+    DWORD    offBmiSrc;
+    DWORD    cbBmiSrc;
+    DWORD    offBitsSrc;
+    DWORD    cbBitsSrc;
+    LONG     cxSrc;
+    LONG     cySrc;
+} EMRTRANSPARENTBLT, *PEMRTRANSPARENTBLT;
 
 typedef struct {
     EMR   emr;
@@ -4159,6 +4203,14 @@ WINGDIAPI BOOL        WINAPI PolyTextOutW(HDC,const POLYTEXTW*,INT);
 #define WGL_FONT_LINES      0
 #define WGL_FONT_POLYGONS   1
 
+typedef struct _WGLSWAP
+{
+    HDC hdc;
+    UINT uiFlags;
+} WGLSWAP, *PWGLSWAP, *LPWGLSWAP;
+
+#define WGL_SWAPMULTIPLE_MAX 16
+
 /* WGL prototypes */
 WGLAPI HGLRC   WINAPI wglCreateContext(HDC);
 WGLAPI HGLRC   WINAPI wglCreateLayerContext(HDC,INT);
@@ -4167,13 +4219,14 @@ WGLAPI BOOL    WINAPI wglDeleteContext(HGLRC);
 WGLAPI BOOL    WINAPI wglDescribeLayerPlane(HDC,INT,INT,UINT,LPLAYERPLANEDESCRIPTOR);
 WGLAPI HGLRC   WINAPI wglGetCurrentContext(void);
 WGLAPI HDC     WINAPI wglGetCurrentDC(void);
-WGLAPI INT     WINAPI wglGetLayerPaletteEntries(HDC,INT,INT,INT,const COLORREF *);
+WGLAPI INT     WINAPI wglGetLayerPaletteEntries(HDC,INT,INT,INT,COLORREF *);
 WGLAPI PROC    WINAPI wglGetProcAddress(LPCSTR);
 WGLAPI BOOL    WINAPI wglMakeCurrent(HDC,HGLRC);
 WGLAPI BOOL    WINAPI wglRealizeLayerPalette(HDC,INT,BOOL);
 WGLAPI INT     WINAPI wglSetLayerPaletteEntries(HDC,INT,INT,INT,const COLORREF *);
 WGLAPI BOOL    WINAPI wglShareLists(HGLRC,HGLRC);
 WGLAPI BOOL    WINAPI wglSwapLayerBuffers(HDC,UINT);
+WGLAPI DWORD   WINAPI wglSwapMultipleBuffers(UINT,const WGLSWAP *);
 WGLAPI BOOL    WINAPI wglUseFontBitmapsA(HDC,DWORD,DWORD,DWORD);
 WGLAPI BOOL    WINAPI wglUseFontBitmapsW(HDC,DWORD,DWORD,DWORD);
 #define               wglUseFontBitmaps WINELIB_NAME_AW(wglUseFontBitmaps)

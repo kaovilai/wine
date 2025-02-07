@@ -370,7 +370,7 @@
 @ stdcall -import GetSidSubAuthorityCount(ptr)
 @ stub GetSiteSidFromToken
 # @ stub GetStringConditionFromBinary
-# @ stub GetThreadWaitChain
+@ stdcall GetThreadWaitChain(ptr ptr long long ptr ptr ptr)
 @ stdcall -import GetTokenInformation(long long ptr long ptr)
 @ stdcall GetTraceEnableFlags(int64) ntdll.EtwGetTraceEnableFlags
 @ stdcall GetTraceEnableLevel(int64) ntdll.EtwGetTraceEnableLevel
@@ -433,8 +433,8 @@
 @ stdcall LookupAccountSidLocalA(ptr ptr ptr ptr ptr ptr)
 @ stdcall LookupAccountSidLocalW(ptr ptr ptr ptr ptr ptr)
 @ stdcall LookupAccountSidW(wstr ptr ptr ptr ptr ptr ptr)
-@ stdcall LookupPrivilegeDisplayNameA(str str str ptr ptr)
-@ stdcall LookupPrivilegeDisplayNameW(wstr wstr wstr ptr ptr)
+@ stdcall LookupPrivilegeDisplayNameA(str str ptr ptr ptr)
+@ stdcall LookupPrivilegeDisplayNameW(wstr wstr ptr ptr ptr)
 @ stdcall LookupPrivilegeNameA(str ptr ptr ptr)
 @ stdcall LookupPrivilegeNameW(wstr ptr ptr ptr)
 @ stdcall LookupPrivilegeValueA(str str ptr)
@@ -548,13 +548,13 @@
 @ stdcall -import OpenServiceA(long str long)
 @ stdcall -import OpenServiceW(long wstr long)
 @ stdcall -import OpenThreadToken(long long long ptr)
-# @ stub OpenThreadWaitChainSession
+@ stdcall OpenThreadWaitChainSession(long ptr)
 @ stdcall -ret64 OpenTraceA(ptr)
 @ stdcall -ret64 -import OpenTraceW(ptr)
 # @ stub OperationEnd
 # @ stub OperationStart
-# @ stub PerfAddCounters
-# @ stub PerfCloseQueryHandle
+@ stdcall PerfAddCounters(long ptr long)
+@ stdcall PerfCloseQueryHandle(long)
 @ stdcall -import PerfCreateInstance(long ptr wstr long)
 # @ stub PerfDecrementULongCounterValue
 # @ stub PerfDecrementULongLongCounterValue
@@ -564,8 +564,8 @@
 # @ stub PerfEnumerateCounterSetInstances
 # @ stub PerfIncrementULongCounterValue
 # @ stub PerfIncrementULongLongCounterValue
-# @ stub PerfOpenQueryHandle
-# @ stub PerfQueryCounterData
+@ stdcall PerfOpenQueryHandle(wstr ptr)
+@ stdcall PerfQueryCounterData(long ptr long ptr)
 # @ stub PerfQueryCounterInfo
 # @ stub PerfQueryCounterSetRegistrationInfo
 # @ stub PerfQueryInstance
@@ -824,7 +824,7 @@
 # @ stub TreeResetNamedSecurityInfoA
 @ stdcall TreeResetNamedSecurityInfoW(wstr long long ptr ptr ptr ptr long ptr long ptr)
 # @ stub TreeSetNamedSecurityInfoA
-# @ stub TreeSetNamedSecurityInfoW
+@ stdcall TreeSetNamedSecurityInfoW(wstr long long ptr ptr ptr ptr long ptr long ptr)
 # @ stub TrusteeAccessToObjectA
 # @ stub TrusteeAccessToObjectW
 # @ stub UninstallApplication

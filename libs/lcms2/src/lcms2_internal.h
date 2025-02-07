@@ -1,7 +1,7 @@
 
 //
 //  Little Color Management System
-//  Copyright (c) 1998-2020 Marti Maria Saguer
+//  Copyright (c) 1998-2023 Marti Maria Saguer
 //
 // Permission is hereby granted, free of charge, to any person obtaining
 // a copy of this software and associated documentation files (the "Software"),
@@ -260,6 +260,7 @@ typedef CRITICAL_SECTION _cmsMutex;
 #ifdef _MSC_VER
 #    if (_MSC_VER >= 1800)
 #          pragma warning(disable : 26135)
+#          pragma warning(disable : 4127)
 #    endif
 #endif
 
@@ -283,38 +284,38 @@ typedef CRITICAL_SECTION _cmsMutex;
 
 cmsINLINE int _cmsLockPrimitive(_cmsMutex *m)
 {
-	EnterCriticalSection(m);
-	return 0;
+    EnterCriticalSection(m);
+    return 0;
 }
 
 cmsINLINE int _cmsUnlockPrimitive(_cmsMutex *m)
 {
-	LeaveCriticalSection(m);
-	return 0;
+    LeaveCriticalSection(m);
+    return 0;
 }
-	
+
 cmsINLINE int _cmsInitMutexPrimitive(_cmsMutex *m)
 {
-	InitializeCriticalSection(m);
-	return 0;
+    InitializeCriticalSection(m);
+    return 0;
 }
 
 cmsINLINE int _cmsDestroyMutexPrimitive(_cmsMutex *m)
 {
-	DeleteCriticalSection(m);
-	return 0;
+    DeleteCriticalSection(m);
+    return 0;
 }
 
 cmsINLINE int _cmsEnterCriticalSectionPrimitive(_cmsMutex *m)
 {
-	EnterCriticalSection(m);
-	return 0;
+    EnterCriticalSection(m);
+    return 0;
 }
 
 cmsINLINE int _cmsLeaveCriticalSectionPrimitive(_cmsMutex *m)
 {
-	LeaveCriticalSection(m);
-	return 0;
+    LeaveCriticalSection(m);
+    return 0;
 }
 
 #else
@@ -328,32 +329,32 @@ typedef pthread_mutex_t _cmsMutex;
 
 cmsINLINE int _cmsLockPrimitive(_cmsMutex *m)
 {
-	return pthread_mutex_lock(m);
+    return pthread_mutex_lock(m);
 }
 
 cmsINLINE int _cmsUnlockPrimitive(_cmsMutex *m)
 {
-	return pthread_mutex_unlock(m);
+    return pthread_mutex_unlock(m);
 }
-	
+
 cmsINLINE int _cmsInitMutexPrimitive(_cmsMutex *m)
 {
-	return pthread_mutex_init(m, NULL);
+    return pthread_mutex_init(m, NULL);
 }
 
 cmsINLINE int _cmsDestroyMutexPrimitive(_cmsMutex *m)
 {
-	return pthread_mutex_destroy(m);
+    return pthread_mutex_destroy(m);
 }
 
 cmsINLINE int _cmsEnterCriticalSectionPrimitive(_cmsMutex *m)
 {
-	return pthread_mutex_lock(m);
+    return pthread_mutex_lock(m);
 }
 
 cmsINLINE int _cmsLeaveCriticalSectionPrimitive(_cmsMutex *m)
 {
-	return pthread_mutex_unlock(m);
+    return pthread_mutex_unlock(m);
 }
 
 #endif
@@ -366,37 +367,37 @@ typedef int _cmsMutex;
 cmsINLINE int _cmsLockPrimitive(_cmsMutex *m)
 {
     cmsUNUSED_PARAMETER(m);
-	return 0;
+    return 0;
 }
 
 cmsINLINE int _cmsUnlockPrimitive(_cmsMutex *m)
 {
     cmsUNUSED_PARAMETER(m);
-	return 0;
+    return 0;
 }
-	
+
 cmsINLINE int _cmsInitMutexPrimitive(_cmsMutex *m)
 {
     cmsUNUSED_PARAMETER(m);
-	return 0;
+    return 0;
 }
 
 cmsINLINE int _cmsDestroyMutexPrimitive(_cmsMutex *m)
 {
     cmsUNUSED_PARAMETER(m);
-	return 0;
+    return 0;
 }
 
 cmsINLINE int _cmsEnterCriticalSectionPrimitive(_cmsMutex *m)
 {
     cmsUNUSED_PARAMETER(m);
-	return 0;
+    return 0;
 }
 
 cmsINLINE int _cmsLeaveCriticalSectionPrimitive(_cmsMutex *m)
 {
     cmsUNUSED_PARAMETER(m);
-	return 0;
+    return 0;
 }
 #endif
 
@@ -437,6 +438,9 @@ cmsBool  _cmsRegisterTransformPlugin(cmsContext ContextID, cmsPluginBase* Plugin
 
 // Mutex
 cmsBool _cmsRegisterMutexPlugin(cmsContext ContextID, cmsPluginBase* Plugin);
+
+// Paralellization
+cmsBool _cmsRegisterParallelizationPlugin(cmsContext ContextID, cmsPluginBase* Plugin);
 
 // ---------------------------------------------------------------------------------------------------------
 
@@ -485,6 +489,7 @@ typedef enum {
     OptimizationPlugin,
     TransformPlugin,
     MutexPlugin,
+    ParallelizationPlugin,
 
     // Last in list
     MemoryClientMax
@@ -513,7 +518,7 @@ struct _cmsContext_struct {
     struct _cmsContext_struct* Next;  // Points to next context in the new style
     _cmsSubAllocator* MemPool;        // The memory pool that stores context data
     
-    void* chunks[MemoryClientMax];    // array of pointers to client chunks. Memory itself is hold in the suballocator. 
+    void* chunks[MemoryClientMax];    // array of pointers to client chunks. Memory itself is held in the suballocator.
                                       // If NULL, then it reverts to global Context0
 
     _cmsMemPluginChunkType DefaultMemoryManager;  // The allocators used for creating the context itself. Cannot be overridden
@@ -720,6 +725,24 @@ extern  _cmsMutexPluginChunkType _cmsMutexPluginChunk;
 void _cmsAllocMutexPluginChunk(struct _cmsContext_struct* ctx, 
                                         const struct _cmsContext_struct* src);
 
+// Container for parallelization plug-in
+typedef struct {
+
+    cmsInt32Number      MaxWorkers;       // Number of workers to do as maximum
+    cmsInt32Number      WorkerFlags;      // reserved
+    _cmsTransform2Fn    SchedulerFn;      // callback to setup functions
+
+} _cmsParallelizationPluginChunkType;
+
+// The global Context0 storage for parallelization plug-in
+extern  _cmsParallelizationPluginChunkType _cmsParallelizationPluginChunk;
+
+// Allocate parallelization container.
+void _cmsAllocParallelizationPluginChunk(struct _cmsContext_struct* ctx,
+                                         const struct _cmsContext_struct* src);
+
+
+
 // ----------------------------------------------------------------------------------
 // MLU internal representation
 typedef struct {
@@ -789,6 +812,9 @@ typedef struct _cms_iccprofile_struct {
     // Creation time
     struct tm                Created;
 
+    // Color management module identification
+    cmsUInt32Number          CMM;
+
     // Only most important items found in ICC profiles
     cmsUInt32Number          Version;
     cmsProfileClassSignature DeviceClass;
@@ -796,6 +822,7 @@ typedef struct _cms_iccprofile_struct {
     cmsColorSpaceSignature   PCS;
     cmsUInt32Number          RenderingIntent;
 
+    cmsPlatformSignature     platform;
     cmsUInt32Number          flags;
     cmsUInt32Number          manufacturer, model;
     cmsUInt64Number          attributes;
@@ -1081,6 +1108,11 @@ typedef struct _cmstransform_struct {
     // A way to provide backwards compatibility with full xform plugins
     _cmsTransformFn OldXform;
 
+    // A one-worker transform entry for parallelization
+    _cmsTransform2Fn Worker;
+    cmsInt32Number   MaxWorkers;
+    cmsUInt32Number  WorkerFlags;
+
 } _cmsTRANSFORM;
 
 // Copies extra channels from input to output if the original flags in the transform structure
@@ -1117,6 +1149,9 @@ cmsBool   _cmsAdaptationMatrix(cmsMAT3* r, const cmsMAT3* ConeMatrix, const cmsC
 
 cmsBool   _cmsBuildRGB2XYZtransferMatrix(cmsMAT3* r, const cmsCIExyY* WhitePoint, const cmsCIExyYTRIPLE* Primaries);
 
+
+// thread-safe gettime
+cmsBool _cmsGetTime(struct tm* ptr_time);
 
 #define _lcms_internal_H
 #endif

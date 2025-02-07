@@ -89,6 +89,11 @@ like \fBas\fR, \fBnm\fR and \fBld\fR.
 Specify the C compiler to use to compile assembly files; the default
 is to instead use the assembler specified with \fB--as-cmd\fR.
 .TP
+.B \--data-only
+Build a module that contains only data and resources, and no
+executable code.  With this option, \fBwinebuild\fR directly outputs a
+PE file, instead of an assembly or object file.
+.TP
 .BI \-d,\ --delay-lib= name
 Set the delayed import mode for the specified library, which must be
 one of the libraries imported with the \fB-l\fR option. Delayed mode
@@ -162,27 +167,15 @@ application supports address spaces larger than 2 gigabytes.
 Specify the command to use to link the object files; the default is
 \fBld\fR.
 .TP
-.BI \-L,\ --library-path= directory
-Append the specified directory to the list of directories that are
-searched for import libraries.
-.TP
-.BI \-l,\ --library= name
-Import the specified library, looking for a corresponding
-\fIlibname.def\fR file in the directories specified with the \fB-L\fR
-option.
-.TP
 .B \-m16, -m32, -m64
 Generate respectively 16-bit, 32-bit or 64-bit code.
 .TP
-.BI \-marm,\ \-mthumb,\ \-march= option ,\ \-mcpu= option ,\ \-mfpu= option ,\ \-mfloat-abi= option
+.BI \-march= option ,\ \-mcpu= option ,\ \-mfpu= option
 Set code generation options for the assembler.
 .TP
 .B \-mno-cygwin
 Build a library that uses the Windows runtime instead of the Unix C
 library.
-.TP
-.B \-munix
-Build the Unix counterpart of a builtin module.
 .TP
 .BI \-M,\ --main-module= module
 When building a 16-bit dll, set the name of its 32-bit counterpart to
@@ -274,6 +267,9 @@ Display the program version and exit.
 .TP
 .B \-w, --warnings
 Turn on warnings.
+.TP
+.B \--without-dlltool
+Generate import library without using dlltool.
 .SH "SPEC FILE SYNTAX"
 .SS "General syntax"
 A spec file should contain a list of ordinal declarations. The general
@@ -534,6 +530,25 @@ This declaration defines an ordinal as an absolute value.
 will be the name available for dynamic linking.
 .I data
 can be a decimal number or a hex number preceded by "0x".
+.SS "Api sets"
+Syntax:
+.br
+.BI apiset\  apiset_dll\  =\  target.dll\ [host.dll:target.dll]
+.PP
+This declaration defines that the \fIapiset_dll\fR (of the form
+api-ms-*) resolves to the \fItarget\fR dll. Optionally other targets
+can be specified to resolve differently for specific host dlls. For
+example:
+.IP
+api-ms-win-core-processenvironment-l1-1-0 = kernelbase.dll
+.br
+api-ms-win-core-processthreads-l1-1-0 = kernel32.dll \\
+.br
+  kernel32.dll:kernelbase.dll
+.PP
+If apisets are defined, a corresponding .apiset section will be
+generated in the PE binary. This requires building the module with the
+--data-only option.
 .SH AUTHORS
 .B winebuild
 has been worked on by many people over the years. The main authors are

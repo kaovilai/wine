@@ -72,12 +72,12 @@ void *heap_pool_alloc(heap_pool_t *heap, DWORD size)
 
     if(!heap->block_cnt) {
         if(!heap->blocks) {
-            heap->blocks = heap_alloc(sizeof(void*));
+            heap->blocks = malloc(sizeof(void*));
             if(!heap->blocks)
                 return NULL;
         }
 
-        tmp = heap_alloc(block_size(0));
+        tmp = malloc(block_size(0));
         if(!tmp)
             return NULL;
 
@@ -93,12 +93,12 @@ void *heap_pool_alloc(heap_pool_t *heap, DWORD size)
 
     if(size <= block_size(heap->last_block+1)) {
         if(heap->last_block+1 == heap->block_cnt) {
-            tmp = heap_realloc(heap->blocks, (heap->block_cnt+1)*sizeof(void*));
+            tmp = realloc(heap->blocks, (heap->block_cnt+1)*sizeof(void*));
             if(!tmp)
                 return NULL;
 
             heap->blocks = tmp;
-            heap->blocks[heap->block_cnt] = heap_alloc(block_size(heap->block_cnt));
+            heap->blocks[heap->block_cnt] = malloc(block_size(heap->block_cnt));
             if(!heap->blocks[heap->block_cnt])
                 return NULL;
 
@@ -110,7 +110,7 @@ void *heap_pool_alloc(heap_pool_t *heap, DWORD size)
         return heap->blocks[heap->last_block];
     }
 
-    list = heap_alloc(size + sizeof(struct list));
+    list = malloc(size + sizeof(struct list));
     if(!list)
         return NULL;
 
@@ -143,7 +143,7 @@ void heap_pool_clear(heap_pool_t *heap)
 
     while((tmp = list_head(&heap->custom_blocks))) {
         list_remove(tmp);
-        heap_free(tmp);
+        free(tmp);
     }
 
     if(WARN_ON(heap)) {
@@ -164,8 +164,8 @@ void heap_pool_free(heap_pool_t *heap)
     heap_pool_clear(heap);
 
     for(i=0; i < heap->block_cnt; i++)
-        heap_free(heap->blocks[i]);
-    heap_free(heap->blocks);
+        free(heap->blocks[i]);
+    free(heap->blocks);
 
     heap_pool_init(heap);
 }
@@ -183,15 +183,14 @@ void jsval_release(jsval_t val)
 {
     switch(jsval_type(val)) {
     case JSV_OBJECT:
-        if(get_object(val))
-            IDispatch_Release(get_object(val));
+        IDispatch_Release(get_object(val));
         break;
     case JSV_STRING:
         jsstr_release(get_string(val));
         break;
     case JSV_VARIANT:
         VariantClear(get_variant(val));
-        heap_free(get_variant(val));
+        free(get_variant(val));
         break;
     default:
         break;
@@ -204,7 +203,7 @@ static HRESULT jsval_variant(jsval_t *val, VARIANT *var)
     HRESULT hres;
 
     __JSVAL_TYPE(*val) = JSV_VARIANT;
-    __JSVAL_VAR(*val) = v = heap_alloc(sizeof(VARIANT));
+    __JSVAL_VAR(*val) = v = malloc(sizeof(VARIANT));
     if(!v) {
         *val = jsval_undefined();
         return E_OUTOFMEMORY;
@@ -214,7 +213,7 @@ static HRESULT jsval_variant(jsval_t *val, VARIANT *var)
     hres = VariantCopy(v, var);
     if(FAILED(hres)) {
         *val = jsval_undefined();
-        heap_free(v);
+        free(v);
     }
     return hres;
 }
@@ -229,8 +228,7 @@ HRESULT jsval_copy(jsval_t v, jsval_t *r)
         *r = v;
         return S_OK;
     case JSV_OBJECT:
-        if(get_object(v))
-            IDispatch_AddRef(get_object(v));
+        IDispatch_AddRef(get_object(v));
         *r = v;
         return S_OK;
     case JSV_STRING: {
@@ -246,7 +244,7 @@ HRESULT jsval_copy(jsval_t v, jsval_t *r)
     return E_FAIL;
 }
 
-HRESULT variant_to_jsval(VARIANT *var, jsval_t *r)
+HRESULT variant_to_jsval(script_ctx_t *ctx, VARIANT *var, jsval_t *r)
 {
     if(V_VT(var) == (VT_VARIANT|VT_BYREF))
         var = V_VARIANTREF(var);
@@ -281,12 +279,33 @@ HRESULT variant_to_jsval(VARIANT *var, jsval_t *r)
         *r = jsval_string(str);
         return S_OK;
     }
-    case VT_DISPATCH: {
-        if(V_DISPATCH(var))
-            IDispatch_AddRef(V_DISPATCH(var));
+    case VT_DISPATCH:
+        if(!V_DISPATCH(var)) {
+            *r = ctx->html_mode ? jsval_null() : jsval_null_disp();
+            return S_OK;
+        }
+        if(ctx->version >= SCRIPTLANGUAGEVERSION_ES5) {
+            IWineJSDispatchHost *disp_host;
+            HRESULT hres;
+            hres = IDispatch_QueryInterface(V_DISPATCH(var), &IID_IWineJSDispatchHost, (void **)&disp_host);
+            if(SUCCEEDED(hres)) {
+                IWineJSDispatch *jsdisp_iface;
+                hres = IWineJSDispatchHost_GetJSDispatch(disp_host, &jsdisp_iface);
+                IWineJSDispatchHost_Release(disp_host);
+                if(SUCCEEDED(hres)) {
+                    jsdisp_t *jsdisp = to_jsdisp((IDispatch *)jsdisp_iface);
+                    if(jsdisp->ctx == ctx) {
+                        *r = jsval_obj(jsdisp);
+                        return S_OK;
+                    }else {
+                        jsdisp_release(jsdisp);
+                    }
+                }
+            }
+        }
+        IDispatch_AddRef(V_DISPATCH(var));
         *r = jsval_disp(V_DISPATCH(var));
         return S_OK;
-    }
     case VT_I1:
         *r = jsval_number(V_I1(var));
         return S_OK;
@@ -332,7 +351,7 @@ HRESULT variant_to_jsval(VARIANT *var, jsval_t *r)
                 return S_OK;
             }
         }else {
-            *r = jsval_disp(NULL);
+            *r = ctx->html_mode ? jsval_null() : jsval_null_disp();
             return S_OK;
         }
         /* fall through */
@@ -348,14 +367,25 @@ HRESULT jsval_to_variant(jsval_t val, VARIANT *retv)
         V_VT(retv) = VT_EMPTY;
         return S_OK;
     case JSV_NULL:
+        if(get_bool(val)) {
+            V_VT(retv) = VT_DISPATCH;
+            V_DISPATCH(retv) = NULL;
+            return S_OK;
+        }
         V_VT(retv) = VT_NULL;
         return S_OK;
-    case JSV_OBJECT:
+    case JSV_OBJECT: {
+        IWineJSDispatchHost *host_disp = get_host_dispatch(get_object(val));
         V_VT(retv) = VT_DISPATCH;
-        if(get_object(val))
-            IDispatch_AddRef(get_object(val));
+        if(host_disp) {
+            V_DISPATCH(retv) = (IDispatch *)host_disp;
+            return S_OK;
+        }
+
         V_DISPATCH(retv) = get_object(val);
+        IDispatch_AddRef(get_object(val));
         return S_OK;
+    }
     case JSV_STRING:
         V_VT(retv) = VT_BSTR;
         return jsstr_to_bstr(get_string(val), &V_BSTR(retv));
@@ -394,11 +424,6 @@ HRESULT to_primitive(script_ctx_t *ctx, jsval_t val, jsval_t *ret, hint_t hint)
         DISPID id;
         HRESULT hres;
 
-        if(!get_object(val)) {
-            *ret = jsval_null();
-            return S_OK;
-        }
-
         jsdisp = iface_to_jsdisp(get_object(val));
         if(!jsdisp)
             return disp_propget(ctx, get_object(val), DISPID_VALUE, ret);
@@ -422,6 +447,9 @@ HRESULT to_primitive(script_ctx_t *ctx, jsval_t val, jsval_t *ret, hint_t hint)
             }else {
                 IDispatch_Release(get_object(prim));
             }
+        }else if(hres != DISP_E_UNKNOWNNAME) {
+            jsdisp_release(jsdisp);
+            return hres;
         }
 
         hres = jsdisp_get_id(jsdisp, hint == HINT_STRING ? L"valueOf" : L"toString", 0, &id);
@@ -438,6 +466,9 @@ HRESULT to_primitive(script_ctx_t *ctx, jsval_t val, jsval_t *ret, hint_t hint)
             }else {
                 IDispatch_Release(get_object(prim));
             }
+        }else if(hres != DISP_E_UNKNOWNNAME) {
+            jsdisp_release(jsdisp);
+            return hres;
         }
 
         jsdisp_release(jsdisp);
@@ -459,7 +490,7 @@ HRESULT to_boolean(jsval_t val, BOOL *ret)
         *ret = FALSE;
         return S_OK;
     case JSV_OBJECT:
-        *ret = get_object(val) != NULL;
+        *ret = TRUE;
         return S_OK;
     case JSV_STRING:
         *ret = jsstr_length(get_string(val)) != 0;
@@ -839,18 +870,8 @@ HRESULT to_object(script_ctx_t *ctx, jsval_t val, IDispatch **disp)
         *disp = to_disp(dispex);
         break;
     case JSV_OBJECT:
-        if(get_object(val)) {
-            *disp = get_object(val);
-            IDispatch_AddRef(*disp);
-        }else {
-            jsdisp_t *obj;
-
-            hres = create_object(ctx, NULL, &obj);
-            if(FAILED(hres))
-                return hres;
-
-            *disp = to_disp(obj);
-        }
+        *disp = get_object(val);
+        IDispatch_AddRef(*disp);
         break;
     case JSV_BOOL:
         hres = create_bool(ctx, get_bool(val), &dispex);
@@ -859,8 +880,11 @@ HRESULT to_object(script_ctx_t *ctx, jsval_t val, IDispatch **disp)
 
         *disp = to_disp(dispex);
         break;
-    case JSV_UNDEFINED:
     case JSV_NULL:
+        if(is_null_disp(val))
+            return JS_E_OBJECT_REQUIRED;
+        /* fall through */
+    case JSV_UNDEFINED:
         WARN("object expected\n");
         return JS_E_OBJECT_EXPECTED;
     case JSV_VARIANT:
@@ -889,7 +913,7 @@ HRESULT variant_change_type(script_ctx_t *ctx, VARIANT *dst, VARIANT *src, VARTY
     jsval_t val;
     HRESULT hres;
 
-    hres = variant_to_jsval(src, &val);
+    hres = variant_to_jsval(ctx, src, &val);
     if(FAILED(hres))
         return hres;
 
@@ -948,6 +972,7 @@ HRESULT variant_change_type(script_ctx_t *ctx, VARIANT *dst, VARIANT *src, VARTY
             break;
 
         hres = jsstr_to_bstr(str, &V_BSTR(dst));
+        jsstr_release(str);
         break;
     }
     case VT_EMPTY:
@@ -955,6 +980,16 @@ HRESULT variant_change_type(script_ctx_t *ctx, VARIANT *dst, VARIANT *src, VARTY
         break;
     case VT_NULL:
         hres = V_VT(src) == VT_NULL ? S_OK : E_NOTIMPL;
+        break;
+    case VT_UNKNOWN:
+    case VT_DISPATCH:
+        if(V_VT(src) != vt)
+            hres = E_NOTIMPL;
+        else {
+            IUnknown_AddRef(V_UNKNOWN(src));
+            V_UNKNOWN(dst) = V_UNKNOWN(src);
+            hres = S_OK;
+        }
         break;
     default:
         FIXME("vt %d not implemented\n", vt);
@@ -1000,7 +1035,7 @@ static ULONG WINAPI JSCaller_AddRef(IServiceProvider *iface)
     JSCaller *This = impl_from_IServiceProvider(iface);
     LONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     return ref;
 }
@@ -1008,13 +1043,13 @@ static ULONG WINAPI JSCaller_AddRef(IServiceProvider *iface)
 static ULONG WINAPI JSCaller_Release(IServiceProvider *iface)
 {
     JSCaller *This = impl_from_IServiceProvider(iface);
-    LONG ref = InterlockedIncrement(&This->ref);
+    LONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     if(!ref) {
         assert(!This->ctx);
-        heap_free(This);
+        free(This);
     }
 
     return ref;
@@ -1024,6 +1059,22 @@ static HRESULT WINAPI JSCaller_QueryService(IServiceProvider *iface, REFGUID gui
         REFIID riid, void **ppv)
 {
     JSCaller *This = impl_from_IServiceProvider(iface);
+
+    if(IsEqualGUID(guidService, &IID_IActiveScriptSite)) {
+        TRACE("(%p)->(IID_IActiveScriptSite)\n", This);
+        if(This->ctx && This->ctx->site)
+            return IActiveScriptSite_QueryInterface(This->ctx->site, riid, ppv);
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+
+    if(IsEqualGUID(guidService, &SID_GetCaller)) {
+        TRACE("(%p)->(SID_GetCaller)\n", This);
+        *ppv = NULL;
+        if(!This->caller)
+            return S_OK;
+        return (This->caller == SP_CALLER_UNINITIALIZED) ? E_NOINTERFACE : IServiceProvider_QueryInterface(This->caller, riid, ppv);
+    }
 
     if(IsEqualGUID(guidService, &SID_VariantConversion) && This->ctx && This->ctx->active_script) {
         TRACE("(%p)->(SID_VariantConversion)\n", This);
@@ -1047,13 +1098,14 @@ HRESULT create_jscaller(script_ctx_t *ctx)
 {
     JSCaller *ret;
 
-    ret = heap_alloc(sizeof(*ret));
+    ret = malloc(sizeof(*ret));
     if(!ret)
         return E_OUTOFMEMORY;
 
     ret->IServiceProvider_iface.lpVtbl = &ServiceProviderVtbl;
     ret->ref = 1;
     ret->ctx = ctx;
+    ret->caller = SP_CALLER_UNINITIALIZED;
 
     ctx->jscaller = ret;
     return S_OK;

@@ -24,27 +24,41 @@
 #include "roerrorapi.h"
 #include "winstring.h"
 
+#include "combase_private.h"
+
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(combase);
 
-static const char *debugstr_hstring(HSTRING hstr)
+struct activatable_class_data
 {
-    const WCHAR *str;
-    UINT32 len;
-    if (hstr && !((ULONG_PTR)hstr >> 16)) return "(invalid)";
-    str = WindowsGetStringRawBuffer(hstr, &len);
-    return wine_dbgstr_wn(str, len);
-}
+    ULONG size;
+    DWORD unk;
+    DWORD module_len;
+    DWORD module_offset;
+    DWORD threading_model;
+};
 
 static HRESULT get_library_for_classid(const WCHAR *classid, WCHAR **out)
 {
+    ACTCTX_SECTION_KEYED_DATA data;
     HKEY hkey_root, hkey_class;
     DWORD type, size;
     HRESULT hr;
     WCHAR *buf = NULL;
 
     *out = NULL;
+
+    /* search activation context first */
+    data.cbSize = sizeof(data);
+    if (FindActCtxSectionStringW(FIND_ACTCTX_SECTION_KEY_RETURN_HACTCTX, NULL,
+            ACTIVATION_CONTEXT_SECTION_WINRT_ACTIVATABLE_CLASSES, classid, &data))
+    {
+        struct activatable_class_data *activatable_class = (struct activatable_class_data *)data.lpData;
+        void *ptr = (BYTE *)data.lpSectionBase + activatable_class->module_offset;
+        *out = wcsdup(ptr);
+        return S_OK;
+    }
 
     /* load class registry key */
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\WindowsRuntime\\ActivatableClassId",
@@ -69,7 +83,7 @@ static HRESULT get_library_for_classid(const WCHAR *classid, WCHAR **out)
         hr = REGDB_E_READREGDB;
         goto done;
     }
-    if (!(buf = HeapAlloc(GetProcessHeap(), 0, size)))
+    if (!(buf = malloc(size)))
     {
         hr = E_OUTOFMEMORY;
         goto done;
@@ -83,13 +97,13 @@ static HRESULT get_library_for_classid(const WCHAR *classid, WCHAR **out)
     {
         WCHAR *expanded;
         DWORD len = ExpandEnvironmentStringsW(buf, NULL, 0);
-        if (!(expanded = HeapAlloc(GetProcessHeap(), 0, len * sizeof(WCHAR))))
+        if (!(expanded = malloc(len * sizeof(WCHAR))))
         {
             hr = E_OUTOFMEMORY;
             goto done;
         }
         ExpandEnvironmentStringsW(buf, expanded, len);
-        HeapFree(GetProcessHeap(), 0, buf);
+        free(buf);
         buf = expanded;
     }
 
@@ -97,7 +111,7 @@ static HRESULT get_library_for_classid(const WCHAR *classid, WCHAR **out)
     return S_OK;
 
 done:
-    HeapFree(GetProcessHeap(), 0, buf);
+    free(buf);
     RegCloseKey(hkey_class);
     return hr;
 }
@@ -129,7 +143,7 @@ void WINAPI RoUninitialize(void)
 /***********************************************************************
  *      RoGetActivationFactory (combase.@)
  */
-HRESULT WINAPI RoGetActivationFactory(HSTRING classid, REFIID iid, void **class_factory)
+HRESULT WINAPI DECLSPEC_HOTPATCH RoGetActivationFactory(HSTRING classid, REFIID iid, void **class_factory)
 {
     PFNGETACTIVATIONFACTORY pDllGetActivationFactory;
     IActivationFactory *factory;
@@ -141,6 +155,9 @@ HRESULT WINAPI RoGetActivationFactory(HSTRING classid, REFIID iid, void **class_
 
     if (!iid || !class_factory)
         return E_INVALIDARG;
+
+    if (FAILED(hr = ensure_mta()))
+        return hr;
 
     hr = get_library_for_classid(WindowsGetStringRawBuffer(classid, NULL), &library);
     if (FAILED(hr))
@@ -178,7 +195,7 @@ HRESULT WINAPI RoGetActivationFactory(HSTRING classid, REFIID iid, void **class_
     }
 
 done:
-    HeapFree(GetProcessHeap(), 0, library);
+    free(library);
     if (module) FreeLibrary(module);
     return hr;
 }
@@ -214,6 +231,188 @@ HRESULT WINAPI RoActivateInstance(HSTRING classid, IInspectable **instance)
     }
 
     return hr;
+}
+
+struct agile_reference
+{
+    IAgileReference IAgileReference_iface;
+    enum AgileReferenceOptions option;
+    IStream *marshal_stream;
+    CRITICAL_SECTION cs;
+    IUnknown *obj;
+    LONG ref;
+};
+
+static HRESULT marshal_object_in_agile_reference(struct agile_reference *ref, REFIID riid, IUnknown *obj)
+{
+    HRESULT hr;
+
+    hr = CreateStreamOnHGlobal(0, TRUE, &ref->marshal_stream);
+    if (FAILED(hr))
+        return hr;
+
+    hr = CoMarshalInterface(ref->marshal_stream, riid, obj, MSHCTX_INPROC, NULL, MSHLFLAGS_TABLESTRONG);
+    if (FAILED(hr))
+    {
+        IStream_Release(ref->marshal_stream);
+        ref->marshal_stream = NULL;
+    }
+    return hr;
+}
+
+static inline struct agile_reference *impl_from_IAgileReference(IAgileReference *iface)
+{
+    return CONTAINING_RECORD(iface, struct agile_reference, IAgileReference_iface);
+}
+
+static HRESULT WINAPI agile_ref_QueryInterface(IAgileReference *iface, REFIID riid, void **obj)
+{
+    TRACE("(%p, %s, %p)\n", iface, debugstr_guid(riid), obj);
+
+    if (!riid || !obj) return E_INVALIDARG;
+
+    if (IsEqualGUID(riid, &IID_IUnknown)
+        || IsEqualGUID(riid, &IID_IAgileObject)
+        || IsEqualGUID(riid, &IID_IAgileReference))
+    {
+        IUnknown_AddRef(iface);
+        *obj = iface;
+        return S_OK;
+    }
+
+    *obj = NULL;
+    FIXME("interface %s is not implemented\n", debugstr_guid(riid));
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI agile_ref_AddRef(IAgileReference *iface)
+{
+    struct agile_reference *impl = impl_from_IAgileReference(iface);
+    return InterlockedIncrement(&impl->ref);
+}
+
+static ULONG WINAPI agile_ref_Release(IAgileReference *iface)
+{
+    struct agile_reference *impl = impl_from_IAgileReference(iface);
+    LONG ref = InterlockedDecrement(&impl->ref);
+
+    if (!ref)
+    {
+        TRACE("destroying %p\n", iface);
+
+        if (impl->obj)
+            IUnknown_Release(impl->obj);
+
+        if (impl->marshal_stream)
+        {
+            LARGE_INTEGER zero = {0};
+
+            IStream_Seek(impl->marshal_stream, zero, STREAM_SEEK_SET, NULL);
+            CoReleaseMarshalData(impl->marshal_stream);
+            IStream_Release(impl->marshal_stream);
+        }
+        DeleteCriticalSection(&impl->cs);
+        free(impl);
+    }
+
+    return ref;
+}
+
+static HRESULT WINAPI agile_ref_Resolve(IAgileReference *iface, REFIID riid, void **obj)
+{
+    struct agile_reference *impl = impl_from_IAgileReference(iface);
+    LARGE_INTEGER zero = {0};
+    HRESULT hr;
+
+    TRACE("(%p, %s, %p)\n", iface, debugstr_guid(riid), obj);
+
+    EnterCriticalSection(&impl->cs);
+    if (impl->option == AGILEREFERENCE_DELAYEDMARSHAL && impl->marshal_stream == NULL)
+    {
+        if (FAILED(hr = marshal_object_in_agile_reference(impl, riid, impl->obj)))
+        {
+            LeaveCriticalSection(&impl->cs);
+            return hr;
+        }
+
+        IUnknown_Release(impl->obj);
+        impl->obj = NULL;
+    }
+
+    if (SUCCEEDED(hr = IStream_Seek(impl->marshal_stream, zero, STREAM_SEEK_SET, NULL)))
+        hr = CoUnmarshalInterface(impl->marshal_stream, riid, obj);
+
+    LeaveCriticalSection(&impl->cs);
+    return hr;
+}
+
+static const IAgileReferenceVtbl agile_ref_vtbl =
+{
+    agile_ref_QueryInterface,
+    agile_ref_AddRef,
+    agile_ref_Release,
+    agile_ref_Resolve,
+};
+
+/***********************************************************************
+ *      RoGetAgileReference (combase.@)
+ */
+HRESULT WINAPI RoGetAgileReference(enum AgileReferenceOptions option, REFIID riid, IUnknown *obj,
+                                   IAgileReference **agile_reference)
+{
+    struct agile_reference *impl;
+    IUnknown *unknown;
+    HRESULT hr;
+
+    TRACE("(%d, %s, %p, %p).\n", option, debugstr_guid(riid), obj, agile_reference);
+
+    if (option != AGILEREFERENCE_DEFAULT && option != AGILEREFERENCE_DELAYEDMARSHAL)
+        return E_INVALIDARG;
+
+    if (!InternalIsProcessInitialized())
+    {
+        ERR("Apartment not initialized\n");
+        return CO_E_NOTINITIALIZED;
+    }
+
+    hr = IUnknown_QueryInterface(obj, riid, (void **)&unknown);
+    if (FAILED(hr))
+        return E_NOINTERFACE;
+    IUnknown_Release(unknown);
+
+    hr = IUnknown_QueryInterface(obj, &IID_INoMarshal, (void **)&unknown);
+    if (SUCCEEDED(hr))
+    {
+        IUnknown_Release(unknown);
+        return CO_E_NOT_SUPPORTED;
+    }
+
+    impl = calloc(1, sizeof(*impl));
+    if (!impl)
+        return E_OUTOFMEMORY;
+
+    impl->IAgileReference_iface.lpVtbl = &agile_ref_vtbl;
+    impl->option = option;
+    impl->ref = 1;
+
+    if (option == AGILEREFERENCE_DEFAULT)
+    {
+        if (FAILED(hr = marshal_object_in_agile_reference(impl, riid, obj)))
+        {
+            free(impl);
+            return hr;
+        }
+    }
+    else if (option == AGILEREFERENCE_DELAYEDMARSHAL)
+    {
+        impl->obj = obj;
+        IUnknown_AddRef(impl->obj);
+    }
+
+    InitializeCriticalSection(&impl->cs);
+
+    *agile_reference = &impl->IAgileReference_iface;
+    return S_OK;
 }
 
 /***********************************************************************
@@ -286,7 +485,7 @@ HRESULT WINAPI GetRestrictedErrorInfo(IRestrictedErrorInfo **info)
  */
 BOOL WINAPI RoOriginateLanguageException(HRESULT error, HSTRING message, IUnknown *language_exception)
 {
-    FIXME("(%x %s %p) stub\n", error, debugstr_hstring(message), language_exception);
+    FIXME("%#lx, %s, %p: stub\n", error, debugstr_hstring(message), language_exception);
     return FALSE;
 }
 
@@ -295,8 +494,17 @@ BOOL WINAPI RoOriginateLanguageException(HRESULT error, HSTRING message, IUnknow
  */
 BOOL WINAPI RoOriginateError(HRESULT error, HSTRING message)
 {
-    FIXME("(%x %s) stub\n", error, debugstr_hstring(message));
+    FIXME("%#lx, %s: stub\n", error, debugstr_hstring(message));
     return FALSE;
+}
+
+/***********************************************************************
+ *      RoSetErrorReportingFlags (combase.@)
+ */
+HRESULT WINAPI RoSetErrorReportingFlags(UINT32 flags)
+{
+    FIXME("(%08x): stub\n", flags);
+    return S_OK;
 }
 
 /***********************************************************************

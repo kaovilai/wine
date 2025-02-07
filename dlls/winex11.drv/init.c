@@ -18,6 +18,10 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#if 0
+#pragma makedep unix
+#endif
+
 #include "config.h"
 
 #include <stdarg.h>
@@ -37,17 +41,29 @@ static int palette_size;
 
 static Pixmap stock_bitmap_pixmap;  /* phys bitmap for the default stock bitmap */
 
-static INIT_ONCE init_once = INIT_ONCE_STATIC_INIT;
+static pthread_once_t init_once = PTHREAD_ONCE_INIT;
 
 static const struct user_driver_funcs x11drv_funcs;
 static const struct gdi_dc_funcs *xrender_funcs;
+
+
+void init_recursive_mutex( pthread_mutex_t *mutex )
+{
+    pthread_mutexattr_t attr;
+
+    pthread_mutexattr_init( &attr );
+    pthread_mutexattr_settype( &attr, PTHREAD_MUTEX_RECURSIVE );
+    pthread_mutex_init( mutex, &attr );
+    pthread_mutexattr_destroy( &attr );
+}
+
 
 /**********************************************************************
  *	     device_init
  *
  * Perform initializations needed upon creation of the first device.
  */
-static BOOL WINAPI device_init( INIT_ONCE *once, void *param, void **context )
+static void device_init(void)
 {
     /* Initialize XRender */
     xrender_funcs = X11DRV_XRender_Init();
@@ -58,8 +74,6 @@ static BOOL WINAPI device_init( INIT_ONCE *once, void *param, void **context )
     palette_size = X11DRV_PALETTE_Init();
 
     stock_bitmap_pixmap = XCreatePixmap( gdi_display, root_window, 1, 1, 1 );
-
-    return TRUE;
 }
 
 
@@ -67,9 +81,9 @@ static X11DRV_PDEVICE *create_x11_physdev( Drawable drawable )
 {
     X11DRV_PDEVICE *physDev;
 
-    InitOnceExecuteOnce( &init_once, device_init, NULL, NULL );
+    pthread_once( &init_once, device_init );
 
-    if (!(physDev = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*physDev) ))) return NULL;
+    if (!(physDev = calloc( 1, sizeof(*physDev) ))) return NULL;
 
     physDev->drawable = drawable;
     physDev->gc = XCreateGC( gdi_display, drawable, 0, NULL );
@@ -82,8 +96,7 @@ static X11DRV_PDEVICE *create_x11_physdev( Drawable drawable )
 /**********************************************************************
  *	     X11DRV_CreateDC
  */
-static BOOL CDECL X11DRV_CreateDC( PHYSDEV *pdev, LPCWSTR device, LPCWSTR output,
-                                   const DEVMODEW* initData )
+static BOOL X11DRV_CreateDC( PHYSDEV *pdev, LPCWSTR device, LPCWSTR output, const DEVMODEW* initData )
 {
     X11DRV_PDEVICE *physDev = create_x11_physdev( root_window );
 
@@ -91,7 +104,7 @@ static BOOL CDECL X11DRV_CreateDC( PHYSDEV *pdev, LPCWSTR device, LPCWSTR output
 
     physDev->depth         = default_visual.depth;
     physDev->color_shifts  = &X11DRV_PALETTE_default_shifts;
-    physDev->dc_rect       = get_virtual_screen_rect();
+    physDev->dc_rect       = NtUserGetVirtualScreenRect( MDT_DEFAULT );
     OffsetRect( &physDev->dc_rect, -physDev->dc_rect.left, -physDev->dc_rect.top );
     push_dc_driver( pdev, &physDev->dev, &x11drv_funcs.dc_funcs );
     if (xrender_funcs && !xrender_funcs->pCreateDC( pdev, device, output, initData )) return FALSE;
@@ -102,7 +115,7 @@ static BOOL CDECL X11DRV_CreateDC( PHYSDEV *pdev, LPCWSTR device, LPCWSTR output
 /**********************************************************************
  *	     X11DRV_CreateCompatibleDC
  */
-static BOOL CDECL X11DRV_CreateCompatibleDC( PHYSDEV orig, PHYSDEV *pdev )
+static BOOL X11DRV_CreateCompatibleDC( PHYSDEV orig, PHYSDEV *pdev )
 {
     X11DRV_PDEVICE *physDev = create_x11_physdev( stock_bitmap_pixmap );
 
@@ -120,12 +133,12 @@ static BOOL CDECL X11DRV_CreateCompatibleDC( PHYSDEV orig, PHYSDEV *pdev )
 /**********************************************************************
  *	     X11DRV_DeleteDC
  */
-static BOOL CDECL X11DRV_DeleteDC( PHYSDEV dev )
+static BOOL X11DRV_DeleteDC( PHYSDEV dev )
 {
     X11DRV_PDEVICE *physDev = get_x11drv_dev( dev );
 
     XFreeGC( gdi_display, physDev->gc );
-    HeapFree( GetProcessHeap(), 0, physDev );
+    free( physDev );
     return TRUE;
 }
 
@@ -135,9 +148,9 @@ void add_device_bounds( X11DRV_PDEVICE *dev, const RECT *rect )
     RECT rc;
 
     if (!dev->bounds) return;
-    if (dev->region && GetRgnBox( dev->region, &rc ))
+    if (dev->region && NtGdiGetRgnBox( dev->region, &rc ))
     {
-        if (IntersectRect( &rc, &rc, rect )) add_bounds_rect( dev->bounds, &rc );
+        if (intersect_rect( &rc, &rc, rect )) add_bounds_rect( dev->bounds, &rc );
     }
     else add_bounds_rect( dev->bounds, rect );
 }
@@ -145,7 +158,7 @@ void add_device_bounds( X11DRV_PDEVICE *dev, const RECT *rect )
 /***********************************************************************
  *           X11DRV_SetBoundsRect
  */
-static UINT CDECL X11DRV_SetBoundsRect( PHYSDEV dev, RECT *rect, UINT flags )
+static UINT X11DRV_SetBoundsRect( PHYSDEV dev, RECT *rect, UINT flags )
 {
     X11DRV_PDEVICE *pdev = get_x11drv_dev( dev );
 
@@ -158,7 +171,7 @@ static UINT CDECL X11DRV_SetBoundsRect( PHYSDEV dev, RECT *rect, UINT flags )
 /***********************************************************************
  *           GetDeviceCaps    (X11DRV.@)
  */
-static INT CDECL X11DRV_GetDeviceCaps( PHYSDEV dev, INT cap )
+static INT X11DRV_GetDeviceCaps( PHYSDEV dev, INT cap )
 {
     switch(cap)
     {
@@ -174,18 +187,79 @@ static INT CDECL X11DRV_GetDeviceCaps( PHYSDEV dev, INT cap )
 /***********************************************************************
  *           SelectFont
  */
-static HFONT CDECL X11DRV_SelectFont( PHYSDEV dev, HFONT hfont, UINT *aa_flags )
+static HFONT X11DRV_SelectFont( PHYSDEV dev, HFONT hfont, UINT *aa_flags )
 {
     if (default_visual.depth <= 8) *aa_flags = GGO_BITMAP;  /* no anti-aliasing on <= 8bpp */
     dev = GET_NEXT_PHYSDEV( dev, pSelectFont );
     return dev->funcs->pSelectFont( dev, hfont, aa_flags );
 }
 
+static BOOL needs_client_window_clipping( HWND hwnd )
+{
+    RECT rect, client;
+    UINT ret = 0;
+    HRGN region;
+    HDC hdc;
+
+    NtUserGetClientRect( hwnd, &client, NtUserGetDpiForWindow( hwnd ) );
+    OffsetRect( &client, -client.left, -client.top );
+
+    if (!(hdc = NtUserGetDCEx( hwnd, 0, DCX_CACHE | DCX_USESTYLE ))) return FALSE;
+    if ((region = NtGdiCreateRectRgn( 0, 0, 0, 0 )))
+    {
+        ret = NtGdiGetRandomRgn( hdc, region, SYSRGN );
+        if (ret > 0 && (ret = NtGdiGetRgnBox( region, &rect )) < NULLREGION) ret = 0;
+        if (ret == SIMPLEREGION && EqualRect( &rect, &client )) ret = 0;
+        NtGdiDeleteObjectApp( region );
+    }
+    NtUserReleaseDC( hwnd, hdc );
+
+    return ret > 0;
+}
+
+BOOL needs_offscreen_rendering( HWND hwnd, BOOL known_child )
+{
+    if (NtUserGetDpiForWindow( hwnd ) != NtUserGetWinMonitorDpi( hwnd, MDT_RAW_DPI )) return TRUE; /* needs DPI scaling */
+    if (NtUserGetAncestor( hwnd, GA_PARENT ) != NtUserGetDesktopWindow()) return TRUE; /* child window, needs compositing */
+    if (NtUserGetWindowRelative( hwnd, GW_CHILD ) || known_child) return needs_client_window_clipping( hwnd ); /* window has children, needs compositing */
+    return FALSE;
+}
+
+void set_dc_drawable( HDC hdc, Drawable drawable, const RECT *rect, int mode )
+{
+    struct x11drv_escape_set_drawable escape =
+    {
+        .code = X11DRV_SET_DRAWABLE,
+        .drawable = drawable,
+        .dc_rect = *rect,
+        .mode = mode,
+    };
+    NtGdiExtEscape( hdc, NULL, 0, X11DRV_ESCAPE, sizeof(escape), (LPSTR)&escape, 0, NULL );
+}
+
+Drawable get_dc_drawable( HDC hdc, RECT *rect )
+{
+    struct x11drv_escape_get_drawable escape = {.code = X11DRV_GET_DRAWABLE};
+    NtGdiExtEscape( hdc, NULL, 0, X11DRV_ESCAPE, sizeof(escape), (LPSTR)&escape, sizeof(escape), (LPSTR)&escape );
+    *rect = escape.dc_rect;
+    return escape.drawable;
+}
+
+HRGN get_dc_monitor_region( HWND hwnd, HDC hdc )
+{
+    HRGN region;
+
+    if (!(region = NtGdiCreateRectRgn( 0, 0, 0, 0 ))) return 0;
+    if (NtGdiGetRandomRgn( hdc, region, SYSRGN | NTGDI_RGN_MONITOR_DPI ) > 0) return region;
+    NtGdiDeleteObjectApp( region );
+    return 0;
+}
+
 /**********************************************************************
  *           ExtEscape  (X11DRV.@)
  */
-static INT CDECL X11DRV_ExtEscape( PHYSDEV dev, INT escape, INT in_count, LPCVOID in_data,
-                                   INT out_count, LPVOID out_data )
+static INT X11DRV_ExtEscape( PHYSDEV dev, INT escape, INT in_count, LPCVOID in_data,
+                             INT out_count, LPVOID out_data )
 {
     X11DRV_PDEVICE *physDev = get_x11drv_dev( dev );
 
@@ -227,22 +301,7 @@ static INT CDECL X11DRV_ExtEscape( PHYSDEV dev, INT escape, INT in_count, LPCVOI
                 {
                     struct x11drv_escape_get_drawable *data = out_data;
                     data->drawable = physDev->drawable;
-                    return TRUE;
-                }
-                break;
-            case X11DRV_FLUSH_GL_DRAWABLE:
-                if (in_count >= sizeof(struct x11drv_escape_flush_gl_drawable))
-                {
-                    const struct x11drv_escape_flush_gl_drawable *data = in_data;
-                    RECT rect = physDev->dc_rect;
-
-                    OffsetRect( &rect, -physDev->dc_rect.left, -physDev->dc_rect.top );
-                    if (data->flush) XFlush( gdi_display );
-                    XSetFunction( gdi_display, physDev->gc, GXcopy );
-                    XCopyArea( gdi_display, data->gl_drawable, physDev->drawable, physDev->gc,
-                               0, 0, rect.right, rect.bottom,
-                               physDev->dc_rect.left, physDev->dc_rect.top );
-                    add_device_bounds( physDev, &rect );
+                    data->dc_rect = physDev->dc_rect;
                     return TRUE;
                 }
                 break;
@@ -266,21 +325,24 @@ static INT CDECL X11DRV_ExtEscape( PHYSDEV dev, INT escape, INT in_count, LPCVOI
                             if (event.type == NoExpose) break;
                             if (event.type == GraphicsExpose)
                             {
+                                DWORD layout;
                                 RECT rect;
 
                                 rect.left   = event.xgraphicsexpose.x - physDev->dc_rect.left;
                                 rect.top    = event.xgraphicsexpose.y - physDev->dc_rect.top;
                                 rect.right  = rect.left + event.xgraphicsexpose.width;
                                 rect.bottom = rect.top + event.xgraphicsexpose.height;
-                                if (GetLayout( dev->hdc ) & LAYOUT_RTL)
+                                if (NtGdiGetDCDword( dev->hdc, NtGdiGetLayout, &layout ) &&
+                                    (layout & LAYOUT_RTL))
                                     mirror_rect( &physDev->dc_rect, &rect );
 
                                 TRACE( "got %s count %d\n", wine_dbgstr_rect(&rect),
                                        event.xgraphicsexpose.count );
 
-                                if (!tmp) tmp = CreateRectRgnIndirect( &rect );
-                                else SetRectRgn( tmp, rect.left, rect.top, rect.right, rect.bottom );
-                                if (hrgn) CombineRgn( hrgn, hrgn, tmp, RGN_OR );
+                                if (!tmp) tmp = NtGdiCreateRectRgn( rect.left, rect.top,
+                                                                    rect.right, rect.bottom );
+                                else NtGdiSetRectRgn( tmp, rect.left, rect.top, rect.right, rect.bottom );
+                                if (hrgn) NtGdiCombineRgn( hrgn, hrgn, tmp, RGN_OR );
                                 else
                                 {
                                     hrgn = tmp;
@@ -294,7 +356,7 @@ static INT CDECL X11DRV_ExtEscape( PHYSDEV dev, INT escape, INT in_count, LPCVOI
                                 break;
                             }
                         }
-                        if (tmp) DeleteObject( tmp );
+                        if (tmp) NtGdiDeleteObjectApp( tmp );
                     }
                     *(HRGN *)out_data = hrgn;
                     return TRUE;
@@ -312,24 +374,9 @@ static INT CDECL X11DRV_ExtEscape( PHYSDEV dev, INT escape, INT in_count, LPCVOI
 /**********************************************************************
  *           X11DRV_wine_get_wgl_driver
  */
-static struct opengl_funcs * CDECL X11DRV_wine_get_wgl_driver( PHYSDEV dev, UINT version )
+static struct opengl_funcs *X11DRV_wine_get_wgl_driver( UINT version )
 {
-    struct opengl_funcs *ret;
-
-    if (!(ret = get_glx_driver( version )))
-    {
-        dev = GET_NEXT_PHYSDEV( dev, wine_get_wgl_driver );
-        ret = dev->funcs->wine_get_wgl_driver( dev, version );
-    }
-    return ret;
-}
-
-/**********************************************************************
- *           X11DRV_wine_get_vulkan_driver
- */
-static const struct vulkan_funcs * CDECL X11DRV_wine_get_vulkan_driver( UINT version )
-{
-    return get_vulkan_driver( version );
+    return get_glx_driver( version );
 }
 
 
@@ -375,9 +422,6 @@ static const struct user_driver_funcs x11drv_funcs =
     .dc_funcs.pStrokeAndFillPath = X11DRV_StrokeAndFillPath,
     .dc_funcs.pStrokePath = X11DRV_StrokePath,
     .dc_funcs.pUnrealizePalette = X11DRV_UnrealizePalette,
-    .dc_funcs.pD3DKMTCheckVidPnExclusiveOwnership = X11DRV_D3DKMTCheckVidPnExclusiveOwnership,
-    .dc_funcs.pD3DKMTSetVidPnSourceOwner = X11DRV_D3DKMTSetVidPnSourceOwner,
-    .dc_funcs.wine_get_wgl_driver = X11DRV_wine_get_wgl_driver,
     .dc_funcs.priority = GDI_PRIORITY_GRAPHICS_DRV,
 
     .pActivateKeyboardLayout = X11DRV_ActivateKeyboardLayout,
@@ -386,23 +430,30 @@ static const struct user_driver_funcs x11drv_funcs =
     .pMapVirtualKeyEx = X11DRV_MapVirtualKeyEx,
     .pToUnicodeEx = X11DRV_ToUnicodeEx,
     .pVkKeyScanEx = X11DRV_VkKeyScanEx,
+    .pNotifyIMEStatus = X11DRV_NotifyIMEStatus,
+    .pSetIMECompositionRect = X11DRV_SetIMECompositionRect,
     .pDestroyCursorIcon = X11DRV_DestroyCursorIcon,
     .pSetCursor = X11DRV_SetCursor,
     .pGetCursorPos = X11DRV_GetCursorPos,
     .pSetCursorPos = X11DRV_SetCursorPos,
     .pClipCursor = X11DRV_ClipCursor,
-    .pChangeDisplaySettingsEx = X11DRV_ChangeDisplaySettingsEx,
-    .pEnumDisplaySettingsEx = X11DRV_EnumDisplaySettingsEx,
+    .pSystrayDockInit = X11DRV_SystrayDockInit,
+    .pSystrayDockInsert = X11DRV_SystrayDockInsert,
+    .pSystrayDockClear = X11DRV_SystrayDockClear,
+    .pSystrayDockRemove = X11DRV_SystrayDockRemove,
+    .pChangeDisplaySettings = X11DRV_ChangeDisplaySettings,
     .pUpdateDisplayDevices = X11DRV_UpdateDisplayDevices,
-    .pCreateDesktopWindow = X11DRV_CreateDesktopWindow,
+    .pCreateDesktop = X11DRV_CreateDesktop,
     .pCreateWindow = X11DRV_CreateWindow,
+    .pDesktopWindowProc = X11DRV_DesktopWindowProc,
     .pDestroyWindow = X11DRV_DestroyWindow,
     .pFlashWindowEx = X11DRV_FlashWindowEx,
     .pGetDC = X11DRV_GetDC,
-    .pMsgWaitForMultipleObjectsEx = X11DRV_MsgWaitForMultipleObjectsEx,
+    .pProcessEvents = X11DRV_ProcessEvents,
     .pReleaseDC = X11DRV_ReleaseDC,
     .pScrollDC = X11DRV_ScrollDC,
     .pSetCapture = X11DRV_SetCapture,
+    .pSetDesktopWindow = X11DRV_SetDesktopWindow,
     .pSetFocus = X11DRV_SetFocus,
     .pSetLayeredWindowAttributes = X11DRV_SetLayeredWindowAttributes,
     .pSetParent = X11DRV_SetParent,
@@ -412,13 +463,19 @@ static const struct user_driver_funcs x11drv_funcs =
     .pSetWindowText = X11DRV_SetWindowText,
     .pShowWindow = X11DRV_ShowWindow,
     .pSysCommand = X11DRV_SysCommand,
+    .pClipboardWindowProc = X11DRV_ClipboardWindowProc,
     .pUpdateClipboard = X11DRV_UpdateClipboard,
     .pUpdateLayeredWindow = X11DRV_UpdateLayeredWindow,
     .pWindowMessage = X11DRV_WindowMessage,
     .pWindowPosChanging = X11DRV_WindowPosChanging,
+    .pGetWindowStyleMasks = X11DRV_GetWindowStyleMasks,
+    .pGetWindowStateUpdates = X11DRV_GetWindowStateUpdates,
+    .pCreateWindowSurface = X11DRV_CreateWindowSurface,
+    .pMoveWindowBits = X11DRV_MoveWindowBits,
     .pWindowPosChanged = X11DRV_WindowPosChanged,
     .pSystemParametersInfo = X11DRV_SystemParametersInfo,
-    .pwine_get_vulkan_driver = X11DRV_wine_get_vulkan_driver,
+    .pVulkanInit = X11DRV_VulkanInit,
+    .pwine_get_wgl_driver = X11DRV_wine_get_wgl_driver,
     .pThreadDetach = X11DRV_ThreadDetach,
 };
 

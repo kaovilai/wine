@@ -1,6 +1,7 @@
-EXTRADEFS = -DWINE_NO_LONG_TYPES
 TESTDLL   = dbghelp.dll
-IMPORTS   = dbghelp
+IMPORTS   = dbghelp user32
 
-C_SRCS = \
-	dbghelp.c
+SOURCES = \
+	dbghelp.c \
+	minidump.c \
+	path.c

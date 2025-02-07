@@ -18,6 +18,10 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#if 0
+#pragma makedep testdll
+#endif
+
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -31,8 +35,23 @@
 
 #include "wine/list.h"
 
+#include "initguid.h"
+#include "devpkey.h"
 #include "driver.h"
 #include "utils.h"
+
+/* memcmp() isn't exported from ntoskrnl on i386 */
+static int kmemcmp( const void *ptr1, const void *ptr2, size_t n )
+{
+    const unsigned char *p1, *p2;
+
+    for (p1 = ptr1, p2 = ptr2; n; n--, p1++, p2++)
+    {
+        if (*p1 < *p2) return -1;
+        if (*p1 > *p2) return 1;
+    }
+    return 0;
+}
 
 static const GUID bus_class     = {0xdeadbeef, 0x29ef, 0x4538, {0xa5, 0xfd, 0xb6, 0x95, 0x73, 0xa3, 0x62, 0xc1}};
 static const GUID child_class   = {0xdeadbeef, 0x29ef, 0x4538, {0xa5, 0xfd, 0xb6, 0x95, 0x73, 0xa3, 0x62, 0xc2}};
@@ -41,10 +60,7 @@ static UNICODE_STRING control_symlink, bus_symlink;
 static DRIVER_OBJECT *driver_obj;
 static DEVICE_OBJECT *bus_fdo, *bus_pdo;
 
-static DWORD remove_device_count;
-static DWORD surprise_removal_count;
-static DWORD query_remove_device_count;
-static DWORD cancel_remove_device_count;
+static unsigned int remove_device_count, surprise_removal_count, query_remove_device_count, cancel_remove_device_count;
 
 struct irp_queue
 {
@@ -100,6 +116,7 @@ struct device
     UNICODE_STRING child_symlink;
     DEVICE_POWER_STATE power_state;
     struct irp_queue irp_queue;
+    HANDLE plug_event, plug_event2;
 };
 
 static struct list device_list = LIST_INIT(device_list);
@@ -180,7 +197,7 @@ static NTSTATUS fdo_pnp(IRP *irp)
 
 static NTSTATUS query_id(struct device *device, IRP *irp, BUS_QUERY_ID_TYPE type)
 {
-    static const WCHAR device_id[] = L"wine\\test";
+    static const WCHAR device_id[] = L"Wine\\Test";
     WCHAR *id = NULL;
 
     irp->IoStatus.Information = 0;
@@ -230,7 +247,10 @@ static NTSTATUS query_id(struct device *device, IRP *irp, BUS_QUERY_ID_TYPE type
         }
 
         case BusQueryContainerID:
-            return STATUS_NOT_SUPPORTED;
+            if (!(id = ExAllocatePool(PagedPool, 39 * sizeof(WCHAR))))
+                return STATUS_NO_MEMORY;
+            wcscpy(id, L"{12345678-1234-1234-1234-123456789123}");
+            break;
 
         default:
             ok(0, "Unexpected ID query type %#x.\n", type);
@@ -255,6 +275,8 @@ static NTSTATUS pdo_pnp(DEVICE_OBJECT *device_obj, IRP *irp)
 
         case IRP_MN_START_DEVICE:
         {
+            static const WCHAR expect_symlink[] = L"\\??\\Wine#Test#1#{deadbeef-29ef-4538-a5fd-b69573a362c2}";
+            static const LARGE_INTEGER wait_time = {.QuadPart = -500 * 10000};
             POWER_STATE state = {.DeviceState = PowerDeviceD0};
             NTSTATUS status;
 
@@ -264,13 +286,27 @@ static NTSTATUS pdo_pnp(DEVICE_OBJECT *device_obj, IRP *irp)
             ok(!stack->Parameters.StartDevice.AllocatedResourcesTranslated, "expected no translated resources\n");
 
             status = IoRegisterDeviceInterface(device_obj, &child_class, NULL, &device->child_symlink);
-            ok(!status, "Failed to register interface, status %#x.\n", status);
+            ok(!status, "Failed to register interface, status %#lx.\n", status);
+            ok(device->child_symlink.Length == sizeof(expect_symlink) - sizeof(WCHAR),
+                    "Got length %u.\n", device->child_symlink.Length);
+            ok(device->child_symlink.MaximumLength == sizeof(expect_symlink),
+                    "Got maximum length %u.\n", device->child_symlink.MaximumLength);
+            ok(!kmemcmp(device->child_symlink.Buffer, expect_symlink, device->child_symlink.MaximumLength),
+                    "Got symlink \"%ls\".\n", device->child_symlink.Buffer);
 
             IoSetDeviceInterfaceState(&device->child_symlink, TRUE);
 
             state = PoSetPowerState(device_obj, DevicePowerState, state);
             todo_wine ok(state.DeviceState == device->power_state, "got previous state %u\n", state.DeviceState);
             device->power_state = PowerDeviceD0;
+
+            status = ZwWaitForSingleObject(device->plug_event, TRUE, &wait_time);
+            ok(!status, "Failed to wait for child plug event, status %#lx.\n", status);
+            status = ZwSetEvent(device->plug_event2, NULL);
+            ok(!status, "Failed to set event, status %#lx.\n", status);
+            status = ZwWaitForSingleObject(device->plug_event, TRUE, &wait_time);
+            ok(!status, "Failed to wait for child plug event, status %#lx.\n", status);
+
             ret = STATUS_SUCCESS;
             break;
         }
@@ -288,6 +324,8 @@ static NTSTATUS pdo_pnp(DEVICE_OBJECT *device_obj, IRP *irp)
             {
                 IoSetDeviceInterfaceState(&device->child_symlink, FALSE);
                 RtlFreeUnicodeString(&device->child_symlink);
+                ZwClose(device->plug_event);
+                ZwClose(device->plug_event2);
                 irp->IoStatus.Status = STATUS_SUCCESS;
                 IoCompleteRequest(irp, IO_NO_INCREMENT);
                 IoDeleteDevice(device->device_obj);
@@ -322,15 +360,15 @@ static NTSTATUS pdo_pnp(DEVICE_OBJECT *device_obj, IRP *irp)
             ok(!caps->NonDynamic, "got NonDynamic %u\n", caps->NonDynamic);
             ok(!caps->WarmEjectSupported, "got WarmEjectSupported %u\n", caps->WarmEjectSupported);
             ok(!caps->NoDisplayInUI, "got NoDisplayInUI %u\n", caps->NoDisplayInUI);
-            ok(caps->Address == 0xffffffff, "got Address %#x\n", caps->Address);
-            ok(caps->UINumber == 0xffffffff, "got UINumber %#x\n", caps->UINumber);
+            ok(caps->Address == 0xffffffff, "got Address %#lx\n", caps->Address);
+            ok(caps->UINumber == 0xffffffff, "got UINumber %#lx\n", caps->UINumber);
             for (i = 0; i < PowerSystemMaximum; ++i)
                 ok(caps->DeviceState[i] == PowerDeviceUnspecified, "got DeviceState[%u] %u\n", i, caps->DeviceState[i]);
             ok(caps->SystemWake == PowerSystemUnspecified, "got SystemWake %u\n", caps->SystemWake);
             ok(caps->DeviceWake == PowerDeviceUnspecified, "got DeviceWake %u\n", caps->DeviceWake);
-            ok(!caps->D1Latency, "got D1Latency %u\n", caps->D1Latency);
-            ok(!caps->D2Latency, "got D2Latency %u\n", caps->D2Latency);
-            ok(!caps->D3Latency, "got D3Latency %u\n", caps->D3Latency);
+            ok(!caps->D1Latency, "got D1Latency %lu\n", caps->D1Latency);
+            ok(!caps->D2Latency, "got D2Latency %lu\n", caps->D2Latency);
+            ok(!caps->D3Latency, "got D3Latency %lu\n", caps->D3Latency);
 
             /* If caps->RawDeviceOK is not set, we won't receive
              * IRP_MN_START_DEVICE unless there's a function driver. */
@@ -351,10 +389,21 @@ static NTSTATUS pdo_pnp(DEVICE_OBJECT *device_obj, IRP *irp)
         }
 
         case IRP_MN_SURPRISE_REMOVAL:
+        {
+            static const LARGE_INTEGER wait_time = {.QuadPart = -500 * 10000};
+            NTSTATUS status;
+
             surprise_removal_count++;
             irp_queue_clear(&device->irp_queue);
+
+            status = ZwWaitForSingleObject(device->plug_event, TRUE, &wait_time);
+            ok(!status, "Failed to wait for child plug event, status %#lx.\n", status);
+            status = ZwSetEvent(device->plug_event2, NULL);
+            ok(!status, "Failed to set event, status %#lx.\n", status);
+
             ret = STATUS_SUCCESS;
             break;
+        }
 
         case IRP_MN_QUERY_REMOVE_DEVICE:
             query_remove_device_count++;
@@ -430,8 +479,8 @@ static void test_bus_query_caps(DEVICE_OBJECT *top_device)
     stack->MinorFunction = IRP_MN_QUERY_CAPABILITIES;
     stack->Parameters.DeviceCapabilities.Capabilities = &caps;
     ret = IoCallDriver(top_device, irp);
-    ok(ret == STATUS_SUCCESS, "got %#x\n", ret);
-    ok(io.Status == STATUS_SUCCESS, "got %#x\n", ret);
+    ok(ret == STATUS_SUCCESS, "got %#lx\n", ret);
+    ok(io.Status == STATUS_SUCCESS, "got %#lx\n", ret);
 
     ok(caps.Size == sizeof(caps), "wrong size %u\n", caps.Size);
     ok(caps.Version == 1, "wrong version %u\n", caps.Version);
@@ -453,8 +502,8 @@ static void test_bus_query_caps(DEVICE_OBJECT *top_device)
     ok(!caps.NonDynamic, "got NonDynamic %u\n", caps.NonDynamic);
     ok(!caps.WarmEjectSupported, "got WarmEjectSupported %u\n", caps.WarmEjectSupported);
     ok(!caps.NoDisplayInUI, "got NoDisplayInUI %u\n", caps.NoDisplayInUI);
-    ok(!caps.Address, "got Address %#x\n", caps.Address);
-    ok(!caps.UINumber, "got UINumber %#x\n", caps.UINumber);
+    ok(!caps.Address, "got Address %#lx\n", caps.Address);
+    ok(!caps.UINumber, "got UINumber %#lx\n", caps.UINumber);
     ok(caps.DeviceState[PowerSystemUnspecified] == PowerDeviceUnspecified,
             "got DeviceState[PowerSystemUnspecified] %u\n", caps.DeviceState[PowerSystemUnspecified]);
     todo_wine ok(caps.DeviceState[PowerSystemWorking] == PowerDeviceD0,
@@ -463,9 +512,9 @@ static void test_bus_query_caps(DEVICE_OBJECT *top_device)
         todo_wine ok(caps.DeviceState[i] == PowerDeviceD3, "got DeviceState[%u] %u\n", i, caps.DeviceState[i]);
     ok(caps.SystemWake == PowerSystemUnspecified, "got SystemWake %u\n", caps.SystemWake);
     ok(caps.DeviceWake == PowerDeviceUnspecified, "got DeviceWake %u\n", caps.DeviceWake);
-    ok(!caps.D1Latency, "got D1Latency %u\n", caps.D1Latency);
-    ok(!caps.D2Latency, "got D2Latency %u\n", caps.D2Latency);
-    ok(!caps.D3Latency, "got D3Latency %u\n", caps.D3Latency);
+    ok(!caps.D1Latency, "got D1Latency %lu\n", caps.D1Latency);
+    ok(!caps.D2Latency, "got D2Latency %lu\n", caps.D2Latency);
+    ok(!caps.D3Latency, "got D3Latency %lu\n", caps.D3Latency);
 
     memset(&caps, 0xff, sizeof(caps));
     caps.Size = sizeof(caps);
@@ -479,8 +528,8 @@ static void test_bus_query_caps(DEVICE_OBJECT *top_device)
     stack->MinorFunction = IRP_MN_QUERY_CAPABILITIES;
     stack->Parameters.DeviceCapabilities.Capabilities = &caps;
     ret = IoCallDriver(top_device, irp);
-    ok(ret == STATUS_SUCCESS, "got %#x\n", ret);
-    ok(io.Status == STATUS_SUCCESS, "got %#x\n", ret);
+    ok(ret == STATUS_SUCCESS, "got %#lx\n", ret);
+    ok(io.Status == STATUS_SUCCESS, "got %#lx\n", ret);
 
     ok(caps.Size == sizeof(caps), "wrong size %u\n", caps.Size);
     ok(caps.Version == 1, "wrong version %u\n", caps.Version);
@@ -502,8 +551,8 @@ static void test_bus_query_caps(DEVICE_OBJECT *top_device)
     ok(caps.NonDynamic, "got NonDynamic %u\n", caps.NonDynamic);
     ok(caps.WarmEjectSupported, "got WarmEjectSupported %u\n", caps.WarmEjectSupported);
     ok(caps.NoDisplayInUI, "got NoDisplayInUI %u\n", caps.NoDisplayInUI);
-    ok(caps.Address == 0xffffffff, "got Address %#x\n", caps.Address);
-    ok(caps.UINumber == 0xffffffff, "got UINumber %#x\n", caps.UINumber);
+    ok(caps.Address == 0xffffffff, "got Address %#lx\n", caps.Address);
+    ok(caps.UINumber == 0xffffffff, "got UINumber %#lx\n", caps.UINumber);
     todo_wine ok(caps.DeviceState[PowerSystemUnspecified] == PowerDeviceUnspecified,
             "got DeviceState[PowerSystemUnspecified] %u\n", caps.DeviceState[PowerSystemUnspecified]);
     todo_wine ok(caps.DeviceState[PowerSystemWorking] == PowerDeviceD0,
@@ -512,9 +561,9 @@ static void test_bus_query_caps(DEVICE_OBJECT *top_device)
         todo_wine ok(caps.DeviceState[i] == PowerDeviceD3, "got DeviceState[%u] %u\n", i, caps.DeviceState[i]);
     ok(caps.SystemWake == 0xffffffff, "got SystemWake %u\n", caps.SystemWake);
     ok(caps.DeviceWake == 0xffffffff, "got DeviceWake %u\n", caps.DeviceWake);
-    ok(caps.D1Latency == 0xffffffff, "got D1Latency %u\n", caps.D1Latency);
-    ok(caps.D2Latency == 0xffffffff, "got D2Latency %u\n", caps.D2Latency);
-    ok(caps.D3Latency == 0xffffffff, "got D3Latency %u\n", caps.D3Latency);
+    ok(caps.D1Latency == 0xffffffff, "got D1Latency %lu\n", caps.D1Latency);
+    ok(caps.D2Latency == 0xffffffff, "got D2Latency %lu\n", caps.D2Latency);
+    ok(caps.D3Latency == 0xffffffff, "got D3Latency %lu\n", caps.D3Latency);
 }
 
 static void test_bus_query_id(DEVICE_OBJECT *top_device)
@@ -533,8 +582,8 @@ static void test_bus_query_id(DEVICE_OBJECT *top_device)
     stack->MinorFunction = IRP_MN_QUERY_ID;
     stack->Parameters.QueryId.IdType = BusQueryDeviceID;
     ret = IoCallDriver(top_device, irp);
-    ok(ret == STATUS_SUCCESS, "got %#x\n", ret);
-    ok(io.Status == STATUS_SUCCESS, "got %#x\n", ret);
+    ok(ret == STATUS_SUCCESS, "got %#lx\n", ret);
+    ok(io.Status == STATUS_SUCCESS, "got %#lx\n", ret);
     ok(!wcscmp((WCHAR *)io.Information, L"ROOT\\WINETEST"), "got id '%ls'\n", (WCHAR *)io.Information);
     ExFreePool((WCHAR *)io.Information);
 
@@ -544,8 +593,8 @@ static void test_bus_query_id(DEVICE_OBJECT *top_device)
     stack->MinorFunction = IRP_MN_QUERY_ID;
     stack->Parameters.QueryId.IdType = BusQueryInstanceID;
     ret = IoCallDriver(top_device, irp);
-    ok(ret == STATUS_SUCCESS, "got %#x\n", ret);
-    ok(io.Status == STATUS_SUCCESS, "got %#x\n", ret);
+    ok(ret == STATUS_SUCCESS, "got %#lx\n", ret);
+    ok(io.Status == STATUS_SUCCESS, "got %#lx\n", ret);
     ok(!wcscmp((WCHAR *)io.Information, L"0"), "got id '%ls'\n", (WCHAR *)io.Information);
     ExFreePool((WCHAR *)io.Information);
 }
@@ -563,12 +612,87 @@ static void test_bus_query(void)
     ObDereferenceObject(top_device);
 }
 
+struct winetest_deviceprop
+{
+    const DEVPROPKEY *key;
+    DEVPROPTYPE type;
+    union {
+        BYTE byte;
+        INT16 int16;
+        UINT16 uint16;
+        INT32 int32;
+        UINT32 uint32;
+        INT64 int64;
+        UINT64 uint64;
+        GUID guid;
+    } value;
+    SIZE_T size;
+};
+
+#define WINETEST_DRIVER_DEVPROP(i, typ, val, size) {&DEVPKEY_Winetest_##i, (typ), val, (size)},
+static struct winetest_deviceprop deviceprops[] = {
+    WINETEST_DEFINE_DEVPROPS
+    {&DEVPKEY_Winetest_8, DEVPROP_TYPE_GUID,
+    {.guid = {0xdeadbeef, 0xdead, 0xbeef, {0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef}}}, sizeof(GUID)}
+};
+#undef WINETEST_DRIVER_DEVPROP
+
+static void test_device_properties( DEVICE_OBJECT *device )
+{
+    SIZE_T i;
+
+    for (i = 0; i < ARRAY_SIZE( deviceprops ); i++)
+    {
+        NTSTATUS status;
+        ULONG size = deviceprops[i].size;
+        DEVPROPTYPE type = deviceprops[i].type;
+        const DEVPROPKEY *key = deviceprops[i].key;
+        void *value = &deviceprops[i].value;
+
+        status = IoSetDevicePropertyData( device, key, LOCALE_NEUTRAL, 0, type, size, value );
+        ok( status == STATUS_SUCCESS, "Failed to set device property, status %#lx.\n", status );
+        if (status == STATUS_SUCCESS)
+        {
+            void *buf;
+            ULONG req_size;
+            DEVPROPTYPE stored_type;
+
+            status = IoGetDevicePropertyData( device, key, LOCALE_NEUTRAL, 0, 0, NULL, &req_size,
+                                              &stored_type );
+            ok( status == STATUS_BUFFER_TOO_SMALL, "Expected status %#lx, got %#lx.\n",
+                STATUS_BUFFER_TOO_SMALL, status );
+            ok( req_size == size, "Expected required size %lu, got %lu.\n", req_size, size );
+            ok( stored_type == type, "Expected DEVPROPTYPE value %#lx, got %#lx.\n", type,
+                stored_type );
+
+            buf = ExAllocatePool( PagedPool, size );
+            ok( buf != NULL, "Failed to allocate buffer.\n" );
+            if (buf != NULL)
+            {
+                memset( buf, 0, size );
+                status = IoGetDevicePropertyData( device, key, LOCALE_NEUTRAL, 0, size, buf, NULL,
+                                                  &stored_type );
+                ok( status == STATUS_SUCCESS, "Failed to get device property, status %#lx.\n",
+                    status );
+                if (status == STATUS_SUCCESS)
+                    ok( memcmp( buf, value, size ) == 0,
+                        "Got unexpected device property value.\n" );
+                ExFreePool( buf );
+            }
+        }
+        status = IoSetDevicePropertyData( device, key, LOCALE_NEUTRAL, 0, type, 0, NULL );
+        ok( status == STATUS_SUCCESS, "Failed to delete device property, status %#lx.\n", status );
+    }
+    return;
+}
+
 static NTSTATUS fdo_ioctl(IRP *irp, IO_STACK_LOCATION *stack, ULONG code)
 {
     switch (code)
     {
         case IOCTL_WINETEST_BUS_MAIN:
             test_bus_query();
+            test_device_properties( bus_pdo );
             return STATUS_SUCCESS;
 
         case IOCTL_WINETEST_BUS_REGISTER_IFACE:
@@ -584,7 +708,9 @@ static NTSTATUS fdo_ioctl(IRP *irp, IO_STACK_LOCATION *stack, ULONG code)
 
         case IOCTL_WINETEST_BUS_ADD_CHILD:
         {
+            static const LARGE_INTEGER wait_time = {.QuadPart = -500 * 10000};
             DEVICE_OBJECT *device_obj;
+            OBJECT_ATTRIBUTES attr;
             UNICODE_STRING string;
             struct device *device;
             NTSTATUS status;
@@ -598,13 +724,18 @@ static NTSTATUS fdo_ioctl(IRP *irp, IO_STACK_LOCATION *stack, ULONG code)
             swprintf(name, ARRAY_SIZE(name), L"\\Device\\winetest_pnp_%x", id);
             RtlInitUnicodeString(&string, name);
             status = IoCreateDevice(driver_obj, sizeof(*device), &string, FILE_DEVICE_UNKNOWN, 0, FALSE, &device_obj);
-            ok(!status, "Failed to create device, status %#x.\n", status);
+            ok(!status, "Failed to create device, status %#lx.\n", status);
 
             device = device_obj->DeviceExtension;
             memset(device, 0, sizeof(*device));
             device->device_obj = device_obj;
             device->id = id;
             device->removed = FALSE;
+            InitializeObjectAttributes(&attr, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+            status = ZwCreateEvent(&device->plug_event, EVENT_ALL_ACCESS, &attr, SynchronizationEvent, FALSE);
+            ok(!status, "Failed to create event, status %#lx.\n", status);
+            status = ZwCreateEvent(&device->plug_event2, EVENT_ALL_ACCESS, &attr, SynchronizationEvent, FALSE);
+            ok(!status, "Failed to create event, status %#lx.\n", status);
 
             ExAcquireFastMutex(&driver_lock);
             list_add_tail(&device_list, &device->entry);
@@ -613,13 +744,30 @@ static NTSTATUS fdo_ioctl(IRP *irp, IO_STACK_LOCATION *stack, ULONG code)
             device_obj->Flags &= ~DO_DEVICE_INITIALIZING;
 
             IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+            IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+
+            /* Synchronize both ways, to show that the bus invalidation happens
+             * completely asynchronously and that neither thread blocks waiting
+             * for the other. */
+
+            status = ZwSetEvent(device->plug_event, NULL);
+            ok(!status, "Failed to set event, status %#lx.\n", status);
+            status = ZwWaitForSingleObject(device->plug_event2, TRUE, &wait_time);
+            ok(!status, "Failed to wait for child plug event, status %#lx.\n", status);
+            /* IoInvalidateDeviceRelations() here shouldn't deadlock either. */
+            IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+            status = ZwSetEvent(device->plug_event, NULL);
+            ok(!status, "Failed to set event, status %#lx.\n", status);
 
             return STATUS_SUCCESS;
         }
 
         case IOCTL_WINETEST_BUS_REMOVE_CHILD:
         {
+            static const LARGE_INTEGER wait_time = {.QuadPart = -500 * 10000};
+            HANDLE plug_event = NULL, plug_event2 = NULL;
             struct device *device;
+            NTSTATUS status;
             int id;
 
             if (stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(int))
@@ -631,6 +779,8 @@ static NTSTATUS fdo_ioctl(IRP *irp, IO_STACK_LOCATION *stack, ULONG code)
             {
                 if (device->id == id)
                 {
+                    plug_event = device->plug_event;
+                    plug_event2 = device->plug_event2;
                     list_remove(&device->entry);
                     device->removed = TRUE;
                     break;
@@ -639,15 +789,29 @@ static NTSTATUS fdo_ioctl(IRP *irp, IO_STACK_LOCATION *stack, ULONG code)
             ExReleaseFastMutex(&driver_lock);
 
             IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+            IoInvalidateDeviceRelations(bus_pdo, BusRelations);
 
-            /* The actual removal might be asynchronous; we can't test that the
-             * device is gone here. */
+            /* Synchronize both ways, to show that the bus invalidation happens
+             * completely asynchronously and that neither thread blocks waiting
+             * for the other. */
+
+            status = ZwSetEvent(plug_event, NULL);
+            ok(!status, "Failed to set event, status %#lx.\n", status);
+            status = ZwWaitForSingleObject(plug_event2, TRUE, &wait_time);
+            ok(!status, "Failed to wait for child plug event, status %#lx.\n", status);
+            ok(surprise_removal_count == 1, "Got %u surprise removal events.\n", surprise_removal_count);
+            /* We shouldn't get IRP_MN_REMOVE_DEVICE until all user-space
+             * handles to the device are closed (and the user-space thread is
+             * currently blocked in this ioctl and won't close its handle
+             * yet.) */
+            todo_wine_if (remove_device_count)
+                ok(!remove_device_count, "Got %u remove events.\n", remove_device_count);
 
             return STATUS_SUCCESS;
         }
 
         default:
-            ok(0, "Unexpected ioctl %#x.\n", code);
+            ok(0, "Unexpected ioctl %#lx.\n", code);
             return STATUS_NOT_IMPLEMENTED;
     }
 }
@@ -682,7 +846,7 @@ static NTSTATUS pdo_ioctl(DEVICE_OBJECT *device_obj, IRP *irp, IO_STACK_LOCATION
             return STATUS_SUCCESS;
 
         default:
-            ok(0, "Unexpected ioctl %#x.\n", code);
+            ok(0, "Unexpected ioctl %#lx.\n", code);
             return STATUS_NOT_IMPLEMENTED;
     }
 }
